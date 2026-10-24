@@ -102,6 +102,7 @@ fun BankDetailScreen(
                 ModeButton("速刷模式", "作答后展示答案，3 秒自动下一题") { onStartStudy(StudyMode.SPEED) }
                 ModeButton("背题模式", "直接显示答案与解析，适合快速过题") { onStartStudy(StudyMode.RECITE) }
                 ModeButton("随机巩固", "乱序抽题不重复，自动记忆进度，可重置") { onStartStudy(StudyMode.RANDOM) }
+                ModeButton("测试模式", "选范围组卷整卷作答，答题卡跳题，交卷出报告") { onStartStudy(StudyMode.EXAM) }
 
                 if (noAnswer > 0) {
                     Card(onClick = onGenerate, modifier = Modifier.fillMaxWidth()) {

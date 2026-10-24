@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.examhelper.shua.ShuaApp
 import com.examhelper.shua.data.db.Question
 import com.examhelper.shua.data.db.StudyMode
+import com.examhelper.shua.data.model.StudyFilter
 import com.examhelper.shua.data.repo.BankRepository
 import com.examhelper.shua.data.repo.StudyRepository
 import com.examhelper.shua.data.repo.StudySession
@@ -23,17 +24,15 @@ data class StudyUiState(
     val bankName: String = "",
     val mode: StudyMode = StudyMode.SEQUENTIAL,
     val session: StudySession? = null,
-    /** 已作答（选项题已提交 / 主观题已自评） */
     val answered: Boolean = false,
-    /** 判分结果：null=未判分或无参考答案 */
     val correct: Boolean? = null,
     val selected: Set<String> = emptySet(),
     val textInput: String = "",
-    /** 参考答案与解析是否已展示 */
     val revealed: Boolean = false,
-    /** 速刷倒计时剩余秒数；null=不在倒计时 */
     val countdown: Int? = null,
-    val favorite: Boolean = false
+    val favorite: Boolean = false,
+    val killed: Boolean = false,
+    val filterSummary: String? = null
 )
 
 class StudyViewModel(
@@ -44,6 +43,9 @@ class StudyViewModel(
     private val mode: StudyMode = runCatching {
         StudyMode.valueOf(savedStateHandle.get<String>("mode") ?: "SEQUENTIAL")
     }.getOrDefault(StudyMode.SEQUENTIAL)
+    private val filter: StudyFilter? =
+        StudyFilter.fromFingerprint(savedStateHandle.get<String>("filter"))
+    private val filterJson: String? = filter?.fingerprint()
 
     private val bankRepo: BankRepository = ShuaApp.instance.container.bankRepo
     private val studyRepo: StudyRepository = ShuaApp.instance.container.studyRepo
@@ -55,6 +57,7 @@ class StudyViewModel(
     private var questions: List<Question> = emptyList()
     private var appSettings: AppSettings = AppSettings()
     private var countdownJob: Job? = null
+    private var questionShownAt: Long = 0L
 
     init {
         viewModelScope.launch {
@@ -65,19 +68,30 @@ class StudyViewModel(
 
     private suspend fun reload() {
         val bank = bankRepo.getBank(bankId)
-        questions = bankRepo.getQuestions(bankId)
-        val session = studyRepo.currentSession(bankId, mode, questions)
+        questions = studyRepo.filteredQuestions(bankId, filter)
+        val session = studyRepo.currentSession(bankId, mode, questions, filterJson)
+        questionShownAt = System.currentTimeMillis()
         _state.value = StudyUiState(
             loading = false,
             bankName = bank?.name.orEmpty(),
             mode = mode,
             session = session,
             revealed = mode == StudyMode.RECITE,
-            favorite = session.question?.let { studyRepo.isFavorite(it.id) } ?: false
+            favorite = session.question?.let { studyRepo.isFavorite(it.id) } ?: false,
+            killed = session.question?.let { studyRepo.isKilled(it.id) } ?: false,
+            filterSummary = filter?.takeIf { !it.isDefault }?.let { f ->
+                buildList {
+                    if (f.chapters.isNotEmpty()) add("${f.chapters.size}章")
+                    if (f.types.isNotEmpty()) add("${f.types.size}种题型")
+                    if (f.subtypes.isNotEmpty()) add(f.subtypes.joinToString("/"))
+                    StudyFilter.STATUS_OPTIONS.firstOrNull { it.first == f.status }?.second?.let { add(it) }
+                }.joinToString("·")
+            }
         )
     }
 
-    /** 选项点击：单选/判断立即判分；多选切换选中 */
+    private fun elapsedMs(): Long = System.currentTimeMillis() - questionShownAt
+
     fun onOptionTap(key: String) {
         val s = _state.value
         val q = s.session?.question ?: return
@@ -97,7 +111,6 @@ class StudyViewModel(
         }
     }
 
-    /** 多选确认提交 */
     fun confirmMultiple() {
         val s = _state.value
         if (s.selected.isEmpty() || s.answered) return
@@ -111,6 +124,7 @@ class StudyViewModel(
         val answerStr = selected.sorted().joinToString("")
         val hasAnswer = !q.answer.isNullOrBlank()
         val correct = if (hasAnswer) studyRepo.judge(q, answerStr) else null
+        val duration = elapsedMs()
         _state.value = s.copy(
             answered = true,
             correct = correct,
@@ -119,7 +133,11 @@ class StudyViewModel(
         )
         if (hasAnswer) {
             viewModelScope.launch {
-                studyRepo.submitAnswer(bankId, q, mode, answerStr, correct == true)
+                studyRepo.submitAnswer(
+                    bankId = bankId, question = q, mode = mode,
+                    userAnswer = answerStr, correct = correct == true,
+                    durationMs = duration
+                )
             }
         }
         if (mode == StudyMode.SPEED) beginCountdown(appSettings.speedModeSeconds)
@@ -129,38 +147,33 @@ class StudyViewModel(
         _state.value = _state.value.copy(textInput = v)
     }
 
-    /** 填空/简答：对照参考答案 */
     fun revealReference() {
         val s = _state.value
         if (s.session?.question == null || s.revealed) return
         _state.value = s.copy(revealed = true)
     }
 
-    /** 填空/简答自评 */
     fun selfRate(correct: Boolean) {
         val s = _state.value
         val q = s.session?.question ?: return
         if (s.answered) return
+        val duration = elapsedMs()
         viewModelScope.launch {
             studyRepo.submitAnswer(
-                bankId = bankId,
-                question = q,
-                mode = mode,
+                bankId = bankId, question = q, mode = mode,
                 userAnswer = s.textInput.take(200),
-                correct = correct,
-                selfRated = true
+                correct = correct, selfRated = true,
+                durationMs = duration
             )
             _state.value = _state.value.copy(answered = true, correct = correct)
             if (mode == StudyMode.SPEED) beginCountdown(appSettings.speedModeSeconds)
         }
     }
 
-    /** 下一题（未作答则视为跳过，不记录） */
     fun next() {
         countdownJob?.cancel()
         val s = _state.value
-        val finished = s.session?.finished == true
-        if (!finished) {
+        if (s.session?.finished != true) {
             viewModelScope.launch {
                 studyRepo.advance(bankId, mode)
                 reload()
@@ -168,7 +181,6 @@ class StudyViewModel(
         }
     }
 
-    /** 上一题（随机巩固无此功能） */
     fun prev() {
         if (mode == StudyMode.RANDOM) return
         val index = (_state.value.session?.indexInQueue ?: 1) - 2
@@ -176,6 +188,16 @@ class StudyViewModel(
         countdownJob?.cancel()
         viewModelScope.launch {
             studyRepo.seek(bankId, mode, index)
+            reload()
+        }
+    }
+
+    /** 答题卡跳题（顺序类模式） */
+    fun jumpTo(indexInQueue: Int) {
+        if (mode == StudyMode.RANDOM) return
+        countdownJob?.cancel()
+        viewModelScope.launch {
+            studyRepo.seek(bankId, mode, (indexInQueue - 1).coerceAtLeast(0))
             reload()
         }
     }
@@ -188,7 +210,6 @@ class StudyViewModel(
         }
     }
 
-    /** 顺序类模式从头再来 */
     fun restart() {
         countdownJob?.cancel()
         viewModelScope.launch {
@@ -205,6 +226,15 @@ class StudyViewModel(
         }
     }
 
+    /** 斩题：默认不再出现在"未斩"筛选里 */
+    fun toggleKill() {
+        val q = _state.value.session?.question ?: return
+        viewModelScope.launch {
+            val killed = studyRepo.toggleKill(q)
+            _state.value = _state.value.copy(killed = killed)
+        }
+    }
+
     private fun beginCountdown(seconds: Int) {
         countdownJob?.cancel()
         _state.value = _state.value.copy(countdown = seconds)
@@ -217,7 +247,6 @@ class StudyViewModel(
         }
     }
 
-    /** 用户点击暂停速刷倒计时 */
     fun pauseCountdown() {
         countdownJob?.cancel()
         _state.value = _state.value.copy(countdown = null)

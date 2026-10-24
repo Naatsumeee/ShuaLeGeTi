@@ -33,7 +33,7 @@ class DocumentIngestor(
 
     suspend fun ingest(
         uri: Uri,
-        onProgress: (IngestProgress) -> Unit = {}
+        onProgress: suspend (IngestProgress) -> Unit = {}
     ): String = withContext(Dispatchers.IO) {
         val name = queryDisplayName(uri) ?: ""
         val lower = name.lowercase()
@@ -100,7 +100,7 @@ class DocumentIngestor(
 
     // ---------- PDF：文字页直接抽文本，扫描页 OCR ----------
 
-    private suspend fun ingestPdf(uri: Uri, onProgress: (IngestProgress) -> Unit): String {
+    private suspend fun ingestPdf(uri: Uri, onProgress: suspend (IngestProgress) -> Unit): String {
         PDFBoxResourceLoader.init(context.applicationContext)
         val file = cachePdf(uri)
         val result = StringBuilder()
@@ -139,7 +139,7 @@ class DocumentIngestor(
     private suspend fun ocrPdfPage(
         file: java.io.File,
         pageIndex: Int,
-        onProgress: (IngestProgress) -> Unit,
+        onProgress: suspend (IngestProgress) -> Unit,
         current: Int,
         total: Int
     ): String {
@@ -167,7 +167,7 @@ class DocumentIngestor(
 
     // ---------- 图片 ----------
 
-    private suspend fun ingestImage(uri: Uri, onProgress: (IngestProgress) -> Unit): String {
+    private suspend fun ingestImage(uri: Uri, onProgress: suspend (IngestProgress) -> Unit): String {
         onProgress(IngestProgress("ocr", 1, 1, "识别图片文字"))
         val bitmap = decodeImage(uri)
             ?: throw IllegalArgumentException("无法解码图片")

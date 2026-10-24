@@ -13,7 +13,13 @@ data class QuestionOption(val key: String, val text: String)
 data class ParsedQuestion(
     var chapter: String? = null,
     var type: QuestionType = QuestionType.SINGLE,
+    /** 医学题型子类型 A1/A2/A3/B */
+    var subtype: String? = null,
     var stem: String = "",
+    /** A3 型共用题干材料 */
+    var sharedStem: String? = null,
+    /** B 型共用选项组 */
+    var sharedOptions: MutableList<QuestionOption> = mutableListOf(),
     val options: MutableList<QuestionOption> = mutableListOf(),
     var answer: String? = null,
     var analysis: String? = null
@@ -22,7 +28,7 @@ data class ParsedQuestion(
 /** 标准题库文件格式（导出/导入/分享用） */
 @Serializable
 data class ShuaBankFile(
-    val version: Int = 1,
+    val version: Int = 2,
     val name: String,
     val sourceFileName: String? = null,
     val exportedAt: Long,
@@ -33,13 +39,32 @@ data class ShuaBankFile(
 data class ShuaQuestionJson(
     val chapter: String? = null,
     val type: String,
+    val subtype: String? = null,
     val stem: String,
+    val sharedStem: String? = null,
+    val sharedOptions: List<QuestionOption> = emptyList(),
     val options: List<QuestionOption> = emptyList(),
     val answer: String? = null,
     val analysis: String? = null,
     val aiGenerated: Boolean = false,
     val confidence: Int? = null,
     val agreement: String? = null
+)
+
+/** 后台解析 JSONL 行 DTO：带分块索引用于恢复全局顺序 */
+@Serializable
+data class ParsedLine(
+    val chunkIndex: Int,
+    val indexInChunk: Int,
+    val chapter: String? = null,
+    val type: String = "SINGLE",
+    val subtype: String? = null,
+    val stem: String,
+    val sharedStem: String? = null,
+    val sharedOptions: List<QuestionOption> = emptyList(),
+    val options: List<QuestionOption> = emptyList(),
+    val answer: String? = null,
+    val analysis: String? = null
 )
 
 /** 三省六部各部分歧展示模型 */
@@ -74,4 +99,24 @@ object JsonCodec {
     fun decodeIdList(raw: String?): List<Long> =
         runCatching { json.decodeFromString<List<Long>>(raw ?: return emptyList()) }
             .getOrDefault(emptyList())
+
+    /** 读取 JSONL（容忍空行与坏行） */
+    fun readParsedLines(file: java.io.File): List<ParsedLine> =
+        runCatching {
+            file.readLines().filter { it.isNotBlank() }.mapNotNull { line ->
+                runCatching { json.decodeFromString<ParsedLine>(line) }.getOrNull()
+            }
+        }.getOrDefault(emptyList())
 }
+
+fun ParsedLine.toParsedQuestion(): ParsedQuestion = ParsedQuestion(
+    chapter = chapter,
+    type = runCatching { QuestionType.valueOf(type) }.getOrDefault(QuestionType.SINGLE),
+    subtype = subtype,
+    stem = stem,
+    sharedStem = sharedStem,
+    sharedOptions = sharedOptions.toMutableList(),
+    options = options.toMutableList(),
+    answer = answer,
+    analysis = analysis
+)

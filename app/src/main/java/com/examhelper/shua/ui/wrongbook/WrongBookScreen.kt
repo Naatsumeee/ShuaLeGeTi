@@ -50,7 +50,8 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     data class Lists(
         val wrong: List<Pair<WrongRecord, Question?>> = emptyList(),
         val mastered: List<Pair<WrongRecord, Question?>> = emptyList(),
-        val favorites: List<Pair<FavoriteRecord, Question?>> = emptyList()
+        val favorites: List<Pair<FavoriteRecord, Question?>> = emptyList(),
+        val kills: List<Pair<com.examhelper.shua.data.db.KillRecord, Question?>> = emptyList()
     )
 
     private val _lists = MutableStateFlow(Lists())
@@ -75,10 +76,19 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 _lists.value = _lists.value.copy(favorites = records.map { it to questions[it.questionId] })
             }
         }
+        viewModelScope.launch {
+            studyRepo.observeKills().collect { records ->
+                val questions = questionDao.getByIds(records.map { it.questionId }).associateBy { it.id }
+                _lists.value = _lists.value.copy(kills = records.map { it to questions[it.questionId] })
+            }
+        }
     }
 
     fun markMastered(questionId: Long) = viewModelScope.launch { studyRepo.markMastered(questionId) }
     fun removeWrong(questionId: Long) = viewModelScope.launch { studyRepo.removeWrong(questionId) }
+
+    /** 恢复被斩的题 */
+    fun reviveKill(questionId: Long) = viewModelScope.launch { studyRepo.reviveKill(questionId) }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -94,21 +104,24 @@ fun WrongBookScreen(onOpenBank: (Long) -> Unit) {
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             TabRow(selectedTabIndex = tab) {
-                Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("未掌握 (${lists.wrong.size})") })
-                Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("已掌握 (${lists.mastered.size})") })
-                Tab(selected = tab == 2, onClick = { tab = 2 }, text = { Text("收藏 (${lists.favorites.size})") })
+                Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("未掌握 ${lists.wrong.size}") })
+                Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("已掌握 ${lists.mastered.size}") })
+                Tab(selected = tab == 2, onClick = { tab = 2 }, text = { Text("收藏 ${lists.favorites.size}") })
+                Tab(selected = tab == 3, onClick = { tab = 3 }, text = { Text("斩题墙 ${lists.kills.size}") })
             }
             val entries = when (tab) {
                 0 -> lists.wrong
                 1 -> lists.mastered
-                else -> lists.favorites
+                2 -> lists.favorites
+                else -> lists.kills
             }
             if (entries.isEmpty()) {
                 Text(
                     when (tab) {
                         0 -> "还没有错题，刷题去吧！"
                         1 -> "还没有已掌握的错题"
-                        else -> "还没有收藏，做题时点右上角星标"
+                        2 -> "还没有收藏，做题时点右上角星标"
+                        else -> "还没有斩过的题——做题时点剪刀图标斩掉已掌握的题"
                     },
                     Modifier.fillMaxWidth().padding(24.dp),
                     style = MaterialTheme.typography.bodyMedium,
@@ -129,6 +142,7 @@ fun WrongBookScreen(onOpenBank: (Long) -> Unit) {
                                     when (meta) {
                                         is WrongRecord -> Text("错 ${meta.wrongCount} 次", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
                                         is FavoriteRecord -> Text("收藏", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
+                                        is com.examhelper.shua.data.db.KillRecord -> Text("已斩", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
                                     }
                                 }
                                 Text(
@@ -160,14 +174,21 @@ fun WrongBookScreen(onOpenBank: (Long) -> Unit) {
             },
             confirmButton = {
                 Row {
-                    TextButton(onClick = {
-                        vm.markMastered(q.id)
-                        detail = null
-                    }) { Text("标记掌握") }
-                    TextButton(onClick = {
-                        vm.removeWrong(q.id)
-                        detail = null
-                    }) { Text("移出错题本") }
+                    if (tab == 3) {
+                        TextButton(onClick = {
+                            vm.reviveKill(q.id)
+                            detail = null
+                        }) { Text("恢复此题") }
+                    } else {
+                        TextButton(onClick = {
+                            vm.markMastered(q.id)
+                            detail = null
+                        }) { Text("标记掌握") }
+                        TextButton(onClick = {
+                            vm.removeWrong(q.id)
+                            detail = null
+                        }) { Text("移出错题本") }
+                    }
                 }
             },
             dismissButton = { TextButton(onClick = { detail = null }) { Text("关闭") } }

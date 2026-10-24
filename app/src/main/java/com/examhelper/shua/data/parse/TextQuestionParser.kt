@@ -9,10 +9,11 @@ import com.examhelper.shua.data.model.QuestionOption
  * 支持常见格式：
  *   1、题干 / 1.题干 / (1) 题干
  *   A、选项 / A.选项 / A 选项 /（A）选项
- *   答案：B / 参考答案：B / 【答案】B / 题干末尾"：B"
+ *   答案：B / 参考答案：B / 【答案】B / 题干末尾"：B" / 题干内嵌"答案：X"
  *   解析：xxx / 【解析】xxx
  *   选项含"√"表示该项为答案
- * 复杂排版由 M2 的 LLM 结构化解析处理。
+ *   （1~3题共用题干）/ 共用备选答案 → A3 / B 型分组
+ * 复杂排版由 LLM 结构化解析处理。
  */
 object TextQuestionParser {
 
@@ -23,8 +24,10 @@ object TextQuestionParser {
     private val analysisRegex = Regex("""^\s*[\[【(（]?\s*(?:参考)?解析\s*[\]】)）]?\s*[:：]?\s*(.*)$""")
     private val sectionRegex = Regex("""^\s*(?:第?\s*[一二三四五六七八九十百]+\s*部分|[\(（]\s*[一二三四五六七八九十]+\s*[\)）]).*$|^\s*[一二三四五六七八九十]+\s*[、.．]\s*\S{0,20}$""")
     private val trailingColonAnswerRegex = Regex("""[:：]\s*[(（]?\s*([A-Ea-e])\s*[)）]?\s*$""")
+    private val sharedStemHintRegex = Regex("""共用题干|共同题干|共用材料|以下材料""")
+    private val sharedOptionsHintRegex = Regex("""共用备选答案|共用选项|备选答案""")
+    private val caseStartRegex = Regex("""^(患者|某男|某女|某患|男[，,].{0,3}\d|女[，,].{0,3}\d|病历|病例|一[名位].{0,6}(岁|男|女))""")
 
-    // 判断题选项的常见写法
     private val trueWords = setOf("对", "正确", "√", "T", "是", "Y")
     private val falseWords = setOf("错", "错误", "×", "X", "F", "否", "N")
 
@@ -32,7 +35,10 @@ object TextQuestionParser {
         val questions = mutableListOf<ParsedQuestion>()
         var current: ParsedQuestion? = null
         var currentSection: String? = null
-        var appendingTo: Int = 0 // 0=stem 1=analysis 2=option-last
+        var appendingTo = 0 // 0=stem 1=analysis 2=option-last 3=sharedStem 4=sharedOptions
+
+        var sharedStemBuf = StringBuilder()
+        var sharedOptionsBuf = mutableListOf<QuestionOption>()
 
         fun flush() {
             current?.let { q ->
@@ -54,17 +60,51 @@ object TextQuestionParser {
                 continue
             }
 
+            // 共用题干 / 共用备选答案 提示行
+            if (sharedStemHintRegex.containsMatchIn(line) && current == null) {
+                flush()
+                sharedStemBuf = StringBuilder()
+                sharedOptionsBuf = mutableListOf()
+                appendingTo = 3
+                continue
+            }
+            if (sharedOptionsHintRegex.containsMatchIn(line) && current == null) {
+                flush()
+                sharedStemBuf = StringBuilder()
+                sharedOptionsBuf = mutableListOf()
+                appendingTo = 4
+                continue
+            }
+
             val qm = questionStartRegex.find(line)
             if (qm != null && !isLikelyNotQuestion(qm)) {
                 flush()
                 current = ParsedQuestion(chapter = currentSection).apply {
                     stem = qm.groupValues[2].trim()
+                    if (sharedStemBuf.isNotBlank()) sharedStem = sharedStemBuf.toString().trim()
+                    if (sharedOptionsBuf.isNotEmpty()) sharedOptions.addAll(sharedOptionsBuf)
                 }
                 appendingTo = 0
                 continue
             }
 
-            val q = current ?: continue
+            val q = current
+            if (q == null) {
+                // 题号出现前的材料/共用选项累积
+                when (appendingTo) {
+                    3 -> sharedStemBuf.appendLine(line)
+                    4 -> {
+                        val om = optionTightRegex.find(line) ?: optionRegex.find(line)
+                        if (om != null && om.groupValues[2].isNotBlank()) {
+                            sharedOptionsBuf += QuestionOption(om.groupValues[1].uppercase(), om.groupValues[2].trim())
+                        } else if (sharedOptionsBuf.isNotEmpty()) {
+                            val last = sharedOptionsBuf.removeAt(sharedOptionsBuf.lastIndex)
+                            sharedOptionsBuf += last.copy(text = last.text + line)
+                        }
+                    }
+                }
+                continue
+            }
 
             val am = answerRegex.find(line)
             if (am != null && q.answer == null) {
@@ -83,7 +123,6 @@ object TextQuestionParser {
             val om = optionTightRegex.find(line) ?: optionRegex.find(line)
             if (om != null && q.stem.isNotBlank()) {
                 var optText = om.groupValues[2].trim()
-                // "√" 标记答案
                 if (optText.contains("√") || optText.contains("✔") || optText.contains("✓")) {
                     q.answer = om.groupValues[1].uppercase()
                     optText = optText.replace(Regex("""[√✔✓]"""), "").trim()
@@ -93,7 +132,6 @@ object TextQuestionParser {
                 continue
             }
 
-            // 普通文本行：续接上一处
             when (appendingTo) {
                 0 -> q.stem = if (q.stem.endsWith("-")) q.stem.dropLast(1) + line else q.stem + line
                 1 -> q.analysis = (q.analysis ?: "") + line
@@ -101,6 +139,7 @@ object TextQuestionParser {
                     val last = q.options.removeAt(q.options.lastIndex)
                     q.options += last.copy(text = last.text + line)
                 }
+                else -> Unit
             }
         }
         flush()
@@ -112,7 +151,6 @@ object TextQuestionParser {
         val number = m.groupValues[1]
         val rest = m.groupValues[2]
         if (number.length > 3) return true
-        // 题号后紧跟数字且无分隔，如 "1.5 厘米"
         return rest.isNotEmpty() && rest[0].isDigit()
     }
 
@@ -139,6 +177,11 @@ object TextQuestionParser {
         q.options.clear()
         q.options.addAll(opts)
         q.answer = ans
+        if (q.sharedOptions.isNotEmpty()) {
+            val (sopts, _) = OptionNormalizer.normalize(q.sharedOptions.toList(), null)
+            q.sharedOptions.clear()
+            q.sharedOptions.addAll(sopts)
+        }
 
         q.stem = q.stem.trim()
         q.answer = normalizeAnswer(q.answer)
@@ -147,9 +190,9 @@ object TextQuestionParser {
         q.type = when {
             q.options.size == 2 && q.options.all { it.text in trueWords || it.text in falseWords } -> QuestionType.JUDGE
             q.options.isEmpty() -> {
-                val ans = q.answer
+                val a = q.answer
                 when {
-                    ans != null && (ans == "对" || ans == "错") -> QuestionType.JUDGE
+                    a != null && (a == "对" || a == "错") -> QuestionType.JUDGE
                     q.stem.contains("___") || q.stem.contains("__") -> QuestionType.FILL
                     else -> QuestionType.SHORT_ANSWER
                 }
@@ -161,6 +204,14 @@ object TextQuestionParser {
         if (q.type == QuestionType.JUDGE && q.options.isEmpty()) {
             q.options += QuestionOption("A", "对")
             q.options += QuestionOption("B", "错")
+        }
+
+        // 医学题型子类型
+        q.subtype = when {
+            q.sharedStem != null -> "A3"
+            q.sharedOptions.isNotEmpty() -> "B"
+            q.type == QuestionType.SINGLE -> if (caseStartRegex.containsMatchIn(q.stem.take(20))) "A2" else "A1"
+            else -> null
         }
     }
 

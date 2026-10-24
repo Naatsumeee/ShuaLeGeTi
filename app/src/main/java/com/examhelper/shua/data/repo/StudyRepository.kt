@@ -25,7 +25,8 @@ data class StudySession(
 class StudyRepository(
     private val db: AppDatabase,
     private val progressDao: ProgressDao = db.progressDao(),
-    private val recordDao: RecordDao = db.recordDao()
+    private val recordDao: RecordDao = db.recordDao(),
+    private val bankRepo: BankRepository = BankRepository(db)
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -35,23 +36,37 @@ class StudyRepository(
     fun observeTodayStats() = recordDao.observeAttemptCountSince(startOfToday())
     fun observeTotalStats() = recordDao.observeTotalAttempts()
 
-    /** 确保某模式进度存在；随机巩固首次进入时生成乱序队列 */
-    suspend fun ensureProgress(bankId: Long, mode: StudyMode, questionIds: List<Long>): StudyProgress {
-        progressDao.get(bankId, mode)?.let {
-            if (!(mode == StudyMode.RANDOM && it.randomOrderJson == null)) return it
-        }
+    /** 确保某模式进度存在；筛选条件变化时自动重置；随机巩固首次进入生成乱序队列 */
+    suspend fun ensureProgress(
+        bankId: Long,
+        mode: StudyMode,
+        questionIds: List<Long>,
+        filterJson: String? = null
+    ): StudyProgress {
+        val existing = progressDao.get(bankId, mode)
+        if (existing != null && existing.filterJson == filterJson &&
+            !(mode == StudyMode.RANDOM && existing.randomOrderJson == null)
+        ) return existing
         val fresh = if (mode == StudyMode.RANDOM) {
-            StudyProgress(bankId = bankId, mode = mode, randomOrderJson = JsonCodec.encodeIdList(questionIds.shuffled()))
+            StudyProgress(
+                bankId = bankId, mode = mode, filterJson = filterJson,
+                randomOrderJson = JsonCodec.encodeIdList(questionIds.shuffled())
+            )
         } else {
-            StudyProgress(bankId = bankId, mode = mode)
+            StudyProgress(bankId = bankId, mode = mode, filterJson = filterJson)
         }
         progressDao.upsert(fresh)
         return fresh
     }
 
     /** 取当前会话状态 */
-    suspend fun currentSession(bankId: Long, mode: StudyMode, questions: List<Question>): StudySession {
-        val progress = ensureProgress(bankId, mode, questions.map { it.id })
+    suspend fun currentSession(
+        bankId: Long,
+        mode: StudyMode,
+        questions: List<Question>,
+        filterJson: String? = null
+    ): StudySession {
+        val progress = ensureProgress(bankId, mode, questions.map { it.id }, filterJson)
         val byId = questions.associateBy { it.id }
         return when (mode) {
             StudyMode.RANDOM -> {
@@ -89,7 +104,9 @@ class StudyRepository(
         mode: StudyMode,
         userAnswer: String,
         correct: Boolean,
-        selfRated: Boolean = false
+        selfRated: Boolean = false,
+        runId: String? = null,
+        durationMs: Long? = null
     ) {
         val existing = recordDao.getWrong(question.id)
         recordDao.submitAnswer(
@@ -99,11 +116,62 @@ class StudyRepository(
                 mode = mode,
                 userAnswer = userAnswer,
                 correct = correct,
-                selfRated = selfRated
+                selfRated = selfRated,
+                runId = runId,
+                durationMs = durationMs
             ),
             existing
         )
     }
+
+    /** 测试模式报告数据 */
+    suspend fun examReport(runId: String): ExamReport? {
+        val records = recordDao.getByRun(runId)
+        if (records.isEmpty()) return null
+        val questions = bankRepo.getQuestionsByIds(records.map { it.questionId }).associateBy { it.id }
+        val details = records.mapNotNull { r ->
+            questions[r.questionId]?.let { q ->
+                ExamItem(
+                    question = q,
+                    userAnswer = r.userAnswer,
+                    correct = r.correct,
+                    durationMs = r.durationMs
+                )
+            }
+        }
+        val totalDuration = records.sumOf { it.durationMs ?: 0L }
+        val chapterStats = details.groupBy { it.question.chapter ?: "未分章" }.map { (chapter, items) ->
+            ChapterStat(chapter, items.size, items.count { it.correct })
+        }
+        return ExamReport(
+            runId = runId,
+            bankId = records.first().bankId,
+            total = details.size,
+            correctCount = details.count { it.correct },
+            totalDurationMs = totalDuration,
+            chapterStats = chapterStats.sortedByDescending { it.total },
+            items = details
+        )
+    }
+
+    data class ExamItem(
+        val question: Question,
+        val userAnswer: String,
+        val correct: Boolean,
+        val durationMs: Long?
+    )
+
+    data class ChapterStat(val chapter: String, val total: Int, val correct: Int)
+
+    data class ExamReport(
+        val runId: String,
+        val bankId: Long,
+        val total: Int,
+        val correctCount: Int,
+        val totalDurationMs: Long,
+        val chapterStats: List<ChapterStat>,
+        val items: List<ExamItem>
+    )
 
     /** 前进到下一题；随机巩固推进 cursor，其余推进 index */
     suspend fun advance(bankId: Long, mode: StudyMode) {
@@ -150,6 +218,48 @@ class StudyRepository(
     suspend fun markMastered(questionId: Long) = recordDao.markMastered(questionId)
 
     suspend fun removeWrong(questionId: Long) = recordDao.removeWrong(questionId)
+
+    /** 按筛选条件过滤题库题目 */
+    suspend fun filteredQuestions(bankId: Long, filter: com.examhelper.shua.data.model.StudyFilter?): List<Question> {
+        val all = bankRepo.getQuestions(bankId)
+        if (filter == null || filter.isDefault) return all
+        val wrong = recordDao.wrongIds().toSet()
+        val favorite = recordDao.favoriteIds().toSet()
+        val killed = recordDao.killedIds().toSet()
+        val answered = recordDao.answeredIds(bankId).toSet()
+        return all.filter { q ->
+            (filter.chapters.isEmpty() || filter.chapters.contains(q.chapter)) &&
+                (filter.types.isEmpty() || filter.types.contains(q.type.name)) &&
+                (filter.subtypes.isEmpty() || filter.subtypes.contains(q.subtype)) &&
+                when (filter.status) {
+                    "UNDONE" -> q.id !in answered
+                    "WRONG" -> q.id in wrong
+                    "FAVORITE" -> q.id in favorite
+                    "KILLED" -> q.id in killed
+                    "UNKILLED" -> q.id !in killed
+                    else -> true
+                }
+        }
+    }
+
+    // ---- 斩题 ----
+
+    suspend fun toggleKill(question: Question): Boolean {
+        val existing = recordDao.getKill(question.id)
+        return if (existing != null) {
+            recordDao.removeKill(question.id)
+            false
+        } else {
+            recordDao.addKill(com.examhelper.shua.data.db.KillRecord(questionId = question.id, bankId = question.bankId))
+            true
+        }
+    }
+
+    suspend fun isKilled(questionId: Long): Boolean = recordDao.getKill(questionId) != null
+
+    fun observeKills() = recordDao.observeKills()
+
+    suspend fun reviveKill(questionId: Long) = recordDao.removeKill(questionId)
 
     private fun startOfToday(): Long {
         val cal = java.util.Calendar.getInstance()

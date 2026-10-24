@@ -154,6 +154,32 @@ fun SettingsScreen() {
                 }
             }
 
+            // ---- 解析并发 ----
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp)) {
+                    Text("AI 解析并发：${ui.parseConcurrency} 路", style = MaterialTheme.typography.titleSmall)
+                    Text("分块并行请求数。提速但更吃模型限流，报 429 时调低", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    Slider(
+                        value = ui.parseConcurrency.toFloat(),
+                        onValueChange = { vm.setParseConcurrency(it.toInt()) },
+                        valueRange = 1f..8f,
+                        steps = 6
+                    )
+                }
+            }
+
+            // ---- 字体缩放 ----
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp)) {
+                    Text("字体大小：${(ui.fontScale * 100).toInt()}%", style = MaterialTheme.typography.titleSmall)
+                    Slider(
+                        value = ui.fontScale,
+                        onValueChange = { vm.setFontScale((it * 20).toInt() / 20f) },
+                        valueRange = 0.8f..1.5f
+                    )
+                }
+            }
+
             Spacer(Modifier.padding(48.dp))
         }
     }

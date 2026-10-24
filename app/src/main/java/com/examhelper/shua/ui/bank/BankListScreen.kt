@@ -13,7 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
@@ -47,16 +47,25 @@ import java.util.Locale
 fun BankListScreen(
     onOpenBank: (Long) -> Unit,
     onImportText: () -> Unit,
-    onImportFile: () -> Unit
+    onImportFile: (String?) -> Unit,
+    onSearch: () -> Unit
 ) {
     val vm: BankListViewModel = viewModel()
     val banks by vm.banks.collectAsState()
+    val jobs by vm.jobs.collectAsState()
     var deleting by remember { mutableStateOf<QuestionBank?>(null) }
     var importMenuOpen by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("刷了个题") })
+            TopAppBar(
+                title = { Text("刷了个题") },
+                actions = {
+                    IconButton(onClick = onSearch) {
+                        Icon(Icons.Filled.Search, contentDescription = "搜索")
+                    }
+                }
+            )
         },
         floatingActionButton = {
             Box {
@@ -68,7 +77,7 @@ fun BankListScreen(
                 DropdownMenu(expanded = importMenuOpen, onDismissRequest = { importMenuOpen = false }) {
                     DropdownMenuItem(
                         text = { Text("文件 / 拍照 / 扫描 PDF（OCR）") },
-                        onClick = { importMenuOpen = false; onImportFile() }
+                        onClick = { importMenuOpen = false; onImportFile(null) }
                     )
                     DropdownMenuItem(
                         text = { Text("粘贴题目文本") },
@@ -78,7 +87,7 @@ fun BankListScreen(
             }
         }
     ) { padding ->
-        if (banks.isEmpty()) {
+        if (banks.isEmpty() && jobs.none { it.stage != "FAILED" && it.stage != "CANCELED" }) {
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Icon(Icons.Filled.Description, contentDescription = null, tint = MaterialTheme.colorScheme.outline)
@@ -93,6 +102,28 @@ fun BankListScreen(
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                jobs.filter { it.stage != "FAILED" && it.stage != "CANCELED" }.forEach { job ->
+                    item(key = "job_${job.id}") {
+                        Card(
+                            onClick = { onImportFile(job.id) },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = androidx.compose.material3.CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                            )
+                        ) {
+                            Column(Modifier.padding(12.dp)) {
+                                Text(
+                                    when (job.stage) {
+                                        "DONE" -> "《${job.bankName}》解析完成，待确认导入（${job.parsedCount} 题）"
+                                        "PARSE" -> "《${job.bankName}》后台解析中 ${job.doneUnits}/${job.totalUnits} 段 · 已得 ${job.parsedCount} 题"
+                                        else -> "《${job.bankName}》正在识别文件…"
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                        }
+                    }
+                }
                 items(banks, key = { it.id }) { bank ->
                     BankCard(bank = bank, onClick = { onOpenBank(bank.id) }, onDelete = { deleting = bank })
                 }

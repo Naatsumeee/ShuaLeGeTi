@@ -29,7 +29,9 @@ class SettingsViewModel(
     data class UiState(
         val ocrEngine: String = OcrEngine.ML_KIT,
         val speedSeconds: Int = 3,
-        val sanShengLiuBu: Boolean = false
+        val sanShengLiuBu: Boolean = false,
+        val parseConcurrency: Int = 4,
+        val fontScale: Float = 1.0f
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -37,13 +39,20 @@ class SettingsViewModel(
 
     init {
         viewModelScope.launch {
-            settingsStore.settings.collect { _ui.value = UiState(it.ocrEngine, it.speedModeSeconds, it.sanShengLiuBu) }
+            settingsStore.settings.collect {
+                _ui.value = UiState(
+                    it.ocrEngine, it.speedModeSeconds, it.sanShengLiuBu,
+                    it.parseConcurrency, it.fontScale
+                )
+            }
         }
     }
 
     fun setOcrEngine(v: String) = viewModelScope.launch { settingsStore.setOcrEngine(v) }
     fun setSpeedSeconds(v: Int) = viewModelScope.launch { settingsStore.setSpeedSeconds(v) }
     fun setSanShengLiuBu(v: Boolean) = viewModelScope.launch { settingsStore.setSanShengLiuBu(v) }
+    fun setParseConcurrency(v: Int) = viewModelScope.launch { settingsStore.setParseConcurrency(v) }
+    fun setFontScale(v: Float) = viewModelScope.launch { settingsStore.setFontScale(v) }
 
     fun saveProvider(provider: LlmProvider) = viewModelScope.launch {
         if (provider.id == 0L) {

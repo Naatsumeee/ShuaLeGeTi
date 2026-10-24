@@ -22,6 +22,11 @@ class BankListViewModel @JvmOverloads constructor(
     val banks: StateFlow<List<QuestionBank>> = bankRepo.observeBanks()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    /** 导入任务横幅（进行中/待确认） */
+    val jobs: StateFlow<List<com.examhelper.shua.data.db.ImportJob>> =
+        ShuaApp.instance.container.database.importJobDao().observeAll()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     fun deleteBank(bankId: Long) {
         viewModelScope.launch { bankRepo.deleteBank(bankId) }
     }

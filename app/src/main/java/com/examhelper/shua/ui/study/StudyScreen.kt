@@ -9,12 +9,18 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
@@ -28,6 +34,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -62,6 +69,7 @@ fun StudyScreen(
 ) {
     val vm: StudyViewModel = viewModel()
     val state by vm.state.collectAsState()
+    var showSheet by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -75,6 +83,7 @@ fun StudyScreen(
                                 StudyMode.SPEED -> "速刷模式"
                                 StudyMode.RECITE -> "背题模式"
                                 StudyMode.RANDOM -> "随机巩固"
+                                StudyMode.EXAM -> "测试模式"
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.outline
@@ -87,12 +96,25 @@ fun StudyScreen(
                     }
                 },
                 actions = {
+                    // 斩题
+                    IconButton(onClick = vm::toggleKill) {
+                        Icon(
+                            Icons.Filled.ContentCut,
+                            contentDescription = "斩题",
+                            tint = if (state.killed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline
+                        )
+                    }
                     IconButton(onClick = vm::toggleFavorite) {
                         Icon(
                             if (state.favorite) Icons.Filled.Star else Icons.Filled.StarBorder,
                             contentDescription = "收藏",
                             tint = if (state.favorite) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline
                         )
+                    }
+                    if (state.mode != StudyMode.RANDOM && state.session?.total ?: 0 > 1) {
+                        IconButton(onClick = { showSheet = true }) {
+                            Icon(Icons.Filled.Apps, contentDescription = "答题卡")
+                        }
                     }
                     if (state.mode == StudyMode.RANDOM) {
                         IconButton(onClick = vm::resetRandom) {
@@ -145,6 +167,14 @@ fun StudyScreen(
                         },
                         modifier = Modifier.fillMaxWidth()
                     )
+                    state.filterSummary?.let {
+                        Text(
+                            "筛选：$it",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.tertiary,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
 
                     Column(
                         Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(vertical = 12.dp),
@@ -168,14 +198,29 @@ fun StudyScreen(
 private fun QuestionBody(q: Question, state: StudyUiState, vm: StudyViewModel) {
     val options = JsonCodec.decodeOptions(q.optionsJson)
 
+    // A3 共用题干
+    q.sharedStem?.let {
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("共用题干（A3 型）", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.tertiary)
+                Text(it, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+    }
+
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                AssistChip(onClick = {}, label = { Text(typeLabel(q.type)) })
+                AssistChip(onClick = {}, label = { Text(typeLabel(q.type) + (q.subtype?.let { " · $it" } ?: "")) })
                 q.chapter?.let { AssistChip(onClick = {}, label = { Text(it.take(12)) }) }
             }
             Text(q.stem, style = MaterialTheme.typography.bodyLarge)
         }
+    }
+
+    // B 型共用选项
+    q.sharedOptionsJson?.let {
+        com.examhelper.shua.ui.exam.SharedOptionsCard(it)
     }
 
     when (q.type) {

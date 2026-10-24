@@ -1,33 +1,48 @@
 package com.examhelper.shua.ui
 
+import android.net.Uri
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.examhelper.shua.ShuaApp
+import com.examhelper.shua.data.db.StudyMode
 import com.examhelper.shua.ui.bank.BankDetailScreen
 import com.examhelper.shua.ui.bank.BankListScreen
 import com.examhelper.shua.ui.bank.ImportTextScreen
+import com.examhelper.shua.ui.exam.ExamReportScreen
+import com.examhelper.shua.ui.exam.ExamScreen
 import com.examhelper.shua.ui.generate.GenerateScreen
 import com.examhelper.shua.ui.import_.ImportScreen
+import com.examhelper.shua.ui.search.SearchScreen
 import com.examhelper.shua.ui.settings.SettingsScreen
 import com.examhelper.shua.ui.stats.StatsScreen
 import com.examhelper.shua.ui.study.StudyScreen
+import com.examhelper.shua.ui.study.StudySetupScreen
 import com.examhelper.shua.ui.wrongbook.WrongBookScreen
 
 object Routes {
@@ -36,13 +51,22 @@ object Routes {
     const val STATS = "stats"
     const val SETTINGS = "settings"
     const val IMPORT_TEXT = "import_text"
-    const val IMPORT_FILE = "import_file"
+    const val IMPORT_FILE = "import_file?jobId={jobId}"
     const val GENERATE = "generate/{bankId}"
+    const val SEARCH = "search"
     const val BANK_DETAIL = "bank/{bankId}"
-    const val STUDY = "study/{bankId}/{mode}"
+    const val STUDY_SETUP = "study_setup/{bankId}/{mode}"
+    const val STUDY = "study/{bankId}/{mode}?filter={filter}"
+    const val EXAM = "exam/{bankId}?filter={filter}&count={count}"
+    const val EXAM_REPORT = "exam_report/{runId}"
 
+    fun importFile(jobId: String? = null) = "import_file" + (jobId?.let { "?jobId=$it" } ?: "")
     fun bankDetail(bankId: Long) = "bank/$bankId"
-    fun study(bankId: Long, mode: String) = "study/$bankId/$mode"
+    fun studySetup(bankId: Long, mode: StudyMode) = "study_setup/$bankId/${mode.name}"
+    fun study(bankId: Long, mode: StudyMode, filterJson: String? = null) =
+        "study/$bankId/${mode.name}" + (filterJson?.let { "?filter=${Uri.encode(it)}" } ?: "")
+    fun exam(bankId: Long, filterJson: String? = null, count: Int) =
+        "exam/$bankId?count=$count" + (filterJson?.let { "&filter=${Uri.encode(it)}" } ?: "")
 }
 
 private data class Tab(val route: String, val label: String, val icon: ImageVector)
@@ -56,79 +80,127 @@ private val tabs = listOf(
 
 @Composable
 fun AppRoot() {
-    val navController = rememberNavController()
-    val backStackEntry by navController.currentBackStackEntryAsState()
-    val currentRoute = backStackEntry?.destination?.route
-    val showBottomBar = currentRoute in tabs.map { it.route }
+    // 全局字体缩放
+    val fontScale by produceState(1f) {
+        ShuaApp.instance.container.settings.settings.collect { value = it.fontScale }
+    }
+    val density = LocalDensity.current
+    CompositionLocalProvider(
+        LocalDensity provides Density(density.density, fontScale)
+    ) {
+        val navController = rememberNavController()
+        val backStackEntry by navController.currentBackStackEntryAsState()
+        val currentRoute = backStackEntry?.destination?.route
+        val showBottomBar = currentRoute in tabs.map { it.route }
 
-    Scaffold(
-        bottomBar = {
-            if (showBottomBar) {
-                NavigationBar {
-                    tabs.forEach { tab ->
-                        NavigationBarItem(
-                            selected = currentRoute == tab.route,
-                            onClick = {
-                                navController.navigate(tab.route) {
-                                    popUpTo(navController.graph.findStartDestination().id) {
-                                        saveState = true
+        Scaffold(
+            bottomBar = {
+                if (showBottomBar) {
+                    NavigationBar {
+                        tabs.forEach { tab ->
+                            NavigationBarItem(
+                                selected = currentRoute == tab.route,
+                                onClick = {
+                                    navController.navigate(tab.route) {
+                                        popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                        launchSingleTop = true
+                                        restoreState = true
                                     }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            },
-                            icon = { Icon(tab.icon, contentDescription = tab.label) },
-                            label = { Text(tab.label) }
-                        )
+                                },
+                                icon = { Icon(tab.icon, contentDescription = tab.label) },
+                                label = { Text(tab.label) }
+                            )
+                        }
                     }
                 }
             }
-        }
-    ) { padding ->
-        NavHost(
-            navController = navController,
-            startDestination = Routes.BANKS,
-            modifier = Modifier.padding(padding)
-        ) {
-            composable(Routes.BANKS) {
-                BankListScreen(
-                    onOpenBank = { navController.navigate(Routes.bankDetail(it)) },
-                    onImportText = { navController.navigate(Routes.IMPORT_TEXT) },
-                    onImportFile = { navController.navigate(Routes.IMPORT_FILE) }
-                )
-            }
-            composable(Routes.WRONGBOOK) {
-                WrongBookScreen(onOpenBank = { navController.navigate(Routes.bankDetail(it)) })
-            }
-            composable(Routes.STATS) { StatsScreen() }
-            composable(Routes.SETTINGS) { SettingsScreen() }
-            composable(Routes.IMPORT_TEXT) {
-                ImportTextScreen(onDone = { navController.popBackStack() })
-            }
-            composable(Routes.IMPORT_FILE) {
-                ImportScreen(onDone = { navController.popBackStack() })
-            }
-            composable(Routes.GENERATE) { entry ->
-                val bankId = entry.arguments?.getString("bankId")?.toLongOrNull() ?: return@composable
-                GenerateScreen(bankId = bankId, onBack = { navController.popBackStack() })
-            }
-            composable(Routes.BANK_DETAIL) { entry ->
-                val bankId = entry.arguments?.getString("bankId")?.toLongOrNull() ?: return@composable
-                BankDetailScreen(
-                    bankId = bankId,
-                    onBack = { navController.popBackStack() },
-                    onStartStudy = { mode -> navController.navigate(Routes.study(bankId, mode.name)) },
-                    onGenerate = { navController.navigate("generate/$bankId") }
-                )
-            }
-            composable(Routes.STUDY) { entry ->
-                val bankId = entry.arguments?.getString("bankId")?.toLongOrNull() ?: return@composable
-                val mode = entry.arguments?.getString("mode") ?: "SEQUENTIAL"
-                StudyScreen(
-                    bankId = bankId,
-                    modeName = mode,
-                    onBack = { navController.popBackStack() }
-                )
+        ) { padding ->
+            NavHost(
+                navController = navController,
+                startDestination = Routes.BANKS,
+                modifier = Modifier.padding(padding)
+            ) {
+                composable(Routes.BANKS) {
+                    BankListScreen(
+                        onOpenBank = { navController.navigate(Routes.bankDetail(it)) },
+                        onImportText = { navController.navigate(Routes.IMPORT_TEXT) },
+                        onImportFile = { jobId -> navController.navigate(Routes.importFile(jobId)) },
+                        onSearch = { navController.navigate(Routes.SEARCH) }
+                    )
+                }
+                composable(Routes.WRONGBOOK) {
+                    WrongBookScreen(onOpenBank = { navController.navigate(Routes.bankDetail(it)) })
+                }
+                composable(Routes.STATS) { StatsScreen() }
+                composable(Routes.SETTINGS) { SettingsScreen() }
+                composable(Routes.SEARCH) {
+                    SearchScreen(onBack = { navController.popBackStack() })
+                }
+                composable(Routes.IMPORT_TEXT) {
+                    ImportTextScreen(onDone = { navController.popBackStack() })
+                }
+                composable(Routes.IMPORT_FILE) { entry ->
+                    val jobId = entry.arguments?.getString("jobId")
+                    ImportScreen(jobId = jobId, onDone = { navController.popBackStack() })
+                }
+                composable(Routes.GENERATE) { entry ->
+                    val bankId = entry.arguments?.getString("bankId")?.toLongOrNull() ?: return@composable
+                    GenerateScreen(bankId = bankId, onBack = { navController.popBackStack() })
+                }
+                composable(Routes.BANK_DETAIL) { entry ->
+                    val bankId = entry.arguments?.getString("bankId")?.toLongOrNull() ?: return@composable
+                    BankDetailScreen(
+                        bankId = bankId,
+                        onBack = { navController.popBackStack() },
+                        onStartStudy = { mode -> navController.navigate(Routes.studySetup(bankId, mode)) },
+                        onGenerate = { navController.navigate("generate/$bankId") }
+                    )
+                }
+                composable(Routes.STUDY_SETUP) { entry ->
+                    val bankId = entry.arguments?.getString("bankId")?.toLongOrNull() ?: return@composable
+                    val modeName = entry.arguments?.getString("mode") ?: "SEQUENTIAL"
+                    StudySetupScreen(
+                        bankId = bankId,
+                        modeName = modeName,
+                        onBack = { navController.popBackStack() },
+                        onStart = { filterJson, examCount ->
+                            val mode = runCatching { StudyMode.valueOf(modeName) }.getOrDefault(StudyMode.SEQUENTIAL)
+                            if (mode == StudyMode.EXAM) {
+                                navController.navigate(Routes.exam(bankId, filterJson, examCount))
+                            } else {
+                                navController.navigate(Routes.study(bankId, mode, filterJson))
+                            }
+                        }
+                    )
+                }
+                composable(Routes.STUDY) { entry ->
+                    val bankId = entry.arguments?.getString("bankId")?.toLongOrNull() ?: return@composable
+                    val mode = entry.arguments?.getString("mode") ?: "SEQUENTIAL"
+                    StudyScreen(
+                        bankId = bankId,
+                        modeName = mode,
+                        onBack = { navController.popBackStack() }
+                    )
+                }
+                composable(Routes.EXAM) { entry ->
+                    val bankId = entry.arguments?.getString("bankId")?.toLongOrNull() ?: return@composable
+                    ExamScreen(
+                        bankId = bankId,
+                        onSubmitted = { runId ->
+                            navController.navigate("exam_report/$runId") {
+                                popUpTo(Routes.BANK_DETAIL)
+                            }
+                        },
+                        onBack = { navController.popBackStack() }
+                    )
+                }
+                composable(Routes.EXAM_REPORT) { entry ->
+                    val runId = entry.arguments?.getString("runId") ?: return@composable
+                    ExamReportScreen(
+                        runId = runId,
+                        onBack = { navController.popBackStack() }
+                    )
+                }
             }
         }
     }

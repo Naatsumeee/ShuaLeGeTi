@@ -5,6 +5,7 @@ import com.examhelper.shua.data.db.BankDao
 import com.examhelper.shua.data.db.Question
 import com.examhelper.shua.data.db.QuestionBank
 import com.examhelper.shua.data.db.QuestionDao
+import com.examhelper.shua.data.db.QuestionType
 import com.examhelper.shua.data.db.RecordDao
 import com.examhelper.shua.data.db.ProgressDao
 import com.examhelper.shua.data.model.JsonCodec
@@ -28,49 +29,32 @@ class BankRepository(
 
     suspend fun getQuestions(bankId: Long): List<Question> = questionDao.getByBank(bankId)
 
+    suspend fun getQuestionsByIds(ids: List<Long>): List<Question> =
+        if (ids.isEmpty()) emptyList() else questionDao.getByIds(ids)
+
     suspend fun countNoAnswer(bankId: Long): Int = questionDao.countNoAnswer(bankId)
+
+    private fun ParsedQuestion.toEntity(bankId: Long, order: Int): Question = Question(
+        bankId = bankId,
+        orderInBank = order,
+        chapter = chapter,
+        type = type,
+        subtype = subtype,
+        stem = stem,
+        sharedStem = sharedStem,
+        sharedOptionsJson = sharedOptions.takeIf { it.isNotEmpty() }?.let(JsonCodec::encodeOptions),
+        optionsJson = options.takeIf { it.isNotEmpty() }?.let(JsonCodec::encodeOptions),
+        answer = answer,
+        analysis = analysis
+    )
 
     /** 由解析结果创建题库 */
     suspend fun createBank(name: String, sourceFileName: String?, parsed: List<ParsedQuestion>): Long {
         val bankId = bankDao.insert(
             QuestionBank(name = name, sourceFileName = sourceFileName, questionCount = parsed.size)
         )
-        val questions = parsed.mapIndexed { index, p ->
-            Question(
-                bankId = bankId,
-                orderInBank = index,
-                chapter = p.chapter,
-                type = p.type,
-                stem = p.stem,
-                optionsJson = p.options.takeIf { it.isNotEmpty() }?.let(JsonCodec::encodeOptions),
-                answer = p.answer,
-                analysis = p.analysis
-            )
-        }
-        questionDao.insertAll(questions)
+        questionDao.insertAll(parsed.mapIndexed { index, p -> p.toEntity(bankId, index) })
         return bankId
-    }
-
-    /** 追加题目（LLM 解析分批入库用） */
-    suspend fun appendQuestions(bankId: Long, parsed: List<ParsedQuestion>) {
-        val existing = questionDao.getByBank(bankId)
-        val start = existing.size
-        val questions = parsed.mapIndexed { index, p ->
-            Question(
-                bankId = bankId,
-                orderInBank = start + index,
-                chapter = p.chapter,
-                type = p.type,
-                stem = p.stem,
-                optionsJson = p.options.takeIf { it.isNotEmpty() }?.let(JsonCodec::encodeOptions),
-                answer = p.answer,
-                analysis = p.analysis
-            )
-        }
-        questionDao.insertAll(questions)
-        bankDao.getById(bankId)?.let {
-            bankDao.update(it.copy(questionCount = start + parsed.size, updatedAt = System.currentTimeMillis()))
-        }
     }
 
     suspend fun deleteBank(bankId: Long) {
@@ -79,10 +63,15 @@ class BankRepository(
         recordDao.deleteAttemptsByBank(bankId)
         recordDao.deleteWrongByBank(bankId)
         recordDao.deleteFavoritesByBank(bankId)
+        recordDao.deleteKillsByBank(bankId)
         bankDao.deleteById(bankId)
     }
 
     suspend fun updateQuestion(q: Question) = questionDao.update(q)
+
+    suspend fun chapters(bankId: Long): List<String> = questionDao.chaptersOfBank(bankId)
+
+    suspend fun searchAll(keyword: String) = questionDao.searchAll(keyword)
 
     // ---- 标准题库文件导出/导入 ----
 
@@ -97,7 +86,10 @@ class BankRepository(
                 ShuaQuestionJson(
                     chapter = q.chapter,
                     type = q.type.name,
+                    subtype = q.subtype,
                     stem = q.stem,
+                    sharedStem = q.sharedStem,
+                    sharedOptions = JsonCodec.decodeOptions(q.sharedOptionsJson),
                     options = JsonCodec.decodeOptions(q.optionsJson),
                     answer = q.answer,
                     analysis = q.analysis,
@@ -110,17 +102,19 @@ class BankRepository(
     }
 
     suspend fun importBankFile(file: ShuaBankFile): Long {
-        val parsed = file.questions.map { jq ->
-            ParsedQuestion(
-                chapter = jq.chapter,
-                type = runCatching { com.examhelper.shua.data.db.QuestionType.valueOf(jq.type) }
-                    .getOrElse { com.examhelper.shua.data.db.QuestionType.SINGLE },
-                stem = jq.stem,
-                options = jq.options.toMutableList(),
-                answer = jq.answer,
-                analysis = jq.analysis
-            )
-        }
+        val parsed = file.questions.map { it.toParsedQuestion() }
         return createBank(file.name, file.sourceFileName, parsed)
     }
+
+    private fun ShuaQuestionJson.toParsedQuestion(): ParsedQuestion = ParsedQuestion(
+        chapter = chapter,
+        type = runCatching { QuestionType.valueOf(type) }.getOrElse { QuestionType.SINGLE },
+        subtype = subtype,
+        stem = stem,
+        sharedStem = sharedStem,
+        sharedOptions = sharedOptions.toMutableList(),
+        options = options.toMutableList(),
+        answer = answer,
+        analysis = analysis
+    )
 }
