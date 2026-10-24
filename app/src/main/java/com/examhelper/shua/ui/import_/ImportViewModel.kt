@@ -38,7 +38,9 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
         val pendingUri: Uri? = null,
         val error: String? = null,
         val providersReady: Boolean = false,
-        val concurrency: Int = 4
+        val concurrency: Int = 4,
+        /** 分析过程日志（最新在下） */
+        val log: List<String> = emptyList()
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -62,6 +64,11 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                 concurrency = concurrency,
                 providersReady = providers.any { it.enabled }
             )
+            // 自动恢复进行中的任务（切走/重开后回来自动续上）
+            jobDao.observeAll().first()
+                .filter { it.stage == "INGEST" || it.stage == "PARSE" }
+                .maxByOrNull { it.createdAt }
+                ?.let { resumeJob(it.id) }
         }
     }
 
@@ -141,13 +148,21 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun observeJob(jobId: String) {
         viewModelScope.launch {
+            var lastMessage: String? = null
             jobDao.observe(jobId).collect { job ->
                 if (job == null) return@collect
                 val needRefresh = job.parsedCount != _state.value.preview.size || job.stage == "DONE"
                 val preview = if (needRefresh) readPreview(job) else _state.value.preview
+                val newLog = if (job.message != null && job.message != lastMessage) {
+                    lastMessage = job.message
+                    val ts = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
+                        .format(java.util.Date(job.updatedAt))
+                    _state.value.log + "$ts  ${job.message}"
+                } else _state.value.log
                 _state.value = _state.value.copy(
                     job = job,
                     preview = preview,
+                    log = newLog,
                     stage = when {
                         job.stage == "DONE" -> Stage.PREVIEW
                         job.stage == "INGEST" || job.stage == "PARSE" -> Stage.RUNNING

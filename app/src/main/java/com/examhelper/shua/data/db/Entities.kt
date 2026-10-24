@@ -60,6 +60,8 @@ data class Question(
     val sharedStem: String? = null,
     /** B 型共用选项组 JSON（组内每题冗余存储），格式同 optionsJson */
     val sharedOptionsJson: String? = null,
+    /** 原文页码（PDF 导入记录，章节划分辅助） */
+    val sourcePage: Int? = null,
     /** JSON: [{"key":"A","text":"..."}, ...] */
     val optionsJson: String? = null,
     /** 单选"B" 多选"ABD" 判断"对"/"错" 其他为参考答案文本 */

@@ -191,6 +191,50 @@ fun StudyScreen(
                 }
             }
         }
+
+        // 答题卡（顺序类模式快速跳题）
+        if (showSheet && state.mode != StudyMode.RANDOM) {
+            ModalBottomSheet(onDismissRequest = { showSheet = false }) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val session = state.session
+                    Text(
+                        "答题卡（${session?.doneCount ?: 0}/${session?.total ?: 0} 已完成）",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(6),
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)
+                    ) {
+                        val total = session?.total ?: 0
+                        items((0 until total).toList()) { i ->
+                            val isCurrent = i + 1 == session?.indexInQueue
+                            val isDone = i < (session?.doneCount ?: 0)
+                            Surface(
+                                color = when {
+                                    isCurrent -> MaterialTheme.colorScheme.primary
+                                    isDone -> MaterialTheme.colorScheme.primaryContainer
+                                    else -> MaterialTheme.colorScheme.surfaceVariant
+                                },
+                                shape = MaterialTheme.shapes.small,
+                                modifier = Modifier.padding(4.dp).size(40.dp),
+                                onClick = {
+                                    vm.jumpTo(i + 1)
+                                    showSheet = false
+                                }
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(
+                                        "${i + 1}",
+                                        color = if (isCurrent) androidx.compose.ui.graphics.Color.White
+                                        else MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

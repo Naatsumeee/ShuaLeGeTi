@@ -31,7 +31,9 @@ class SettingsViewModel(
         val speedSeconds: Int = 3,
         val sanShengLiuBu: Boolean = false,
         val parseConcurrency: Int = 4,
-        val fontScale: Float = 1.0f
+        val fontScale: Float = 1.0f,
+        val customParsePrompt: String = "",
+        val customAnswerPrompt: String = ""
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -42,7 +44,8 @@ class SettingsViewModel(
             settingsStore.settings.collect {
                 _ui.value = UiState(
                     it.ocrEngine, it.speedModeSeconds, it.sanShengLiuBu,
-                    it.parseConcurrency, it.fontScale
+                    it.parseConcurrency, it.fontScale,
+                    it.customParsePrompt, it.customAnswerPrompt
                 )
             }
         }
@@ -53,6 +56,8 @@ class SettingsViewModel(
     fun setSanShengLiuBu(v: Boolean) = viewModelScope.launch { settingsStore.setSanShengLiuBu(v) }
     fun setParseConcurrency(v: Int) = viewModelScope.launch { settingsStore.setParseConcurrency(v) }
     fun setFontScale(v: Float) = viewModelScope.launch { settingsStore.setFontScale(v) }
+    fun setCustomParsePrompt(v: String) = viewModelScope.launch { settingsStore.setCustomParsePrompt(v) }
+    fun setCustomAnswerPrompt(v: String) = viewModelScope.launch { settingsStore.setCustomAnswerPrompt(v) }
 
     fun saveProvider(provider: LlmProvider) = viewModelScope.launch {
         if (provider.id == 0L) {

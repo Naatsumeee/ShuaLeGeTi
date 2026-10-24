@@ -45,7 +45,8 @@ class BankRepository(
         sharedOptionsJson = sharedOptions.takeIf { it.isNotEmpty() }?.let(JsonCodec::encodeOptions),
         optionsJson = options.takeIf { it.isNotEmpty() }?.let(JsonCodec::encodeOptions),
         answer = answer,
-        analysis = analysis
+        analysis = analysis,
+        sourcePage = sourcePage
     )
 
     /** 由解析结果创建题库 */
@@ -93,6 +94,7 @@ class BankRepository(
                     options = JsonCodec.decodeOptions(q.optionsJson),
                     answer = q.answer,
                     analysis = q.analysis,
+                    sourcePage = q.sourcePage,
                     aiGenerated = q.aiGenerated,
                     confidence = q.confidence,
                     agreement = q.agreement
@@ -115,6 +117,7 @@ class BankRepository(
         sharedOptions = sharedOptions.toMutableList(),
         options = options.toMutableList(),
         answer = answer,
-        analysis = analysis
+        analysis = analysis,
+        sourcePage = sourcePage
     )
 }

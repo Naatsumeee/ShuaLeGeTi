@@ -23,6 +23,9 @@ data class AppSettings(
     val sanShengLiuBu: Boolean = false, // 三省六部模式开关
     val parseConcurrency: Int = 4,      // AI 解析分块并发数
     val fontScale: Float = 1.0f,        // 全局字体缩放
+    /** 自定义系统提示词（空 = 默认） */
+    val customParsePrompt: String = "",
+    val customAnswerPrompt: String = "",
     val onboarded: Boolean = false
 )
 
@@ -33,6 +36,8 @@ class SettingsStore(private val context: Context) {
         val SAN_SHENG = booleanPreferencesKey("san_sheng_liu_bu")
         val PARSE_CONCURRENCY = intPreferencesKey("parse_concurrency")
         val FONT_SCALE = androidx.datastore.preferences.core.floatPreferencesKey("font_scale")
+        val CUSTOM_PARSE_PROMPT = stringPreferencesKey("custom_parse_prompt")
+        val CUSTOM_ANSWER_PROMPT = stringPreferencesKey("custom_answer_prompt")
         val ONBOARDED = booleanPreferencesKey("onboarded")
     }
 
@@ -43,6 +48,8 @@ class SettingsStore(private val context: Context) {
             sanShengLiuBu = p[Keys.SAN_SHENG] ?: false,
             parseConcurrency = (p[Keys.PARSE_CONCURRENCY] ?: 4).coerceIn(1, 8),
             fontScale = (p[Keys.FONT_SCALE] ?: 1.0f).coerceIn(0.8f, 1.5f),
+            customParsePrompt = p[Keys.CUSTOM_PARSE_PROMPT] ?: "",
+            customAnswerPrompt = p[Keys.CUSTOM_ANSWER_PROMPT] ?: "",
             onboarded = p[Keys.ONBOARDED] ?: false
         )
     }
@@ -52,4 +59,6 @@ class SettingsStore(private val context: Context) {
     suspend fun setSanShengLiuBu(v: Boolean) = context.dataStore.edit { it[Keys.SAN_SHENG] = v }
     suspend fun setParseConcurrency(v: Int) = context.dataStore.edit { it[Keys.PARSE_CONCURRENCY] = v.coerceIn(1, 8) }
     suspend fun setFontScale(v: Float) = context.dataStore.edit { it[Keys.FONT_SCALE] = v.coerceIn(0.8f, 1.5f) }
+    suspend fun setCustomParsePrompt(v: String) = context.dataStore.edit { it[Keys.CUSTOM_PARSE_PROMPT] = v.take(8000) }
+    suspend fun setCustomAnswerPrompt(v: String) = context.dataStore.edit { it[Keys.CUSTOM_ANSWER_PROMPT] = v.take(8000) }
 }

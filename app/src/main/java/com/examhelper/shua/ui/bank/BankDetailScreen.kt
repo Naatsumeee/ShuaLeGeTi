@@ -42,7 +42,8 @@ fun BankDetailScreen(
     bankId: Long,
     onBack: () -> Unit,
     onStartStudy: (StudyMode) -> Unit,
-    onGenerate: () -> Unit
+    onGenerate: () -> Unit,
+    onEdit: () -> Unit
 ) {
     val vm: BankDetailViewModel = viewModel()
     var bank by remember { mutableStateOf<com.examhelper.shua.data.db.QuestionBank?>(null) }
@@ -121,6 +122,17 @@ fun BankDetailScreen(
                     }
                 } else {
                     ModeButton("AI 重新生成答案", "对全部题目重新生成答案与解析") { onGenerate() }
+                }
+
+                Card(onClick = onEdit, modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("编辑题目 / 章节划分", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "按页码或题号范围批量分章，逐题修改题干、选项、答案",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
                 }
 
                 Spacer(Modifier.padding(8.dp))

@@ -22,7 +22,9 @@ data class ParsedQuestion(
     var sharedOptions: MutableList<QuestionOption> = mutableListOf(),
     val options: MutableList<QuestionOption> = mutableListOf(),
     var answer: String? = null,
-    var analysis: String? = null
+    var analysis: String? = null,
+    /** 原文页码（PDF 导入时记录，章节划分辅助） */
+    var sourcePage: Int? = null
 )
 
 /** 标准题库文件格式（导出/导入/分享用） */
@@ -46,6 +48,7 @@ data class ShuaQuestionJson(
     val options: List<QuestionOption> = emptyList(),
     val answer: String? = null,
     val analysis: String? = null,
+    val sourcePage: Int? = null,
     val aiGenerated: Boolean = false,
     val confidence: Int? = null,
     val agreement: String? = null
@@ -64,7 +67,8 @@ data class ParsedLine(
     val sharedOptions: List<QuestionOption> = emptyList(),
     val options: List<QuestionOption> = emptyList(),
     val answer: String? = null,
-    val analysis: String? = null
+    val analysis: String? = null,
+    val page: Int? = null
 )
 
 /** 三省六部各部分歧展示模型 */
@@ -118,5 +122,6 @@ fun ParsedLine.toParsedQuestion(): ParsedQuestion = ParsedQuestion(
     sharedOptions = sharedOptions.toMutableList(),
     options = options.toMutableList(),
     answer = answer,
-    analysis = analysis
+    analysis = analysis,
+    sourcePage = page
 )

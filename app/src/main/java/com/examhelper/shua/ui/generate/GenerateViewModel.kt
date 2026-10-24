@@ -84,49 +84,60 @@ class GenerateViewModel(
             }
             val primary = providers.firstOrNull { it.isPrimary } ?: providers.first()
             val others = if (s.sanSheng) providers.filter { it.id != primary.id } else emptyList()
-            val generator = AnswerGenerator(container.llmClient)
+            val customPrompt = settings.settings.first().customAnswerPrompt
+            val generator = AnswerGenerator(
+                container.llmClient,
+                customPrompt.ifBlank { com.examhelper.shua.data.llm.Prompts.ANSWER_DEFAULT }
+            )
 
-            val targets = s.items.filter {
-                forceAll || it.question.answer.isNullOrBlank()
-            }
+            val targets = s.items.filter { forceAll || it.question.answer.isNullOrBlank() }
             if (targets.isEmpty()) {
                 _state.value = s.copy(finished = true)
                 return@launch
             }
 
             _state.value = _state.value.copy(running = true, error = null, doneCount = 0, okCount = 0, failCount = 0)
-            val semaphore = Semaphore(2)
-            targets.forEach { item ->
+            val semaphore = Semaphore(2) // 并发批次数，每批 8 题
+            val batches = targets.chunked(AnswerGenerator.BATCH_SIZE)
+
+            batches.forEach { batch ->
                 semaphore.withPermit {
                     if (!_state.value.running) return@withPermit
-                    updateItem(item.question.id) { it.status = QStatus.RUNNING }
-                    val verdict: AggregatedVerdict? = withTimeoutOrNull(180_000) {
-                        runCatching { generator.aggregate(item.question, primary, others) }.getOrNull()
+                    batch.forEach { updateItem(it.question.id) { it.status = QStatus.RUNNING } }
+                    val verdicts = withTimeoutOrNull(300_000) {
+                        runCatching { generator.aggregateBatch(batch.map { it.question }, primary, others) }.getOrNull()
                     }
-                    if (verdict != null && verdict.answer != null) {
-                        val updated = item.question.copy(
-                            answer = verdict.answer,
-                            analysis = verdict.analysis ?: item.question.analysis,
-                            aiGenerated = true,
-                            confidence = verdict.confidence,
-                            agreement = verdict.agreement,
-                            dissentJson = verdict.dissents.takeIf { it.isNotEmpty() }
-                                ?.let(JsonCodec::encodeDissent)
-                        )
-                        bankRepo.updateQuestion(updated)
-                        updateItem(item.question.id) {
-                            it.status = QStatus.OK
-                            it.message = "置信度 ${verdict.confidence}" +
-                                (verdict.agreement?.let { " · $it" } ?: "")
-                            it.question = updated
+                    if (verdicts != null) {
+                        batch.forEachIndexed { i, item ->
+                            val v = verdicts.getOrNull(i)
+                            if (v != null && v.answer != null) {
+                                val updated = item.question.copy(
+                                    answer = v.answer,
+                                    analysis = v.analysis ?: item.question.analysis,
+                                    aiGenerated = true,
+                                    confidence = v.confidence,
+                                    agreement = v.agreement,
+                                    dissentJson = v.dissents.takeIf { it.isNotEmpty() }
+                                        ?.let(JsonCodec::encodeDissent)
+                                )
+                                bankRepo.updateQuestion(updated)
+                                updateItem(item.question.id) {
+                                    it.status = QStatus.OK
+                                    it.message = "置信度 ${v.confidence}" +
+                                        (v.agreement?.let { a -> " · $a" } ?: "")
+                                    it.question = updated
+                                }
+                                bumpCount(ok = true)
+                            } else {
+                                updateItem(item.question.id) { it.status = QStatus.FAILED; it.message = "生成失败（可重试）" }
+                                bumpCount(ok = false)
+                            }
                         }
-                        bumpCount(ok = true)
                     } else {
-                        updateItem(item.question.id) {
-                            it.status = QStatus.FAILED
-                            it.message = "生成失败（可重试）"
+                        batch.forEach {
+                            updateItem(it.question.id) { it.status = QStatus.FAILED; it.message = "本批生成失败（可重试）" }
+                            bumpCount(ok = false)
                         }
-                        bumpCount(ok = false)
                     }
                 }
             }

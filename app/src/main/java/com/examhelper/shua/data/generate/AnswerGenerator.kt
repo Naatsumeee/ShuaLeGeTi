@@ -4,6 +4,7 @@ import com.examhelper.shua.data.db.LlmProvider
 import com.examhelper.shua.data.db.Question
 import com.examhelper.shua.data.db.QuestionType
 import com.examhelper.shua.data.llm.LlmClient
+import com.examhelper.shua.data.llm.Prompts
 import com.examhelper.shua.data.parse.LlmQuestionParser
 import com.examhelper.shua.data.model.DissentEntry
 import kotlinx.coroutines.async
@@ -30,128 +31,124 @@ data class AggregatedVerdict(
 )
 
 /**
- * AI 答案生成器。
- * 单模型：置信度 = 模型自评。
- * 三省六部（多模型）：以主部为基准，置信度 = 0.6×主部自评 + 0.4×各部一致率；分歧记录各部意见。
+ * AI 答案生成器（批量模式）。
+ * 单模型：按批请求（每批多题），共享稳定系统提示词 → 提升前缀缓存命中、大幅减少请求数与费用。
+ * 三省六部：每个部按批作答，再逐题聚合（主部高权重 + 一致率 + 分歧记录）。
  */
 class AnswerGenerator(
-    private val client: LlmClient = LlmClient()
+    private val client: LlmClient = LlmClient(),
+    private val systemPrompt: String = Prompts.ANSWER_DEFAULT
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     @Serializable
     data class AnswerDto(
+        val i: Int = 0,
         val answer: String? = null,
         val analysis: String? = null,
         val confidence: Int? = null
     )
 
-    suspend fun askOne(provider: LlmProvider, question: Question): SingleVerdict {
+    @Serializable
+    data class BatchResponseDto(val results: List<AnswerDto> = emptyList())
+
+    /** 一次请求批量作答；返回按输入顺序的裁决（失败题为 null） */
+    suspend fun askBatch(provider: LlmProvider, questions: List<Question>): List<SingleVerdict?> {
+        if (questions.isEmpty()) return emptyList()
         val content = client.chat(
             provider = provider,
-            systemPrompt = SYSTEM_PROMPT,
-            userPrompt = buildQuestionPrompt(question),
+            systemPrompt = systemPrompt,
+            userPrompt = buildBatchPrompt(questions),
             jsonMode = true,
             temperature = 0.1
         )
         val cleaned = LlmQuestionParser.stripCodeFence(content)
-        val start = cleaned.indexOf('{')
-        val end = cleaned.lastIndexOf('}')
-        if (start >= 0 && end > start) {
-            val dto = runCatching { json.decodeFromString<AnswerDto>(cleaned.substring(start, end + 1)) }
-                .getOrNull()
-            if (dto != null) {
-                return SingleVerdict(
-                    providerName = provider.name,
-                    answer = dto.answer?.trim()?.takeIf { it.isNotBlank() },
-                    analysis = dto.analysis?.trim()?.takeIf { it.isNotBlank() },
-                    selfConfidence = dto.confidence?.coerceIn(0, 100)
-                )
+        val start = cleaned.indexOfFirst { it == '{' || it == '[' }
+        val end = maxOf(cleaned.lastIndexOf('}'), cleaned.lastIndexOf(']'))
+        if (start < 0 || end <= start) return questions.map { null }
+        val dto = runCatching { json.decodeFromString<BatchResponseDto>(cleaned.substring(start, end + 1)) }
+            .getOrElse {
+                runCatching { json.decodeFromString<List<AnswerDto>>(cleaned.substring(start, end + 1)) }
+                    .map { BatchResponseDto(it) }
+                    .getOrElse { return questions.map { null } }
             }
-        }
-        // JSON 解析失败：把全文当答案文本兜底
-        return SingleVerdict(provider.name, cleaned.take(80), null, null)
-    }
-
-    /**
-     * 三省六部聚合：并行询问 primary + others。
-     */
-    suspend fun aggregate(
-        question: Question,
-        primary: LlmProvider,
-        others: List<LlmProvider>
-    ): AggregatedVerdict {
-        val primaryVerdict = askOne(primary, question)
-        if (others.isEmpty()) {
-            return AggregatedVerdict(
-                answer = primaryVerdict.answer,
-                analysis = primaryVerdict.analysis,
-                confidence = primaryVerdict.selfConfidence,
-                agreement = null,
-                dissents = emptyList()
+        val byIndex = dto.results.associateBy { it.i }
+        return questions.indices.map { idx ->
+            val d = byIndex[idx + 1] ?: return@map null
+            SingleVerdict(
+                providerName = provider.name,
+                answer = d.answer?.trim()?.takeIf { it.isNotBlank() },
+                analysis = d.analysis?.trim()?.takeIf { it.isNotBlank() },
+                selfConfidence = d.confidence?.coerceIn(0, 100)
             )
         }
-        val otherVerdicts = coroutineScope {
-            others.map { p ->
-                async {
-                    runCatching { askOne(p, question) }.getOrNull()
-                }
-            }.map { it.await() }
-        }
+    }
 
-        val validOthers = otherVerdicts.filterNotNull()
-        val agreeCount = validOthers.count {
-            answersMatch(primaryVerdict.answer, it.answer)
-        }
-        val totalParts = validOthers.size + 1
-        val agreeRatio = if (validOthers.isEmpty()) 1.0 else agreeCount.toDouble() / validOthers.size
-        val confidence = (
-            (primaryVerdict.selfConfidence ?: 75) * 0.6 + agreeRatio * 100.0 * 0.4
-            ).roundToInt().coerceIn(0, 100)
-
-        val dissents = validOthers
-            .filter { !answersMatch(primaryVerdict.answer, it.answer) }
-            .map {
-                DissentEntry(
-                    provider = it.providerName,
-                    answer = it.answer ?: "未给出",
-                    analysis = it.analysis,
-                    selfConfidence = it.selfConfidence
+    /** 三省六部批量聚合：主部 + 各部各自批量作答，逐题聚合 */
+    suspend fun aggregateBatch(
+        questions: List<Question>,
+        primary: LlmProvider,
+        others: List<LlmProvider>
+    ): List<AggregatedVerdict> {
+        val primaryVerdicts = askBatch(primary, questions)
+        if (others.isEmpty()) {
+            return questions.indices.map { i ->
+                AggregatedVerdict(
+                    answer = primaryVerdicts[i]?.answer,
+                    analysis = primaryVerdicts[i]?.analysis,
+                    confidence = primaryVerdicts[i]?.selfConfidence,
+                    agreement = null,
+                    dissents = emptyList()
                 )
             }
-
-        return AggregatedVerdict(
-            answer = primaryVerdict.answer,
-            analysis = primaryVerdict.analysis,
-            confidence = confidence,
-            agreement = "${agreeCount + 1}/$totalParts 部一致",
-            dissents = dissents
-        )
+        }
+        val otherVerdicts: List<List<SingleVerdict?>> = kotlinx.coroutines.coroutineScope {
+            others.map { p ->
+                async { askBatch(p, questions) }
+            }.map { it.await() }
+        }
+        return questions.indices.map { i ->
+            val pv = primaryVerdicts[i]
+            val ovs = otherVerdicts.mapNotNull { it.getOrNull(i) }
+            val agreeCount = ovs.count { answersMatch(pv?.answer, it.answer) }
+            val totalParts = ovs.size + 1
+            val agreeRatio = if (ovs.isEmpty()) 1.0 else agreeCount.toDouble() / ovs.size
+            val confidence = (
+                (pv?.selfConfidence ?: 75) * 0.6 + agreeRatio * 100.0 * 0.4
+                ).roundToInt().coerceIn(0, 100)
+            AggregatedVerdict(
+                answer = pv?.answer,
+                analysis = pv?.analysis,
+                confidence = confidence,
+                agreement = "${agreeCount + 1}/$totalParts 部一致",
+                dissents = ovs.filter { !answersMatch(pv?.answer, it.answer) }.map {
+                    DissentEntry(it.providerName, it.answer ?: "未给出", it.analysis, it.selfConfidence)
+                }
+            )
+        }
     }
 
     companion object {
-        val SYSTEM_PROMPT = """
-            你是严谨的学科答题专家。根据题目给出答案与解析。只输出严格 JSON，不要解释和代码块：
-            {"answer":"...","analysis":"...","confidence":85}
+        const val BATCH_SIZE = 8
 
-            规则：
-            1. 选择题 answer 用大写字母，多选用字母连写如 "ABD"；判断题用 "对" 或 "错"；填空/简答给参考答案文本
-            2. confidence 是你对该答案的把握程度 0-100，诚实评估；不确定就给低分
-            3. analysis 简明扼要说明理由（考点、排除法、关键依据），100 字以内
-            4. 无法作答时 confidence 给 30 以下并在 analysis 说明原因
-        """.trimIndent()
-
-        fun buildQuestionPrompt(q: Question): String = buildString {
-            appendLine("【题型】${typeCn(q.type)}")
-            if (!q.chapter.isNullOrBlank()) appendLine("【章节】${q.chapter}")
-            appendLine("【题干】${q.stem}")
-            if (!q.optionsJson.isNullOrBlank()) {
-                appendLine("【选项】")
+        fun buildBatchPrompt(questions: List<Question>): String = buildString {
+            appendLine("共 ${questions.size} 题，逐题作答：")
+            questions.forEachIndexed { idx, q ->
+                appendLine("--- 第 ${idx + 1} 题 ---")
+                appendLine("【题型】${typeCn(q.type)}")
+                if (!q.chapter.isNullOrBlank()) appendLine("【章节】${q.chapter}")
+                q.sharedStem?.let { appendLine("【共用题干】$it") }
+                q.sharedOptionsJson?.let {
+                    val opts = com.examhelper.shua.data.model.JsonCodec.decodeOptions(it)
+                    if (opts.isNotEmpty()) {
+                        appendLine("【共用选项】" + opts.joinToString("；") { "${it.key}.${it.text}" })
+                    }
+                }
+                appendLine("【题干】${q.stem}")
                 com.examhelper.shua.data.model.JsonCodec.decodeOptions(q.optionsJson).forEach {
                     appendLine("${it.key}. ${it.text}")
                 }
             }
-            appendLine("请作答。")
         }
 
         fun typeCn(t: QuestionType): String = when (t) {
@@ -162,7 +159,6 @@ class AnswerGenerator(
             QuestionType.SHORT_ANSWER -> "简答题"
         }
 
-        /** 比较两个答案是否一致（忽略大小写、顺序、对错变体） */
         fun answersMatch(a: String?, b: String?): Boolean {
             if (a == null || b == null) return false
             val na = normalize(a)

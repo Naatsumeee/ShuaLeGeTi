@@ -34,6 +34,7 @@ import com.examhelper.shua.data.db.StudyMode
 import com.examhelper.shua.ui.bank.BankDetailScreen
 import com.examhelper.shua.ui.bank.BankListScreen
 import com.examhelper.shua.ui.bank.ImportTextScreen
+import com.examhelper.shua.ui.editor.EditorScreen
 import com.examhelper.shua.ui.exam.ExamReportScreen
 import com.examhelper.shua.ui.exam.ExamScreen
 import com.examhelper.shua.ui.generate.GenerateScreen
@@ -59,6 +60,7 @@ object Routes {
     const val STUDY = "study/{bankId}/{mode}?filter={filter}"
     const val EXAM = "exam/{bankId}?filter={filter}&count={count}"
     const val EXAM_REPORT = "exam_report/{runId}"
+    const val EDITOR = "editor/{bankId}"
 
     fun importFile(jobId: String? = null) = "import_file" + (jobId?.let { "?jobId=$it" } ?: "")
     fun bankDetail(bankId: Long) = "bank/$bankId"
@@ -153,7 +155,8 @@ fun AppRoot() {
                         bankId = bankId,
                         onBack = { navController.popBackStack() },
                         onStartStudy = { mode -> navController.navigate(Routes.studySetup(bankId, mode)) },
-                        onGenerate = { navController.navigate("generate/$bankId") }
+                        onGenerate = { navController.navigate("generate/$bankId") },
+                        onEdit = { navController.navigate("editor/$bankId") }
                     )
                 }
                 composable(Routes.STUDY_SETUP) { entry ->
@@ -200,6 +203,10 @@ fun AppRoot() {
                         runId = runId,
                         onBack = { navController.popBackStack() }
                     )
+                }
+                composable(Routes.EDITOR) { entry ->
+                    val bankId = entry.arguments?.getString("bankId")?.toLongOrNull() ?: return@composable
+                    EditorScreen(bankId = bankId, onBack = { navController.popBackStack() })
                 }
             }
         }

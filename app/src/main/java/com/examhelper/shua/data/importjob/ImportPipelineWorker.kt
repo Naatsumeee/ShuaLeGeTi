@@ -24,6 +24,7 @@ import com.examhelper.shua.data.parse.LlmQuestionParser
 import com.examhelper.shua.data.parse.TextQuestionParser
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.encodeToString
@@ -134,7 +135,7 @@ class ImportPipelineWorker(
                                 chapter = q.chapter, type = q.type.name, subtype = q.subtype,
                                 stem = q.stem, sharedStem = q.sharedStem,
                                 sharedOptions = q.sharedOptions, options = q.options,
-                                answer = q.answer, analysis = q.analysis
+                                answer = q.answer, analysis = q.analysis, page = q.sourcePage
                             )
                         )
                     }.joinToString("\n")
@@ -174,7 +175,11 @@ class ImportPipelineWorker(
             }
             runCatching { setForeground(foregroundInfo("AI 解析中 ${doneChunks.size}/${chunks.size}", doneChunks.size, chunks.size)) }
 
-            val parser = LlmQuestionParser(container.llmClient)
+            val customParsePrompt = container.settings.settings.first().customParsePrompt
+            val parser = LlmQuestionParser(
+                container.llmClient,
+                customParsePrompt.ifBlank { com.examhelper.shua.data.llm.Prompts.PARSE_DEFAULT }
+            )
             var okCount = doneChunks.size
             var failCount = 0
             var parsedSoFar = JsonCodec.readParsedLines(parsed).size
@@ -199,7 +204,8 @@ class ImportPipelineWorker(
                                 chapter = dto.chapter, type = LlmQuestionParser.mapType(dto.type).name,
                                 subtype = dto.subtype, stem = dto.stem,
                                 sharedStem = dto.sharedStem, sharedOptions = dto.sharedOptions,
-                                options = dto.options, answer = dto.answer, analysis = dto.analysis
+                                options = dto.options, answer = dto.answer, analysis = dto.analysis,
+                                page = dto.page
                             )
                         )
                     }

@@ -27,6 +27,7 @@ object TextQuestionParser {
     private val sharedStemHintRegex = Regex("""共用题干|共同题干|共用材料|以下材料""")
     private val sharedOptionsHintRegex = Regex("""共用备选答案|共用选项|备选答案""")
     private val caseStartRegex = Regex("""^(患者|某男|某女|某患|男[，,].{0,3}\d|女[，,].{0,3}\d|病历|病例|一[名位].{0,6}(岁|男|女))""")
+    private val pageMarkerRegex = Regex("""^\[\[PG:(\d+)\]\]$""")
 
     private val trueWords = setOf("对", "正确", "√", "T", "是", "Y")
     private val falseWords = setOf("错", "错误", "×", "X", "F", "否", "N")
@@ -39,6 +40,7 @@ object TextQuestionParser {
 
         var sharedStemBuf = StringBuilder()
         var sharedOptionsBuf = mutableListOf<QuestionOption>()
+        var currentPage: Int? = null
 
         fun flush() {
             current?.let { q ->
@@ -51,6 +53,13 @@ object TextQuestionParser {
         for (rawLine in text.lines()) {
             val line = rawLine.trim()
             if (line.isEmpty()) continue
+
+            // 页码标记
+            val pageMarker = pageMarkerRegex.find(line)
+            if (pageMarker != null) {
+                currentPage = pageMarker.groupValues[1].toIntOrNull()
+                continue
+            }
 
             // 章节标题
             if (sectionRegex.matches(line)) {
@@ -81,6 +90,7 @@ object TextQuestionParser {
                 flush()
                 current = ParsedQuestion(chapter = currentSection).apply {
                     stem = qm.groupValues[2].trim()
+                    sourcePage = currentPage
                     if (sharedStemBuf.isNotBlank()) sharedStem = sharedStemBuf.toString().trim()
                     if (sharedOptionsBuf.isNotEmpty()) sharedOptions.addAll(sharedOptionsBuf)
                 }

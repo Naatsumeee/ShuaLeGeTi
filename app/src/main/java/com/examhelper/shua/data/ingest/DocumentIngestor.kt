@@ -115,6 +115,7 @@ class DocumentIngestor(
                 stripper.startPage = i
                 stripper.endPage = i
                 val pageText = runCatching { stripper.getText(doc) }.getOrDefault("").trim()
+                result.appendLine("[[PG:$i]]")
                 if (pageText.length >= 20) {
                     result.appendLine(pageText)
                 } else {

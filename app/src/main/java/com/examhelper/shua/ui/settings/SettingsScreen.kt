@@ -22,6 +22,7 @@ import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
@@ -31,6 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -177,6 +179,51 @@ fun SettingsScreen() {
                         onValueChange = { vm.setFontScale((it * 20).toInt() / 20f) },
                         valueRange = 0.8f..1.5f
                     )
+                }
+            }
+
+            // ---- 自定义系统提示词 ----
+            SectionTitle("自定义系统提示词", "留空使用默认。修改后对之后的解析/生成生效（保持稳定利于缓存降费）")
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("题库解析提示词", style = MaterialTheme.typography.titleSmall)
+                    var parsePrompt by remember { mutableStateOf(ui.customParsePrompt) }
+                    LaunchedEffect(ui.customParsePrompt) { if (ui.customParsePrompt != parsePrompt) parsePrompt = ui.customParsePrompt }
+                    OutlinedTextField(
+                        value = parsePrompt,
+                        onValueChange = { parsePrompt = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 3, maxLines = 8,
+                        placeholder = { Text("默认：医学题库结构化引擎（含 A1/A2/A3/B 与页码规则）", maxLines = 1) }
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { vm.setCustomParsePrompt(parsePrompt) }) { Text("保存") }
+                        OutlinedButton(onClick = {
+                            parsePrompt = ""
+                            vm.setCustomParsePrompt("")
+                        }) { Text("恢复默认") }
+                    }
+                }
+            }
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("答题生成提示词", style = MaterialTheme.typography.titleSmall)
+                    var answerPrompt by remember { mutableStateOf(ui.customAnswerPrompt) }
+                    LaunchedEffect(ui.customAnswerPrompt) { if (ui.customAnswerPrompt != answerPrompt) answerPrompt = ui.customAnswerPrompt }
+                    OutlinedTextField(
+                        value = answerPrompt,
+                        onValueChange = { answerPrompt = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 3, maxLines = 8,
+                        placeholder = { Text("默认：批量答题引擎（8 题一批，直接输出 JSON）", maxLines = 1) }
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { vm.setCustomAnswerPrompt(answerPrompt) }) { Text("保存") }
+                        OutlinedButton(onClick = {
+                            answerPrompt = ""
+                            vm.setCustomAnswerPrompt("")
+                        }) { Text("恢复默认") }
+                    }
                 }
             }
 
