@@ -15,12 +15,24 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 1
-        versionName = "0.1.0"
+        versionName = "1.0.0"
+    }
+
+    // ABI 分包：控制单包体积（模型+双OCR原生库较大）
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("armeabi-v7a", "arm64-v8a", "x86_64")
+            isUniversalApk = false
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            // 暂用 debug 签名便于分发，上架前换正式签名
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }

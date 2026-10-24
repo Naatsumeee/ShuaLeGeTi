@@ -5,12 +5,11 @@ set SDK=C:\Users\xutia\AppData\Local\Android\Sdk
 set EMU=%SDK%\emulator\emulator.exe
 set ADB=%SDK%\platform-tools\adb.exe
 set PING=%SystemRoot%\System32\ping.exe
-set FINDSTR=%SystemRoot%\System32\findstr.exe
 
 echo ============================================
 echo   ShuaGeLeTi - Start Android Emulator
 echo   Pixel 6 / API 35, first boot ~1 min
-echo   app-debug.apk (same folder) auto-installs
+echo   Auto-installs APK matching device ABI
 echo   Safe to re-run: skips boot if already on
 echo ============================================
 
@@ -20,7 +19,6 @@ if not exist "%EMU%" (
   exit /b 1
 )
 
-rem ---- check if emulator already booted ----
 set BOOT=
 for /f "delims=" %%i in ('"%ADB%" shell getprop sys.boot_completed 2^>nul') do set BOOT=%%i
 if "!BOOT!"=="1" (
@@ -43,7 +41,6 @@ if "!BOOT!"=="1" goto install
 set /a TRIES+=1
 if !TRIES! GEQ 90 (
   echo [TIMEOUT] Emulator did not finish booting in 180s.
-  echo If the emulator window shows an error, tell the agent.
   pause
   exit /b 1
 )
@@ -52,16 +49,21 @@ goto wait_boot
 
 :install
 echo Boot complete.
-if exist "%~dp0app-debug.apk" (
-  echo Installing APK...
-  "%ADB%" install -r "%~dp0app-debug.apk"
+rem pick APK by device ABI
+set ABI=
+for /f "delims=" %%i in ('"%ADB%" shell getprop ro.product.cpu.abi 2^>nul') do set ABI=%%i
+echo Device ABI: !ABI!
+set APK=%~dp0app-!ABI!-debug.apk
+if not exist "%APK%" set APK=%~dp0app-debug.apk
+if exist "%APK%" (
+  echo Installing %APK% ...
+  "%ADB%" install -r "%APK%"
 ) else (
-  echo [SKIP] app-debug.apk not found next to this script.
+  echo [SKIP] no APK found next to this script.
 )
 
 echo Launching app...
 "%ADB%" shell am start -n com.examhelper.shua/.MainActivity
 echo.
-echo Done! Use the app inside the emulator window.
-echo Close the emulator window to shut it down.
+echo Done! Close the emulator window to shut it down.
 pause

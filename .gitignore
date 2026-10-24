@@ -2,7 +2,7 @@
 QuestionBankExample/
 
 # 构建产物（模拟器启动脚本用）
-app-debug.apk
+app-debug*.apk
 
 # Android / Gradle
 .gradle/
