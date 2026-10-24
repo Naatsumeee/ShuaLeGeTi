@@ -23,6 +23,8 @@ import androidx.navigation.compose.rememberNavController
 import com.examhelper.shua.ui.bank.BankDetailScreen
 import com.examhelper.shua.ui.bank.BankListScreen
 import com.examhelper.shua.ui.bank.ImportTextScreen
+import com.examhelper.shua.ui.generate.GenerateScreen
+import com.examhelper.shua.ui.import_.ImportScreen
 import com.examhelper.shua.ui.settings.SettingsScreen
 import com.examhelper.shua.ui.stats.StatsScreen
 import com.examhelper.shua.ui.study.StudyScreen
@@ -34,6 +36,8 @@ object Routes {
     const val STATS = "stats"
     const val SETTINGS = "settings"
     const val IMPORT_TEXT = "import_text"
+    const val IMPORT_FILE = "import_file"
+    const val GENERATE = "generate/{bankId}"
     const val BANK_DETAIL = "bank/{bankId}"
     const val STUDY = "study/{bankId}/{mode}"
 
@@ -89,7 +93,8 @@ fun AppRoot() {
             composable(Routes.BANKS) {
                 BankListScreen(
                     onOpenBank = { navController.navigate(Routes.bankDetail(it)) },
-                    onImportText = { navController.navigate(Routes.IMPORT_TEXT) }
+                    onImportText = { navController.navigate(Routes.IMPORT_TEXT) },
+                    onImportFile = { navController.navigate(Routes.IMPORT_FILE) }
                 )
             }
             composable(Routes.WRONGBOOK) {
@@ -100,12 +105,20 @@ fun AppRoot() {
             composable(Routes.IMPORT_TEXT) {
                 ImportTextScreen(onDone = { navController.popBackStack() })
             }
+            composable(Routes.IMPORT_FILE) {
+                ImportScreen(onDone = { navController.popBackStack() })
+            }
+            composable(Routes.GENERATE) { entry ->
+                val bankId = entry.arguments?.getString("bankId")?.toLongOrNull() ?: return@composable
+                GenerateScreen(bankId = bankId, onBack = { navController.popBackStack() })
+            }
             composable(Routes.BANK_DETAIL) { entry ->
                 val bankId = entry.arguments?.getString("bankId")?.toLongOrNull() ?: return@composable
                 BankDetailScreen(
                     bankId = bankId,
                     onBack = { navController.popBackStack() },
-                    onStartStudy = { mode -> navController.navigate(Routes.study(bankId, mode.name)) }
+                    onStartStudy = { mode -> navController.navigate(Routes.study(bankId, mode.name)) },
+                    onGenerate = { navController.navigate("generate/$bankId") }
                 )
             }
             composable(Routes.STUDY) { entry ->

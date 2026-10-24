@@ -46,22 +46,36 @@ import java.util.Locale
 @Composable
 fun BankListScreen(
     onOpenBank: (Long) -> Unit,
-    onImportText: () -> Unit
+    onImportText: () -> Unit,
+    onImportFile: () -> Unit
 ) {
     val vm: BankListViewModel = viewModel()
     val banks by vm.banks.collectAsState()
     var deleting by remember { mutableStateOf<QuestionBank?>(null) }
+    var importMenuOpen by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
             TopAppBar(title = { Text("刷了个题") })
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = onImportText,
-                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-                text = { Text("导入题库") }
-            )
+            Box {
+                ExtendedFloatingActionButton(
+                    onClick = { importMenuOpen = true },
+                    icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                    text = { Text("导入题库") }
+                )
+                DropdownMenu(expanded = importMenuOpen, onDismissRequest = { importMenuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("文件 / 拍照 / 扫描 PDF（OCR）") },
+                        onClick = { importMenuOpen = false; onImportFile() }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("粘贴题目文本") },
+                        onClick = { importMenuOpen = false; onImportText() }
+                    )
+                }
+            }
         }
     ) { padding ->
         if (banks.isEmpty()) {

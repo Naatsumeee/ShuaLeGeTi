@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.serialization.encodeToString
 
 class BankListViewModel @JvmOverloads constructor(
     private val bankRepo: BankRepository = ShuaApp.instance.container.bankRepo
@@ -86,6 +87,23 @@ class BankDetailViewModel @JvmOverloads constructor(
         viewModelScope.launch {
             bankRepo.deleteBank(bankId)
             onDone()
+        }
+    }
+
+    var lastExport: String? = null
+        private set
+
+    /** 导出为标准题库 JSON 文件 */
+    fun exportTo(uri: android.net.Uri, bankId: Long, context: android.content.Context) {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                val file = bankRepo.exportBank(bankId) ?: error("题库不存在")
+                val text = com.examhelper.shua.data.model.JsonCodec.json.encodeToString(file)
+                context.contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(text.toByteArray(Charsets.UTF_8))
+                } ?: error("无法写入文件")
+            }.onSuccess { lastExport = "导出成功" }
+                .onFailure { lastExport = "导出失败：${it.message}" }
         }
     }
 }

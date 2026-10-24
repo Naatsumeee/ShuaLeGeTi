@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
@@ -29,6 +31,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.examhelper.shua.data.db.StudyMode
@@ -38,11 +41,18 @@ import com.examhelper.shua.data.db.StudyMode
 fun BankDetailScreen(
     bankId: Long,
     onBack: () -> Unit,
-    onStartStudy: (StudyMode) -> Unit
+    onStartStudy: (StudyMode) -> Unit,
+    onGenerate: () -> Unit
 ) {
     val vm: BankDetailViewModel = viewModel()
     var bank by remember { mutableStateOf<com.examhelper.shua.data.db.QuestionBank?>(null) }
     var noAnswer by remember { mutableStateOf(0) }
+    val context = LocalContext.current
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) vm.exportTo(uri, bankId, context)
+    }
 
     LaunchedEffect(bankId) {
         bank = vm.loadBank(bankId)
@@ -93,9 +103,31 @@ fun BankDetailScreen(
                 ModeButton("背题模式", "直接显示答案与解析，适合快速过题") { onStartStudy(StudyMode.RECITE) }
                 ModeButton("随机巩固", "乱序抽题不重复，自动记忆进度，可重置") { onStartStudy(StudyMode.RANDOM) }
 
+                if (noAnswer > 0) {
+                    Card(onClick = onGenerate, modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                "AI 生成答案（$noAnswer 题缺失）",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.tertiary
+                            )
+                            Text(
+                                "调用已配置大模型补全答案与解析，标注置信度；开启三省六部可多模型交叉验证",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                    }
+                } else {
+                    ModeButton("AI 重新生成答案", "对全部题目重新生成答案与解析") { onGenerate() }
+                }
+
                 Spacer(Modifier.padding(8.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedButton(onClick = onBack, modifier = Modifier.weight(1f)) { Text("返回") }
+                    OutlinedButton(
+                        onClick = { exportLauncher.launch("${bank?.name ?: "bank"}.json") },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("导出题库") }
                     Button(
                         onClick = { vm.deleteBank(bankId, onBack) },
                         modifier = Modifier.weight(1f),

@@ -33,10 +33,14 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -247,6 +251,36 @@ private fun QuestionBody(q: Question, state: StudyUiState, vm: StudyViewModel) {
                         )
                     }
                     q.analysis?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+
+                    // 三省六部分歧
+                    val dissents = JsonCodec.decodeDissent(q.dissentJson)
+                    if (dissents.isNotEmpty()) {
+                        var expanded by remember { mutableStateOf(false) }
+                        TextButton(onClick = { expanded = !expanded }) {
+                            Text(if (expanded) "收起各部分歧" else "查看各部分歧（${dissents.size} 部）")
+                        }
+                        if (expanded) {
+                            dissents.forEach { d ->
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    shape = MaterialTheme.shapes.small,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(Modifier.padding(8.dp)) {
+                                        Text(
+                                            "${d.provider}：${d.answer}" +
+                                                (d.selfConfidence?.let { "（自评 $it%）" } ?: ""),
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                        d.analysis?.let {
+                                            Text(it, style = MaterialTheme.typography.bodySmall)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -64,6 +64,22 @@ class LlmClient(
         jsonMode: Boolean = false,
         temperature: Double? = provider.temperature.toDouble()
     ): String = withContext(Dispatchers.IO) {
+        runCatching { chatOnce(provider, systemPrompt, userPrompt, jsonMode, temperature) }
+            .recoverCatching {
+                // 部分兼容端点不支持 response_format，去掉后重试一次
+                if (jsonMode && it is LlmException) chatOnce(provider, systemPrompt, userPrompt, false, temperature)
+                else throw it
+            }
+            .getOrThrow()
+    }
+
+    private fun chatOnce(
+        provider: LlmProvider,
+        systemPrompt: String,
+        userPrompt: String,
+        jsonMode: Boolean,
+        temperature: Double?
+    ): String {
         val body = ChatCompletionRequest(
             model = provider.model,
             messages = listOf(
@@ -81,7 +97,7 @@ class LlmClient(
             .post(json.encodeToString(body).toRequestBody(jsonMediaType))
             .build()
 
-        client.newCall(request).execute().use { resp ->
+        return client.newCall(request).execute().use { resp ->
             val text = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) {
                 throw LlmException("HTTP ${resp.code}: ${text.take(300)}")
