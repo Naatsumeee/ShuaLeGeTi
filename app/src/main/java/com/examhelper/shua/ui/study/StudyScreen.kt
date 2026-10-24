@@ -400,7 +400,7 @@ private fun OptionRow(
     onClick: () -> Unit
 ) {
     val container = when {
-        isAnswer -> MaterialTheme.colorScheme.primaryContainer
+        isAnswer -> MaterialTheme.colorScheme.tertiaryContainer
         isWrongPick -> MaterialTheme.colorScheme.errorContainer
         selected && !revealed -> MaterialTheme.colorScheme.secondaryContainer
         else -> MaterialTheme.colorScheme.surfaceVariant
@@ -410,7 +410,7 @@ private fun OptionRow(
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Surface(
                 shape = MaterialTheme.shapes.small,
-                color = if (isAnswer) MaterialTheme.colorScheme.primary
+                color = if (isAnswer) MaterialTheme.colorScheme.tertiary
                 else if (isWrongPick) MaterialTheme.colorScheme.error
                 else MaterialTheme.colorScheme.outlineVariant
             ) {
@@ -423,7 +423,7 @@ private fun OptionRow(
             }
             Spacer(Modifier.padding(6.dp))
             Text(text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-            if (isAnswer) Icon(Icons.Filled.Check, "正确", tint = MaterialTheme.colorScheme.primary)
+            if (isAnswer) Icon(Icons.Filled.Check, "正确", tint = MaterialTheme.colorScheme.tertiary)
             if (isWrongPick) Icon(Icons.Filled.Close, "错误", tint = MaterialTheme.colorScheme.error)
         }
     }
@@ -436,7 +436,7 @@ private fun BottomControls(state: StudyUiState, vm: StudyViewModel, onBack: () -
         if (state.answered && state.correct != null) {
             Text(
                 if (state.correct == true) "✓ 回答正确" else "✗ 回答错误",
-                color = if (state.correct == true) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                color = if (state.correct == true) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.titleMedium
             )
         }

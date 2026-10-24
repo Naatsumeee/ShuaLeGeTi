@@ -141,7 +141,7 @@ fun ExamReportScreen(
                             Icon(
                                 if (item.correct) Icons.Filled.Check else Icons.Filled.Close,
                                 contentDescription = null,
-                                tint = if (item.correct) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                                tint = if (item.correct) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error
                             )
                             Text(
                                 item.question.stem.take(50) + if (item.question.stem.length > 50) "…" else "",
@@ -151,7 +151,7 @@ fun ExamReportScreen(
                         Text(
                             "你的答案：${item.userAnswer.ifBlank { "未作答" }}  ·  正确答案：${item.question.answer ?: "无"}",
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (item.correct) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                            color = if (item.correct) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error
                         )
                         item.question.analysis?.let {
                             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
