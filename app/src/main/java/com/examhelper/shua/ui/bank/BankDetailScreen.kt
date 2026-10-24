@@ -15,6 +15,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Switch
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -49,10 +52,13 @@ fun BankDetailScreen(
     var bank by remember { mutableStateOf<com.examhelper.shua.data.db.QuestionBank?>(null) }
     var noAnswer by remember { mutableStateOf(0) }
     val context = LocalContext.current
+    var pendingIncludeAi by remember { mutableStateOf(true) }
+    var showExportDialog by remember { mutableStateOf(false) }
+    var exportStats by remember { mutableStateOf<BankDetailViewModel.ExportStats?>(null) }
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
-        if (uri != null) vm.exportTo(uri, bankId, context)
+        if (uri != null) vm.exportTo(uri, bankId, pendingIncludeAi, context)
     }
 
     LaunchedEffect(bankId) {
@@ -138,7 +144,9 @@ fun BankDetailScreen(
                 Spacer(Modifier.padding(8.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedButton(
-                        onClick = { exportLauncher.launch("${bank?.name ?: "bank"}.json") },
+                        onClick = {
+                            showExportDialog = true
+                        },
                         modifier = Modifier.weight(1f)
                     ) { Text("导出题库") }
                     Button(
@@ -151,6 +159,51 @@ fun BankDetailScreen(
                 }
             }
         }
+    }
+
+    // 导出选项对话框
+    if (showExportDialog) {
+        LaunchedEffect(Unit) { exportStats = vm.exportStats(bankId) }
+        AlertDialog(
+            onDismissRequest = { showExportDialog = false },
+            title = { Text("导出题库") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val stats = exportStats
+                    if (stats != null) {
+                        Text(
+                            "共 ${stats.total} 题 · 含答案 ${stats.withAnswer} 题 · AI 生成 ${stats.aiCount} 题",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("包含 AI 生成的答案与解析", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                "关闭后仅剔除 AI 生成的答案/解析/置信度，题干、原题答案与手动修改全部保留",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                        Switch(checked = pendingIncludeAi, onCheckedChange = { pendingIncludeAi = it })
+                    }
+                    Text(
+                        "导出内容：章节/题型/A1A2A3B 子类型/页码/共用题干与选项/手动修改后的题干选项答案解析" +
+                            (if (pendingIncludeAi) "/AI 置信度与各部分歧" else "") +
+                            "，并附章节分类汇总。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    showExportDialog = false
+                    exportLauncher.launch("${bank?.name ?: "bank"}.json")
+                }) { Text("选择位置并导出") }
+            },
+            dismissButton = { TextButton(onClick = { showExportDialog = false }) { Text("取消") } }
+        )
     }
 }
 

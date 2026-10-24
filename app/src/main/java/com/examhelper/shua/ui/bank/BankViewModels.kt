@@ -98,17 +98,30 @@ class BankDetailViewModel @JvmOverloads constructor(
     var lastExport: String? = null
         private set
 
-    /** 导出为标准题库 JSON 文件 */
-    fun exportTo(uri: android.net.Uri, bankId: Long, context: android.content.Context) {
+    data class ExportStats(val total: Int, val withAnswer: Int, val aiCount: Int)
+
+    suspend fun exportStats(bankId: Long): ExportStats? {
+        val bank = bankRepo.getBank(bankId) ?: return null
+        val noAnswer = bankRepo.countNoAnswer(bankId)
+        return ExportStats(
+            total = bank.questionCount,
+            withAnswer = bank.questionCount - noAnswer,
+            aiCount = bankRepo.countAiGenerated(bankId)
+        )
+    }
+
+    /** 导出为标准题库 JSON 文件（includeAiGenerated=false 时剔除 AI 生成的答案解析） */
+    fun exportTo(uri: android.net.Uri, bankId: Long, includeAiGenerated: Boolean, context: android.content.Context) {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             runCatching {
-                val file = bankRepo.exportBank(bankId) ?: error("题库不存在")
+                val file = bankRepo.exportBank(bankId, includeAiGenerated) ?: error("题库不存在")
                 val text = com.examhelper.shua.data.model.JsonCodec.json.encodeToString(file)
                 context.contentResolver.openOutputStream(uri)?.use { out ->
                     out.write(text.toByteArray(Charsets.UTF_8))
                 } ?: error("无法写入文件")
-            }.onSuccess { lastExport = "导出成功" }
-                .onFailure { lastExport = "导出失败：${it.message}" }
+            }.onSuccess {
+                lastExport = "导出成功（${if (includeAiGenerated) "含" else "不含"}AI答案）"
+            }.onFailure { lastExport = "导出失败：${it.message}" }
         }
     }
 }

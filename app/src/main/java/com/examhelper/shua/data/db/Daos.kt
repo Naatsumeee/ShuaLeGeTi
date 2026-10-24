@@ -49,6 +49,9 @@ interface QuestionDao {
     @Query("SELECT COUNT(*) FROM questions WHERE bankId = :bankId AND (answer IS NULL OR answer = '')")
     suspend fun countNoAnswer(bankId: Long): Int
 
+    @Query("SELECT COUNT(*) FROM questions WHERE bankId = :bankId AND aiGenerated = 1")
+    suspend fun countAiGenerated(bankId: Long): Int
+
     @Update
     suspend fun update(question: Question)
 

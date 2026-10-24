@@ -24,17 +24,36 @@ data class ParsedQuestion(
     var answer: String? = null,
     var analysis: String? = null,
     /** 原文页码（PDF 导入时记录，章节划分辅助） */
-    var sourcePage: Int? = null
+    var sourcePage: Int? = null,
+    /** 导入标准题库文件时还原 AI 元数据 */
+    var aiGenerated: Boolean = false,
+    var confidence: Int? = null,
+    var agreement: String? = null,
+    var dissent: List<DissentEntry> = emptyList()
 )
 
 /** 标准题库文件格式（导出/导入/分享用） */
 @Serializable
 data class ShuaBankFile(
-    val version: Int = 2,
+    val version: Int = 3,
     val name: String,
     val sourceFileName: String? = null,
     val exportedAt: Long,
+    /** 导出选项：是否包含 AI 生成的答案与解析（false 时 AI 部分被剔除，人工内容保留） */
+    val includeAiGenerated: Boolean = true,
+    /** 章节分类汇总 */
+    val chapters: List<ChapterSummary> = emptyList(),
     val questions: List<ShuaQuestionJson>
+)
+
+@Serializable
+data class ChapterSummary(
+    val chapter: String,
+    val count: Int,
+    val types: Map<String, Int> = emptyMap(),
+    val subtypes: Map<String, Int> = emptyMap(),
+    val pageFrom: Int? = null,
+    val pageTo: Int? = null
 )
 
 @Serializable
@@ -51,7 +70,8 @@ data class ShuaQuestionJson(
     val sourcePage: Int? = null,
     val aiGenerated: Boolean = false,
     val confidence: Int? = null,
-    val agreement: String? = null
+    val agreement: String? = null,
+    val dissent: List<DissentEntry> = emptyList()
 )
 
 /** 后台解析 JSONL 行 DTO：带分块索引用于恢复全局顺序 */

@@ -8,6 +8,7 @@ import com.examhelper.shua.data.db.QuestionDao
 import com.examhelper.shua.data.db.QuestionType
 import com.examhelper.shua.data.db.RecordDao
 import com.examhelper.shua.data.db.ProgressDao
+import com.examhelper.shua.data.model.ChapterSummary
 import com.examhelper.shua.data.model.JsonCodec
 import com.examhelper.shua.data.model.ParsedQuestion
 import com.examhelper.shua.data.model.ShuaBankFile
@@ -34,6 +35,8 @@ class BankRepository(
 
     suspend fun countNoAnswer(bankId: Long): Int = questionDao.countNoAnswer(bankId)
 
+    suspend fun countAiGenerated(bankId: Long): Int = questionDao.countAiGenerated(bankId)
+
     private fun ParsedQuestion.toEntity(bankId: Long, order: Int): Question = Question(
         bankId = bankId,
         orderInBank = order,
@@ -46,7 +49,11 @@ class BankRepository(
         optionsJson = options.takeIf { it.isNotEmpty() }?.let(JsonCodec::encodeOptions),
         answer = answer,
         analysis = analysis,
-        sourcePage = sourcePage
+        sourcePage = sourcePage,
+        aiGenerated = aiGenerated,
+        confidence = confidence,
+        agreement = agreement,
+        dissentJson = dissent.takeIf { it.isNotEmpty() }?.let(JsonCodec::encodeDissent)
     )
 
     /** 由解析结果创建题库 */
@@ -76,32 +83,57 @@ class BankRepository(
 
     // ---- 标准题库文件导出/导入 ----
 
-    suspend fun exportBank(bankId: Long): ShuaBankFile? {
+    /**
+     * 导出题库（当前数据库状态，含用户手动修改）。
+     * @param includeAiGenerated false 时剔除 AI 生成的答案/解析/置信度/分歧，
+     * 原题库自带答案与用户内容保留
+     */
+    suspend fun exportBank(bankId: Long, includeAiGenerated: Boolean = true): ShuaBankFile? {
         val bank = bankDao.getById(bankId) ?: return null
         val questions = questionDao.getByBank(bankId)
+        val exported = questions.map { q ->
+            val stripAi = !includeAiGenerated && q.aiGenerated
+            ShuaQuestionJson(
+                chapter = q.chapter,
+                type = q.type.name,
+                subtype = q.subtype,
+                stem = q.stem,
+                sharedStem = q.sharedStem,
+                sharedOptions = JsonCodec.decodeOptions(q.sharedOptionsJson),
+                options = JsonCodec.decodeOptions(q.optionsJson),
+                answer = if (stripAi) null else q.answer,
+                analysis = if (stripAi) null else q.analysis,
+                sourcePage = q.sourcePage,
+                aiGenerated = if (stripAi) false else q.aiGenerated,
+                confidence = if (stripAi) null else q.confidence,
+                agreement = if (stripAi) null else q.agreement,
+                dissent = if (stripAi) emptyList() else JsonCodec.decodeDissent(q.dissentJson)
+            )
+        }
         return ShuaBankFile(
             name = bank.name,
             sourceFileName = bank.sourceFileName,
             exportedAt = System.currentTimeMillis(),
-            questions = questions.map { q ->
-                ShuaQuestionJson(
-                    chapter = q.chapter,
-                    type = q.type.name,
-                    subtype = q.subtype,
-                    stem = q.stem,
-                    sharedStem = q.sharedStem,
-                    sharedOptions = JsonCodec.decodeOptions(q.sharedOptionsJson),
-                    options = JsonCodec.decodeOptions(q.optionsJson),
-                    answer = q.answer,
-                    analysis = q.analysis,
-                    sourcePage = q.sourcePage,
-                    aiGenerated = q.aiGenerated,
-                    confidence = q.confidence,
-                    agreement = q.agreement
-                )
-            }
+            includeAiGenerated = includeAiGenerated,
+            chapters = buildChapterSummaries(exported),
+            questions = exported
         )
     }
+
+    private fun buildChapterSummaries(questions: List<ShuaQuestionJson>): List<ChapterSummary> =
+        questions.groupBy { it.chapter ?: "未分章" }
+            .map { (chapter, list) ->
+                ChapterSummary(
+                    chapter = chapter,
+                    count = list.size,
+                    types = list.groupingBy { it.type }.eachCount(),
+                    subtypes = list.mapNotNull { it.subtype }.groupingBy { it }.eachCount()
+                        .takeIf { it.isNotEmpty() } ?: emptyMap(),
+                    pageFrom = list.mapNotNull { it.sourcePage }.minOrNull(),
+                    pageTo = list.mapNotNull { it.sourcePage }.maxOrNull()
+                )
+            }
+            .sortedBy { it.pageFrom ?: Int.MAX_VALUE }
 
     suspend fun importBankFile(file: ShuaBankFile): Long {
         val parsed = file.questions.map { it.toParsedQuestion() }
@@ -118,6 +150,10 @@ class BankRepository(
         options = options.toMutableList(),
         answer = answer,
         analysis = analysis,
-        sourcePage = sourcePage
+        sourcePage = sourcePage,
+        aiGenerated = aiGenerated,
+        confidence = confidence,
+        agreement = agreement,
+        dissent = dissent
     )
 }
