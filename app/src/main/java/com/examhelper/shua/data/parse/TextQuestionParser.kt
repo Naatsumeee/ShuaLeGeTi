@@ -134,6 +134,12 @@ object TextQuestionParser {
             }
         }
 
+        // 选项规范化：合并重复字母（OCR 拆行）、重排字母并映射答案
+        val (opts, ans) = OptionNormalizer.normalize(q.options.toList(), q.answer)
+        q.options.clear()
+        q.options.addAll(opts)
+        q.answer = ans
+
         q.stem = q.stem.trim()
         q.answer = normalizeAnswer(q.answer)
         q.analysis = q.analysis?.trim()?.takeIf { it.isNotBlank() }

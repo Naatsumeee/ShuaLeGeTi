@@ -238,7 +238,11 @@ private fun QuestionBody(q: Question, state: StudyUiState, vm: StudyViewModel) {
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
             ) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("参考答案：${q.answer}", style = MaterialTheme.typography.titleMedium)
+                    val contentPreview = answerContentPreview(q)
+                    Text(
+                        "参考答案：${q.answer}" + (contentPreview?.let { "（$it）" } ?: ""),
+                        style = MaterialTheme.typography.titleMedium
+                    )
                     if (q.aiGenerated) {
                         Text(
                             buildString {
@@ -393,4 +397,16 @@ private fun judgeLabel(text: String): String = when (text.trim()) {
     "对", "正确", "√", "T", "是" -> "对"
     "错", "错误", "×", "F", "否" -> "错"
     else -> text
+}
+
+/** 选择题答案附内容预览，字母错位时用户可直接核对内容 */
+private fun answerContentPreview(q: Question): String? {
+    if (q.type != QuestionType.SINGLE && q.type != QuestionType.MULTIPLE) return null
+    val ans = q.answer ?: return null
+    val letters = ans.filter { it in 'A'..'E' }
+    if (letters.isEmpty()) return null
+    val options = JsonCodec.decodeOptions(q.optionsJson)
+    return options.filter { it.key.isNotEmpty() && letters.contains(it.key[0]) }
+        .joinToString("、") { it.text.take(18) }
+        .ifBlank { null }
 }

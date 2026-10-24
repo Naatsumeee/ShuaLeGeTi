@@ -81,17 +81,7 @@ class StudyRepository(
     }
 
     /** 判分（填空/简答由界面自评，不走这里） */
-    fun judge(question: Question, userAnswer: String): Boolean {
-        val expected = question.answer?.trim()?.uppercase() ?: return false
-        val actual = userAnswer.trim().uppercase()
-        return when (question.type) {
-            com.examhelper.shua.data.db.QuestionType.SINGLE,
-            com.examhelper.shua.data.db.QuestionType.JUDGE -> expected == actual
-            com.examhelper.shua.data.db.QuestionType.MULTIPLE ->
-                expected.toCharArray().sorted() == actual.toCharArray().sorted()
-            else -> expected == actual
-        }
-    }
+    fun judge(question: Question, userAnswer: String): Boolean = judgeAnswer(question, userAnswer)
 
     suspend fun submitAnswer(
         bankId: Long,
@@ -168,5 +158,58 @@ class StudyRepository(
         cal.set(java.util.Calendar.SECOND, 0)
         cal.set(java.util.Calendar.MILLISECOND, 0)
         return cal.timeInMillis
+    }
+
+    companion object {
+        /**
+         * 判分：字母匹配优先，选项内容匹配兜底。
+         * 兜底覆盖两类真实场景：
+         * 1) OCR 字母错位/重排后，答案字母与选项字母对不上，但内容是对的
+         * 2) 答案存的是"字母+内容"或纯内容（AI 生成常见），按内容对齐到选项
+         */
+        fun judgeAnswer(question: Question, userAnswer: String): Boolean {
+            val expectedRaw = question.answer?.trim()?.takeIf { it.isNotBlank() } ?: return false
+            val options = JsonCodec.decodeOptions(question.optionsJson)
+
+            val expected = resolveToLetters(expectedRaw, options) ?: expectedRaw.uppercase()
+            val actual = resolveToLetters(userAnswer.trim(), options) ?: userAnswer.trim().uppercase()
+            if (expected == actual) return true
+
+            val isLetterAnswer = expected.length in 1..5 && expected.all { it in 'A'..'E' }
+            val isLetterActual = actual.length in 1..5 && actual.all { it in 'A'..'E' }
+            return if (isLetterAnswer && isLetterActual) {
+                // 字母不同：比较各自指向的选项内容
+                val expTexts = options.filter { expected.contains(it.key) }.map { normalizeText(it.text) }
+                val actTexts = options.filter { actual.contains(it.key) }.map { normalizeText(it.text) }
+                expTexts.isNotEmpty() && actTexts.isNotEmpty() &&
+                    expTexts.sorted() == actTexts.sorted()
+            } else {
+                normalizeText(expected) == normalizeText(actual)
+            }
+        }
+
+        /** "B"、"b"、"B. 内容"、"内容恰好等于某选项" → 选项字母；解析不了返回 null */
+        private fun resolveToLetters(raw: String, options: List<com.examhelper.shua.data.model.QuestionOption>): String? {
+            val trimmed = raw.trim()
+            if (trimmed.length in 1..5 && trimmed.all { it.uppercaseChar() in 'A'..'E' }) {
+                return trimmed.uppercase()
+            }
+            val m = Regex("""^\(?([A-Ea-e]{1,5})\)?\s*[、.．,，:：)\s]?(.*)$""").find(trimmed)
+            if (m != null && m.groupValues[1].length in 1..5) {
+                return m.groupValues[1].uppercase()
+            }
+            val hit = options.firstOrNull { normalizeText(it.text) == normalizeText(trimmed) }
+            return hit?.key
+        }
+
+        fun normalizeText(s: String): String = buildString {
+            for (c in s) {
+                when (c) {
+                    '，', ',', '、', '。', '.', '．', '；', ';', '：', ':', '（', '(', '）', ')',
+                    ' ', '　', '\t', '\n', '\r' -> {}
+                    else -> append(c.lowercaseChar())
+                }
+            }
+        }
     }
 }

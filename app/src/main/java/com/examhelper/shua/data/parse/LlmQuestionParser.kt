@@ -73,14 +73,17 @@ class LlmQuestionParser(
         return dto.questions.filter { it.stem.isNotBlank() }.map { it.toParsed() }
     }
 
-    private fun QuestionDto.toParsed(): ParsedQuestion = ParsedQuestion(
-        chapter = chapter?.takeIf { it.isNotBlank() },
-        type = mapType(type),
-        stem = stem.trim(),
-        options = options.filter { it.text.isNotBlank() }.toMutableList(),
-        answer = answer?.trim()?.takeIf { it.isNotBlank() && it != "null" },
-        analysis = analysis?.trim()?.takeIf { it.isNotBlank() && it != "null" }
-    )
+    private fun QuestionDto.toParsed(): ParsedQuestion {
+        val (opts, ans) = OptionNormalizer.normalize(options, answer)
+        return ParsedQuestion(
+            chapter = chapter?.takeIf { it.isNotBlank() },
+            type = mapType(type),
+            stem = stem.trim(),
+            options = opts.toMutableList(),
+            answer = ans,
+            analysis = analysis?.trim()?.takeIf { it.isNotBlank() && it != "null" }
+        )
+    }
 
     companion object {
         private const val CHUNK_SIZE = 2800
@@ -94,12 +97,13 @@ class LlmQuestionParser(
             规则：
             1. type 取值：single(单选) multiple(多选) judge(判断) fill(填空) short_answer(简答/论述)
             2. 选项打"√"或"✓"的为正确答案；题干末尾形如"：B"的字母是答案；单独的"答案：X"行是答案；判断题答案用"对"或"错"
-            3. 原文没有给出答案或解析时，answer/analysis 填 null，不要自己编造
-            4. 纠正明显的 OCR 错字（形近字混淆），保持题意不变；无法确认的保留原样
-            5. 页眉页脚（页码、印刷店名、学校名重复出现的）忽略
-            6. 章节标题放入 chapter 字段（如"第一章 XX"或"一、单项选择题"中的题型部分不要放）
-            7. 按原文顺序输出所有题目，不要遗漏、不要合并
-            8. 多选题 answer 用大写字母连写如 "ABD"
+            3. 选项 key 必须从 A 开始连续编号，同一字母只能出现一次；若 OCR 把同一选项拆成多行或重复识别，合并为一条选项
+            4. 原文没有给出答案或解析时，answer/analysis 填 null，不要自己编造
+            5. 纠正明显的 OCR 错字（形近字混淆），保持题意不变；无法确认的保留原样
+            6. 页眉页脚（页码、印刷店名、学校名重复出现的）忽略
+            7. 章节标题放入 chapter 字段（如"第一章 XX"或"一、单项选择题"中的题型部分不要放）
+            8. 按原文顺序输出所有题目，不要遗漏、不要合并
+            9. 多选题 answer 用大写字母连写如 "ABD"
         """.trimIndent()
 
         fun mapType(raw: String): QuestionType = when (raw.trim().lowercase()) {

@@ -1,7 +1,7 @@
 package com.examhelper.shua.ui.settings
 
 import android.app.Application
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.examhelper.shua.ShuaApp
 import com.examhelper.shua.data.db.LlmProvider
@@ -16,7 +16,7 @@ import kotlinx.coroutines.launch
 
 class SettingsViewModel(
     application: Application
-) : ViewModel() {
+) : AndroidViewModel(application) {
 
     private val container = (application as ShuaApp).container
     private val db = container.database
