@@ -92,8 +92,7 @@ fun BankListScreen(
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Icon(Icons.Filled.Description, contentDescription = null, tint = MaterialTheme.colorScheme.outline)
                     Text("还没有题库", style = MaterialTheme.typography.titleMedium)
-                    Text("点击右下角\"导入题库\"，粘贴题目文本开始", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-                    Text("(docx / PDF / 拍照导入即将上线)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    Text("点击右下角\"导入题库\"开始：支持 PDF / docx / 拍照 / 扫描件（OCR）与文本粘贴", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                 }
             }
         } else {

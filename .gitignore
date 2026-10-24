@@ -1,6 +1,9 @@
 # 样例题库（版权资料 + 超过 GitHub 100MB 单文件限制，不入库）
 QuestionBankExample/
 
+# 构建产物（模拟器启动脚本用）
+app-debug.apk
+
 # Android / Gradle
 .gradle/
 build/
