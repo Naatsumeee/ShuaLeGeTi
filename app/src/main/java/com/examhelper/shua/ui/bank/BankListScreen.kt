@@ -98,7 +98,7 @@ fun BankListScreen(
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(padding),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 jobs.filter { it.stage != "FAILED" && it.stage != "CANCELED" }.forEach { job ->

@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.examhelper.shua.data.db.LlmProvider
 import com.examhelper.shua.data.settings.OcrEngine
+import kotlinx.coroutines.flow.first
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -187,20 +188,23 @@ fun SettingsScreen() {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("题库解析提示词", style = MaterialTheme.typography.titleSmall)
-                    var parsePrompt by remember { mutableStateOf(ui.customParsePrompt) }
-                    LaunchedEffect(ui.customParsePrompt) { if (ui.customParsePrompt != parsePrompt) parsePrompt = ui.customParsePrompt }
+                    var parsePrompt by remember { mutableStateOf("") }
+                    LaunchedEffect(Unit) {
+                        parsePrompt = com.examhelper.shua.ShuaApp.instance.container.settings.settings
+                            .first().customParsePrompt
+                            .ifBlank { com.examhelper.shua.data.llm.Prompts.PARSE_DEFAULT }
+                    }
                     OutlinedTextField(
                         value = parsePrompt,
                         onValueChange = { parsePrompt = it },
                         modifier = Modifier.fillMaxWidth(),
-                        minLines = 3, maxLines = 8,
-                        placeholder = { Text("默认：医学题库结构化引擎（含 A1/A2/A3/B 与页码规则）", maxLines = 1) }
+                        minLines = 4, maxLines = 10
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = { vm.setCustomParsePrompt(parsePrompt) }) { Text("保存") }
                         OutlinedButton(onClick = {
-                            parsePrompt = ""
-                            vm.setCustomParsePrompt("")
+                            parsePrompt = com.examhelper.shua.data.llm.Prompts.PARSE_DEFAULT
+                            vm.setCustomParsePrompt(parsePrompt)
                         }) { Text("恢复默认") }
                     }
                 }
@@ -208,20 +212,23 @@ fun SettingsScreen() {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("答题生成提示词", style = MaterialTheme.typography.titleSmall)
-                    var answerPrompt by remember { mutableStateOf(ui.customAnswerPrompt) }
-                    LaunchedEffect(ui.customAnswerPrompt) { if (ui.customAnswerPrompt != answerPrompt) answerPrompt = ui.customAnswerPrompt }
+                    var answerPrompt by remember { mutableStateOf("") }
+                    LaunchedEffect(Unit) {
+                        answerPrompt = com.examhelper.shua.ShuaApp.instance.container.settings.settings
+                            .first().customAnswerPrompt
+                            .ifBlank { com.examhelper.shua.data.llm.Prompts.ANSWER_DEFAULT }
+                    }
                     OutlinedTextField(
                         value = answerPrompt,
                         onValueChange = { answerPrompt = it },
                         modifier = Modifier.fillMaxWidth(),
-                        minLines = 3, maxLines = 8,
-                        placeholder = { Text("默认：批量答题引擎（8 题一批，直接输出 JSON）", maxLines = 1) }
+                        minLines = 4, maxLines = 10
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = { vm.setCustomAnswerPrompt(answerPrompt) }) { Text("保存") }
                         OutlinedButton(onClick = {
-                            answerPrompt = ""
-                            vm.setCustomAnswerPrompt("")
+                            answerPrompt = com.examhelper.shua.data.llm.Prompts.ANSWER_DEFAULT
+                            vm.setCustomAnswerPrompt(answerPrompt)
                         }) { Text("恢复默认") }
                     }
                 }

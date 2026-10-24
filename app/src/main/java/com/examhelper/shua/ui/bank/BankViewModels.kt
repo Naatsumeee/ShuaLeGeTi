@@ -88,6 +88,7 @@ class BankDetailViewModel @JvmOverloads constructor(
 ) : ViewModel() {
     suspend fun loadBank(bankId: Long): QuestionBank? = bankRepo.getBank(bankId)
     suspend fun countNoAnswer(bankId: Long): Int = bankRepo.countNoAnswer(bankId)
+    suspend fun countNoAnalysis(bankId: Long): Int = bankRepo.countNoAnalysis(bankId)
     fun deleteBank(bankId: Long, onDone: () -> Unit) {
         viewModelScope.launch {
             bankRepo.deleteBank(bankId)

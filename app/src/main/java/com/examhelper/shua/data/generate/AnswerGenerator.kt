@@ -13,6 +13,26 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlin.math.roundToInt
 
+/** token 用量累加器 */
+class UsageAcc(
+    var hit: Long = 0,
+    var miss: Long = 0,
+    var out: Long = 0
+) {
+    fun add(u: com.examhelper.shua.data.llm.ChatUsage) {
+        hit += u.cacheHitTokens
+        miss += u.cacheMissTokens
+        out += u.completionTokens
+    }
+
+    fun toUsage() = com.examhelper.shua.data.llm.ChatUsage(
+        promptTokens = (hit + miss).toInt(),
+        completionTokens = out.toInt(),
+        cacheHitTokens = hit.toInt(),
+        cacheMissTokens = miss.toInt()
+    )
+}
+
 /** 单个模型对一题的裁决 */
 data class SingleVerdict(
     val providerName: String,
@@ -52,45 +72,59 @@ class AnswerGenerator(
     @Serializable
     data class BatchResponseDto(val results: List<AnswerDto> = emptyList())
 
-    /** 一次请求批量作答；返回按输入顺序的裁决（失败题为 null） */
-    suspend fun askBatch(provider: LlmProvider, questions: List<Question>): List<SingleVerdict?> {
-        if (questions.isEmpty()) return emptyList()
-        val content = client.chat(
+    /** 一次请求批量作答；返回按输入顺序的裁决（失败题为 null）+ 本次 token 用量 */
+    suspend fun askBatch(provider: LlmProvider, questions: List<Question>): BatchOutcome {
+        if (questions.isEmpty()) return BatchOutcome(emptyList(), com.examhelper.shua.data.llm.ChatUsage())
+        val result = client.chatWithUsage(
             provider = provider,
             systemPrompt = systemPrompt,
             userPrompt = buildBatchPrompt(questions),
             jsonMode = true,
-            temperature = 0.1
+            temperature = 0.1,
+            maxTokens = 3000
         )
+        val content = result.content
         val cleaned = LlmQuestionParser.stripCodeFence(content)
         val start = cleaned.indexOfFirst { it == '{' || it == '[' }
         val end = maxOf(cleaned.lastIndexOf('}'), cleaned.lastIndexOf(']'))
-        if (start < 0 || end <= start) return questions.map { null }
-        val dto = runCatching { json.decodeFromString<BatchResponseDto>(cleaned.substring(start, end + 1)) }
-            .getOrElse {
-                runCatching { json.decodeFromString<List<AnswerDto>>(cleaned.substring(start, end + 1)) }
-                    .map { BatchResponseDto(it) }
-                    .getOrElse { return questions.map { null } }
+        val verdicts: List<SingleVerdict?> = if (start < 0 || end <= start) {
+            questions.map { null }
+        } else {
+            val dto = runCatching { json.decodeFromString<BatchResponseDto>(cleaned.substring(start, end + 1)) }
+                .getOrElse {
+                    runCatching { json.decodeFromString<List<AnswerDto>>(cleaned.substring(start, end + 1)) }
+                        .map { BatchResponseDto(it) }
+                        .getOrDefault(BatchResponseDto())
+                }
+            val byIndex = dto.results.associateBy { it.i }
+            questions.indices.map { idx ->
+                val d = byIndex[idx + 1] ?: return@map null
+                SingleVerdict(
+                    providerName = provider.name,
+                    answer = d.answer?.trim()?.takeIf { it.isNotBlank() },
+                    analysis = d.analysis?.trim()?.takeIf { it.isNotBlank() },
+                    selfConfidence = d.confidence?.coerceIn(0, 100)
+                )
             }
-        val byIndex = dto.results.associateBy { it.i }
-        return questions.indices.map { idx ->
-            val d = byIndex[idx + 1] ?: return@map null
-            SingleVerdict(
-                providerName = provider.name,
-                answer = d.answer?.trim()?.takeIf { it.isNotBlank() },
-                analysis = d.analysis?.trim()?.takeIf { it.isNotBlank() },
-                selfConfidence = d.confidence?.coerceIn(0, 100)
-            )
         }
+        return BatchOutcome(verdicts, result.usage)
     }
+
+    data class BatchOutcome(val verdicts: List<SingleVerdict?>, val usage: com.examhelper.shua.data.llm.ChatUsage)
 
     /** 三省六部批量聚合：主部 + 各部各自批量作答，逐题聚合 */
     suspend fun aggregateBatch(
         questions: List<Question>,
         primary: LlmProvider,
         others: List<LlmProvider>
-    ): List<AggregatedVerdict> {
-        val primaryVerdicts = askBatch(primary, questions)
+    ): Pair<List<AggregatedVerdict>, com.examhelper.shua.data.llm.ChatUsage> {
+        val primaryOutcome = askBatch(primary, questions)
+        val primaryVerdicts = primaryOutcome.verdicts
+        val totalUsage = UsageAcc(
+            primaryOutcome.usage.cacheHitTokens.toLong(),
+            primaryOutcome.usage.cacheMissTokens.toLong(),
+            primaryOutcome.usage.completionTokens.toLong()
+        )
         if (others.isEmpty()) {
             return questions.indices.map { i ->
                 AggregatedVerdict(
@@ -100,16 +134,19 @@ class AnswerGenerator(
                     agreement = null,
                     dissents = emptyList()
                 )
-            }
+            } to totalUsage.toUsage()
         }
-        val otherVerdicts: List<List<SingleVerdict?>> = kotlinx.coroutines.coroutineScope {
+        val otherOutcomes: List<BatchOutcome> = kotlinx.coroutines.coroutineScope {
             others.map { p ->
                 async { askBatch(p, questions) }
             }.map { it.await() }
         }
-        return questions.indices.map { i ->
+        otherOutcomes.forEach { o ->
+            totalUsage.add(o.usage)
+        }
+        val aggregated = questions.indices.map { i ->
             val pv = primaryVerdicts[i]
-            val ovs = otherVerdicts.mapNotNull { it.getOrNull(i) }
+            val ovs = otherOutcomes.mapNotNull { it.verdicts.getOrNull(i) }
             val agreeCount = ovs.count { answersMatch(pv?.answer, it.answer) }
             val totalParts = ovs.size + 1
             val agreeRatio = if (ovs.isEmpty()) 1.0 else agreeCount.toDouble() / ovs.size
@@ -126,28 +163,40 @@ class AnswerGenerator(
                 }
             )
         }
+        return aggregated to totalUsage.toUsage()
     }
 
     companion object {
-        const val BATCH_SIZE = 8
+        const val BATCH_SIZE = 12
 
+        /** 紧凑序列化：同章只报一次、共用题干/选项组内去重，压缩输入 token */
         fun buildBatchPrompt(questions: List<Question>): String = buildString {
             appendLine("共 ${questions.size} 题，逐题作答：")
+            var lastChapter: String? = null
+            var lastSharedKey: String? = null
             questions.forEachIndexed { idx, q ->
-                appendLine("--- 第 ${idx + 1} 题 ---")
-                appendLine("【题型】${typeCn(q.type)}")
-                if (!q.chapter.isNullOrBlank()) appendLine("【章节】${q.chapter}")
-                q.sharedStem?.let { appendLine("【共用题干】$it") }
-                q.sharedOptionsJson?.let {
-                    val opts = com.examhelper.shua.data.model.JsonCodec.decodeOptions(it)
-                    if (opts.isNotEmpty()) {
-                        appendLine("【共用选项】" + opts.joinToString("；") { "${it.key}.${it.text}" })
+                val chapter = q.chapter?.takeIf { it.isNotBlank() }
+                if (chapter != lastChapter && chapter != null) {
+                    appendLine("【章节】$chapter")
+                    lastChapter = chapter
+                }
+                val sharedKey = q.sharedStem?.take(30) ?: q.sharedOptionsJson?.take(30)
+                if (sharedKey != null && sharedKey != lastSharedKey) {
+                    q.sharedStem?.let { appendLine("【共用题干】$it") }
+                    q.sharedOptionsJson?.let {
+                        val opts = com.examhelper.shua.data.model.JsonCodec.decodeOptions(it)
+                        if (opts.isNotEmpty()) {
+                            appendLine("【共用选项】" + opts.joinToString("；") { "${it.key}.${it.text}" })
+                        }
                     }
+                    lastSharedKey = sharedKey
                 }
-                appendLine("【题干】${q.stem}")
-                com.examhelper.shua.data.model.JsonCodec.decodeOptions(q.optionsJson).forEach {
-                    appendLine("${it.key}. ${it.text}")
+                append("${idx + 1}.(${typeCn(q.type)})${q.stem}")
+                val opts = com.examhelper.shua.data.model.JsonCodec.decodeOptions(q.optionsJson)
+                if (opts.isNotEmpty()) {
+                    append(" " + opts.joinToString(" ") { "${it.key}.${it.text}" })
                 }
+                appendLine()
             }
         }
 

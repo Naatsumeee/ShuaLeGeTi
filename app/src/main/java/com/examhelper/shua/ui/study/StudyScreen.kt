@@ -328,6 +328,27 @@ private fun QuestionBody(q: Question, state: StudyUiState, vm: StudyViewModel) {
             ) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     val contentPreview = answerContentPreview(q)
+                    // AI 与原题库答案冲突：双展示
+                    q.originalAnswer?.let { orig ->
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            shape = MaterialTheme.shapes.small,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(Modifier.padding(8.dp)) {
+                                Text(
+                                    "原题库答案：$orig　≠　AI 答案：${q.answer}",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                                Text(
+                                    "两者不一致，请自行判断；AI 解析见下",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                            }
+                        }
+                    }
                     Text(
                         "参考答案：${q.answer}" + (contentPreview?.let { "（$it）" } ?: ""),
                         style = MaterialTheme.typography.titleMedium

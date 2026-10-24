@@ -2,17 +2,20 @@ package com.examhelper.shua.ui
 
 import android.net.Uri
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -24,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -80,6 +84,45 @@ private val tabs = listOf(
     Tab(Routes.SETTINGS, "设置", Icons.Filled.Settings)
 )
 
+/** 紧凑底部导航：56dp 高、小图标细字，弱化存在感 */
+@Composable
+private fun CompactNavBar(currentRoute: String?, onSelect: (String) -> Unit) {
+    androidx.compose.material3.Surface(
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 3.dp,
+        shadowElevation = 6.dp
+    ) {
+        Row(
+            Modifier.fillMaxWidth().height(56.dp),
+            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceEvenly
+        ) {
+            tabs.forEach { tab ->
+                val selected = currentRoute == tab.route
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clickable { onSelect(tab.route) },
+                    horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center
+                ) {
+                    Icon(
+                        tab.icon,
+                        contentDescription = tab.label,
+                        modifier = Modifier.size(20.dp),
+                        tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                    )
+                    Text(
+                        tab.label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun AppRoot() {
     // 全局字体缩放
@@ -98,22 +141,16 @@ fun AppRoot() {
         Scaffold(
             bottomBar = {
                 if (showBottomBar) {
-                    NavigationBar {
-                        tabs.forEach { tab ->
-                            NavigationBarItem(
-                                selected = currentRoute == tab.route,
-                                onClick = {
-                                    navController.navigate(tab.route) {
-                                        popUpTo(navController.graph.findStartDestination().id) { saveState = true }
-                                        launchSingleTop = true
-                                        restoreState = true
-                                    }
-                                },
-                                icon = { Icon(tab.icon, contentDescription = tab.label) },
-                                label = { Text(tab.label) }
-                            )
+                    CompactNavBar(
+                        currentRoute = currentRoute,
+                        onSelect = { route ->
+                            navController.navigate(route) {
+                                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
                         }
-                    }
+                    )
                 }
             }
         ) { padding ->

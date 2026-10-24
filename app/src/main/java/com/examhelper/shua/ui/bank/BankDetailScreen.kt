@@ -51,6 +51,7 @@ fun BankDetailScreen(
     val vm: BankDetailViewModel = viewModel()
     var bank by remember { mutableStateOf<com.examhelper.shua.data.db.QuestionBank?>(null) }
     var noAnswer by remember { mutableStateOf(0) }
+    var noAnalysis by remember { mutableStateOf(0) }
     val context = LocalContext.current
     var pendingIncludeAi by remember { mutableStateOf(true) }
     var showExportDialog by remember { mutableStateOf(false) }
@@ -64,6 +65,7 @@ fun BankDetailScreen(
     LaunchedEffect(bankId) {
         bank = vm.loadBank(bankId)
         noAnswer = vm.countNoAnswer(bankId)
+        noAnalysis = vm.countNoAnalysis(bankId)
     }
 
     Scaffold(
@@ -88,20 +90,36 @@ fun BankDetailScreen(
                         Text("${b.questionCount} 道题", style = MaterialTheme.typography.titleLarge)
                         if (noAnswer > 0) {
                             Text(
-                                "其中 $noAnswer 题无参考答案，可在\"设置\"配置模型后一键生成",
+                                "其中 $noAnswer 题无参考答案，$noAnalysis 题无解析，可在\"设置\"配置模型后一键生成",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.tertiary
                             )
                         }
-                        LinearProgressIndicator(
-                            progress = { if (b.questionCount == 0) 0f else (b.questionCount - noAnswer).toFloat() / b.questionCount },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Text(
-                            "答案覆盖率 ${if (b.questionCount == 0) 0 else (b.questionCount - noAnswer) * 100 / b.questionCount}%",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline
-                        )
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Column(Modifier.weight(1f)) {
+                                LinearProgressIndicator(
+                                    progress = { if (b.questionCount == 0) 0f else (b.questionCount - noAnswer).toFloat() / b.questionCount },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                Text(
+                                    "答案覆盖率 ${if (b.questionCount == 0) 0 else (b.questionCount - noAnswer) * 100 / b.questionCount}%",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.outline
+                                )
+                            }
+                            Column(Modifier.weight(1f)) {
+                                LinearProgressIndicator(
+                                    progress = { if (b.questionCount == 0) 0f else (b.questionCount - noAnalysis).toFloat() / b.questionCount },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    color = MaterialTheme.colorScheme.tertiary
+                                )
+                                Text(
+                                    "解析覆盖率 ${if (b.questionCount == 0) 0 else (b.questionCount - noAnalysis) * 100 / b.questionCount}%",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.outline
+                                )
+                            }
+                        }
                     }
                 }
 

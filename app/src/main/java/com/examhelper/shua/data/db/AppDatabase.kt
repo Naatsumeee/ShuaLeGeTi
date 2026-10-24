@@ -33,9 +33,10 @@ class Converters {
         FavoriteRecord::class,
         KillRecord::class,
         LlmProvider::class,
-        ImportJob::class
+        ImportJob::class,
+        GenerateJob::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -46,6 +47,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun recordDao(): RecordDao
     abstract fun providerDao(): ProviderDao
     abstract fun importJobDao(): ImportJobDao
+    abstract fun generateJobDao(): GenerateJobDao
 
     companion object {
         /** v1 → v2：题型子类型/共用题干/共用选项、作答 runId/用时、斩题表、导入任务表、进度筛选指纹 */
@@ -92,6 +94,30 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v3 → v4：AI 原答案冲突字段 + 生成任务表 */
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE questions ADD COLUMN originalAnswer TEXT DEFAULT NULL")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS generate_jobs (" +
+                        "bankId INTEGER NOT NULL, " +
+                        "stage TEXT NOT NULL DEFAULT 'RUNNING', " +
+                        "forceAll INTEGER NOT NULL DEFAULT 0, " +
+                        "total INTEGER NOT NULL DEFAULT 0, " +
+                        "done INTEGER NOT NULL DEFAULT 0, " +
+                        "ok INTEGER NOT NULL DEFAULT 0, " +
+                        "fail INTEGER NOT NULL DEFAULT 0, " +
+                        "message TEXT DEFAULT NULL, " +
+                        "cacheHitTokens INTEGER NOT NULL DEFAULT 0, " +
+                        "cacheMissTokens INTEGER NOT NULL DEFAULT 0, " +
+                        "outputTokens INTEGER NOT NULL DEFAULT 0, " +
+                        "errorMessage TEXT DEFAULT NULL, " +
+                        "updatedAt INTEGER NOT NULL, " +
+                        "PRIMARY KEY(bankId))"
+                )
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -102,7 +128,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "shua.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .fallbackToDestructiveMigration()
                     .build()
                     .also { instance = it }

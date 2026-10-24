@@ -66,6 +66,8 @@ data class Question(
     val optionsJson: String? = null,
     /** 单选"B" 多选"ABD" 判断"对"/"错" 其他为参考答案文本 */
     val answer: String? = null,
+    /** AI 重新生成与原题库答案冲突时，保留的题库原答案（答案页双展示） */
+    val originalAnswer: String? = null,
     val analysis: String? = null,
     /** 答案解析是否由 AI 生成 */
     val aiGenerated: Boolean = false,
@@ -140,6 +142,26 @@ data class KillRecord(
     val questionId: Long,
     val bankId: Long,
     val killedAt: Long = System.currentTimeMillis()
+)
+
+/** 后台 AI 生成任务（WorkManager 驱动，断点续传按"已答即跳过"） */
+@Entity(tableName = "generate_jobs")
+data class GenerateJob(
+    @PrimaryKey val bankId: Long,
+    /** RUNNING / DONE / FAILED / CANCELED */
+    val stage: String = "RUNNING",
+    val forceAll: Boolean = false,
+    val total: Int = 0,
+    val done: Int = 0,
+    val ok: Int = 0,
+    val fail: Int = 0,
+    val message: String? = null,
+    /** 累计 token 用量（缓存命中/未命中/输出），费用透明化 */
+    val cacheHitTokens: Long = 0,
+    val cacheMissTokens: Long = 0,
+    val outputTokens: Long = 0,
+    val errorMessage: String? = null,
+    val updatedAt: Long = System.currentTimeMillis()
 )
 
 /** 大模型提供方（三省六部中的"部"） */

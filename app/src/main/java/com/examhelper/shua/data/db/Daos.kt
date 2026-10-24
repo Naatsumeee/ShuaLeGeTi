@@ -49,6 +49,9 @@ interface QuestionDao {
     @Query("SELECT COUNT(*) FROM questions WHERE bankId = :bankId AND (answer IS NULL OR answer = '')")
     suspend fun countNoAnswer(bankId: Long): Int
 
+    @Query("SELECT COUNT(*) FROM questions WHERE bankId = :bankId AND (analysis IS NULL OR analysis = '')")
+    suspend fun countNoAnalysis(bankId: Long): Int
+
     @Query("SELECT COUNT(*) FROM questions WHERE bankId = :bankId AND aiGenerated = 1")
     suspend fun countAiGenerated(bankId: Long): Int
 
@@ -280,4 +283,16 @@ interface ImportJobDao {
 
     @Query("DELETE FROM import_jobs WHERE id = :id")
     suspend fun delete(id: String)
+}
+
+@Dao
+interface GenerateJobDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(job: GenerateJob)
+
+    @Query("SELECT * FROM generate_jobs WHERE bankId = :bankId")
+    fun observe(bankId: Long): Flow<GenerateJob?>
+
+    @Query("SELECT * FROM generate_jobs WHERE bankId = :bankId")
+    suspend fun get(bankId: Long): GenerateJob?
 }

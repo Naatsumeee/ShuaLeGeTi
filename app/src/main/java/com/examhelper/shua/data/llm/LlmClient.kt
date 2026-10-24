@@ -22,16 +22,29 @@ data class ChatCompletionRequest(
     val messages: List<ChatMessage>,
     val temperature: Double? = null,
     @SerialName("response_format") val responseFormat: ResponseFormat? = null,
+    @SerialName("max_tokens") val maxTokens: Int? = null,
     val stream: Boolean = false
 ) {
     @Serializable
     data class ResponseFormat(val type: String = "json_object")
 }
 
+/** 计费用量（DeepSeek/OpenAI 兼容字段） */
+@Serializable
+data class ChatUsage(
+    @SerialName("prompt_tokens") val promptTokens: Int = 0,
+    @SerialName("completion_tokens") val completionTokens: Int = 0,
+    @SerialName("prompt_cache_hit_tokens") val cacheHitTokens: Int = 0,
+    @SerialName("prompt_cache_miss_tokens") val cacheMissTokens: Int = 0
+)
+
+class ChatResult(val content: String, val usage: ChatUsage)
+
 @Serializable
 data class ChatCompletionResponse(
     val id: String? = null,
     val choices: List<Choice> = emptyList(),
+    val usage: ChatUsage? = null,
     val error: ApiError? = null
 ) {
     @Serializable
@@ -62,12 +75,22 @@ class LlmClient(
         systemPrompt: String,
         userPrompt: String,
         jsonMode: Boolean = false,
-        temperature: Double? = provider.temperature.toDouble()
-    ): String = withContext(Dispatchers.IO) {
-        runCatching { chatOnce(provider, systemPrompt, userPrompt, jsonMode, temperature) }
+        temperature: Double? = provider.temperature.toDouble(),
+        maxTokens: Int? = null
+    ): String = chatWithUsage(provider, systemPrompt, userPrompt, jsonMode, temperature, maxTokens).content
+
+    suspend fun chatWithUsage(
+        provider: LlmProvider,
+        systemPrompt: String,
+        userPrompt: String,
+        jsonMode: Boolean = false,
+        temperature: Double? = provider.temperature.toDouble(),
+        maxTokens: Int? = null
+    ): ChatResult = withContext(Dispatchers.IO) {
+        runCatching { chatOnce(provider, systemPrompt, userPrompt, jsonMode, temperature, maxTokens) }
             .recoverCatching {
-                // 部分兼容端点不支持 response_format，去掉后重试一次
-                if (jsonMode && it is LlmException) chatOnce(provider, systemPrompt, userPrompt, false, temperature)
+                // 部分兼容端点不支持 response_format / max_tokens，去掉后重试一次
+                if (it is LlmException) chatOnce(provider, systemPrompt, userPrompt, false, temperature, null)
                 else throw it
             }
             .getOrThrow()
@@ -78,8 +101,9 @@ class LlmClient(
         systemPrompt: String,
         userPrompt: String,
         jsonMode: Boolean,
-        temperature: Double?
-    ): String {
+        temperature: Double?,
+        maxTokens: Int?
+    ): ChatResult {
         val body = ChatCompletionRequest(
             model = provider.model,
             messages = listOf(
@@ -87,7 +111,8 @@ class LlmClient(
                 ChatMessage("user", userPrompt)
             ),
             temperature = temperature,
-            responseFormat = if (jsonMode) ChatCompletionRequest.ResponseFormat() else null
+            responseFormat = if (jsonMode) ChatCompletionRequest.ResponseFormat() else null,
+            maxTokens = maxTokens
         )
         val url = provider.baseUrl.trimEnd('/') + "/chat/completions"
         val request = Request.Builder()
@@ -105,8 +130,9 @@ class LlmClient(
             val parsed = runCatching { json.decodeFromString<ChatCompletionResponse>(text) }
                 .getOrElse { throw LlmException("响应解析失败: ${text.take(200)}", it) }
             parsed.error?.let { throw LlmException(it.message ?: "API 错误") }
-            parsed.choices.firstOrNull()?.message?.content
+            val content = parsed.choices.firstOrNull()?.message?.content
                 ?: throw LlmException("模型未返回内容")
+            ChatResult(content, parsed.usage ?: ChatUsage())
         }
     }
 

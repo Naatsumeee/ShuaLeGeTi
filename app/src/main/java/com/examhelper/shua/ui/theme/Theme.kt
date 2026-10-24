@@ -98,14 +98,24 @@ private val DarkColors = darkColorScheme(
     inverseOnSurface = Ink
 )
 
-// 衬线标题 + 无衬线正文（Android 内置 Noto Serif/Sans CJK）
+// 衬线标题 + 衬线小标注（强调/解释性文字）+ 无衬线正文
 private fun editorialTypography(dark: Boolean) = Typography(
     displayLarge = serifStyle(48.sp, dark),
     displayMedium = serifStyle(42.sp, dark),
     headlineLarge = serifStyle(34.sp, dark),
     headlineMedium = serifStyle(28.sp, dark),
-    // body 默认无衬线，保持原样
+    titleMedium = serifStyle(18.sp, dark),
+    titleSmall = serifStyle(15.sp, dark),
+    labelMedium = serifLabelStyle(13.sp, dark)
 )
+
+private fun serifLabelStyle(size: androidx.compose.ui.unit.TextUnit, dark: Boolean) =
+    androidx.compose.ui.text.TextStyle(
+        fontFamily = FontFamily.Serif,
+        fontWeight = FontWeight.Normal,
+        fontSize = size,
+        color = if (dark) NightTextSoft else InkSoft
+    )
 
 private fun serifStyle(size: androidx.compose.ui.unit.TextUnit, dark: Boolean) =
     androidx.compose.ui.text.TextStyle(

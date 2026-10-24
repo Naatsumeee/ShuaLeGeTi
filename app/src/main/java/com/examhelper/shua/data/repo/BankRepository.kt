@@ -37,6 +37,8 @@ class BankRepository(
 
     suspend fun countAiGenerated(bankId: Long): Int = questionDao.countAiGenerated(bankId)
 
+    suspend fun countNoAnalysis(bankId: Long): Int = questionDao.countNoAnalysis(bankId)
+
     private fun ParsedQuestion.toEntity(bankId: Long, order: Int): Question = Question(
         bankId = bankId,
         orderInBank = order,
