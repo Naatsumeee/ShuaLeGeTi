@@ -67,7 +67,7 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
 
     implementation(libs.mlkit.text.chinese)
-    implementation(files("libs/OcrLibrary-1.3.0-release.aar"))
+    implementation(project(":ocrlibrary"))
     implementation(libs.pdfbox.android)
     implementation(libs.coil.compose)
     implementation(libs.androidx.documentfile)

@@ -20,3 +20,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "ShuaGeLeTi"
 include(":app")
+include(":ocrlibrary")
+project(":ocrlibrary").projectDir = file("rapidocr-src/OcrLibrary")
