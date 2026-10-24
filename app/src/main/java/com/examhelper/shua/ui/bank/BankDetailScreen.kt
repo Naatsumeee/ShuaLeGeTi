@@ -36,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.examhelper.shua.data.db.StudyMode
 
@@ -87,7 +88,22 @@ fun BankDetailScreen(
             bank?.let { b ->
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("${b.questionCount} 道题", style = MaterialTheme.typography.titleLarge)
+                        Row(verticalAlignment = androidx.compose.ui.Alignment.Bottom) {
+                            Text(
+                                "${b.questionCount}",
+                                style = androidx.compose.ui.text.TextStyle(
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Serif,
+                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                    fontSize = 34.sp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            )
+                            Text(
+                                " 道题",
+                                style = MaterialTheme.typography.titleMedium,
+                                modifier = Modifier.padding(bottom = 4.dp)
+                            )
+                        }
                         if (noAnswer > 0) {
                             Text(
                                 "其中 $noAnswer 题无参考答案，$noAnalysis 题无解析，可在\"设置\"配置模型后一键生成",

@@ -30,17 +30,22 @@ suspend fun <T> Task<T>.awaitTask(): T = suspendCancellableCoroutine { cont ->
     addOnFailureListener { if (cont.isActive) cont.resumeWithException(it) }
 }
 
+/** OCR 引擎统一接口（ML Kit / RapidOCR） */
+interface OcrProvider {
+    suspend fun recognize(bitmap: Bitmap): OcrPageResult
+}
+
 /**
  * ML Kit 中文 OCR（bundled，完全离线）。
  * 关键点：识别后做双栏阅读顺序重排（扫描版试卷常为左右双栏）。
  */
-class MlKitOcrEngine {
+class MlKitOcrEngine : OcrProvider {
 
     private val recognizer by lazy {
         TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
     }
 
-    suspend fun recognize(bitmap: Bitmap): OcrPageResult {
+    override suspend fun recognize(bitmap: Bitmap): OcrPageResult {
         val text: Text = recognizer.process(InputImage.fromBitmap(bitmap, 0)).awaitTask()
         val blocks = text.textBlocks.mapNotNull { b ->
             OcrBlock(b.text, b.boundingBox)

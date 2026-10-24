@@ -22,3 +22,6 @@ Desktop.ini
 
 # macOS
 .DS_Store
+
+# 第三方 OCR 源码克隆（构建用预编译 AAR，不入库）
+rapidocr-src/

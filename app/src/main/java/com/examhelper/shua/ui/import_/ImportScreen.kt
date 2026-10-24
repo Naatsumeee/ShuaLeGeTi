@@ -160,6 +160,24 @@ fun ImportScreen(
                 )
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("OCR 引擎", style = MaterialTheme.typography.titleSmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            androidx.compose.material3.FilterChip(
+                                selected = state.ocrEngine == "mlkit",
+                                onClick = { vm.setOcrEngine("mlkit") },
+                                label = { Text("ML Kit · 快") }
+                            )
+                            androidx.compose.material3.FilterChip(
+                                selected = state.ocrEngine == "rapidocr",
+                                onClick = { vm.setOcrEngine("rapidocr") },
+                                label = { Text("RapidOCR · 精度高") }
+                            )
+                        }
+                        Text(
+                            "扫描件质量差、双栏密集或 ML Kit 识别不理想时建议用 RapidOCR（PP-OCRv3，离线）",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.outline
+                        )
                         Button(onClick = { vm.startPipeline("ai") }, modifier = Modifier.fillMaxWidth()) {
                             Text("AI 智能解析（推荐 · 后台运行）")
                         }

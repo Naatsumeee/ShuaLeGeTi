@@ -28,7 +28,7 @@ data class IngestProgress(
  */
 class DocumentIngestor(
     private val context: Context,
-    private val ocrEngine: MlKitOcrEngine = MlKitOcrEngine()
+    private val ocrEngine: com.examhelper.shua.data.ocr.OcrProvider = com.examhelper.shua.data.ocr.MlKitOcrEngine()
 ) {
 
     suspend fun ingest(

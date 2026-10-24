@@ -166,7 +166,7 @@ class GenerateWorker(
                             cacheHitTokens = usage.hit,
                             cacheMissTokens = usage.miss,
                             outputTokens = usage.out,
-                            message = "进度 $done/${targets.size} · 缓存命中 ${usage.hit * 100 / (usage.hit + usage.miss).coerceAtLeast(1)}%",
+                            message = "第 ${minOf(done / AnswerGenerator.BATCH_SIZE + 1, batches.size)}/${batches.size} 批 · 完成 $done/${targets.size} · 命中 ${usage.hit * 100 / (usage.hit + usage.miss).coerceAtLeast(1)}%",
                             updatedAt = System.currentTimeMillis()
                         )
                     )

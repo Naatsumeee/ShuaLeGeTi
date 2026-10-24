@@ -48,6 +48,7 @@ class ImportPipelineWorker(
         const val KEY_PARSE_MODE = "parseMode" // "ai" / "offline"
         const val KEY_PROVIDER_ID = "providerId"
         const val KEY_CONCURRENCY = "concurrency"
+        const val KEY_OCR_ENGINE = "ocrEngine" // "mlkit" / "rapidocr"
         const val CHANNEL_ID = "import_pipeline"
 
         fun enqueue(
@@ -58,7 +59,8 @@ class ImportPipelineWorker(
             sourceName: String,
             parseMode: String,
             providerId: Long?,
-            concurrency: Int
+            concurrency: Int,
+            ocrEngine: String = "mlkit"
         ): UUID {
             val request = OneTimeWorkRequestBuilder<ImportPipelineWorker>()
                 .setInputData(
@@ -69,7 +71,8 @@ class ImportPipelineWorker(
                         KEY_SOURCE_NAME to sourceName,
                         KEY_PARSE_MODE to parseMode,
                         KEY_PROVIDER_ID to providerId,
-                        KEY_CONCURRENCY to concurrency
+                        KEY_CONCURRENCY to concurrency,
+                        KEY_OCR_ENGINE to ocrEngine
                     )
                 )
                 .setConstraints(Constraints.NONE)
@@ -110,7 +113,12 @@ class ImportPipelineWorker(
                 updateJob(jobId) {
                     it.copy(stage = "INGEST", message = "正在识别文件内容", totalUnits = 0, doneUnits = 0)
                 }
-                val text = DocumentIngestor(applicationContext).ingest(Uri.parse(uriStr)) { p ->
+                val ocr = if (inputData.getString(KEY_OCR_ENGINE) == "rapidocr") {
+                    com.examhelper.shua.data.ocr.RapidOcrEngine(applicationContext)
+                } else {
+                    com.examhelper.shua.data.ocr.MlKitOcrEngine()
+                }
+                val text = DocumentIngestor(applicationContext, ocr).ingest(Uri.parse(uriStr)) { p ->
                     runCatching {
                         setForeground(foregroundInfo(p.message, p.current, p.total))
                     }

@@ -58,14 +58,11 @@ fun BankListScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("刷了个题") },
-                actions = {
-                    IconButton(onClick = onSearch) {
-                        Icon(Icons.Filled.Search, contentDescription = "搜索")
-                    }
+            com.examhelper.shua.ui.theme.CompactTopBar(title = "刷了个题") {
+                IconButton(onClick = onSearch) {
+                    Icon(Icons.Filled.Search, contentDescription = "搜索")
                 }
-            )
+            }
         },
         floatingActionButton = {
             Box {

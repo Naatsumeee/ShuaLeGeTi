@@ -20,8 +20,11 @@ class UsageAcc(
     var out: Long = 0
 ) {
     fun add(u: com.examhelper.shua.data.llm.ChatUsage) {
-        hit += u.cacheHitTokens
-        miss += u.cacheMissTokens
+        val hitTokens = u.normalizedCacheHit()
+        hit += hitTokens
+        // 未命中 = 总输入 - 命中；原生 miss 字段优先
+        miss += if (u.cacheMissTokens > 0) u.cacheMissTokens
+        else (u.promptTokens - hitTokens).coerceAtLeast(0)
         out += u.completionTokens
     }
 

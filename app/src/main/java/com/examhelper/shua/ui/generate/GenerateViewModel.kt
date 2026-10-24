@@ -33,7 +33,9 @@ class GenerateViewModel(
         val primaryName: String? = null,
         val sanSheng: Boolean = false,
         val concurrency: Int = 3,
-        val job: GenerateJob? = null
+        val job: GenerateJob? = null,
+        /** 生成过程日志 */
+        val log: List<String> = emptyList()
     ) {
         val running: Boolean get() = job?.stage == "RUNNING"
         val answerCoverage: Int
@@ -50,9 +52,14 @@ class GenerateViewModel(
             reloadStatics()
         }
         viewModelScope.launch {
+            var lastMessage: String? = null
             jobDao.observe(bankId).collect { job ->
                 if (job != null) {
-                    _state.value = _state.value.copy(job = job)
+                    val newLog = if (job.message != null && job.message != lastMessage) {
+                        lastMessage = job.message
+                        _state.value.log + job.message
+                    } else _state.value.log
+                    _state.value = _state.value.copy(job = job, log = newLog)
                     reloadStatics()
                 }
             }

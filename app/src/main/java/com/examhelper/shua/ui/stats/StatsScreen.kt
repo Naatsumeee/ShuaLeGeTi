@@ -106,7 +106,7 @@ fun StatsScreen() {
     val heat by vm.heat.collectAsState()
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("刷题统计") }) }
+        topBar = { com.examhelper.shua.ui.theme.CompactTopBar(title = "刷题统计") }
     ) { padding ->
         LazyColumn(
             Modifier.fillMaxSize().padding(padding),

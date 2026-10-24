@@ -53,6 +53,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.examhelper.shua.data.db.Question
 import com.examhelper.shua.data.db.QuestionType
@@ -351,7 +352,11 @@ private fun QuestionBody(q: Question, state: StudyUiState, vm: StudyViewModel) {
                     }
                     Text(
                         "参考答案：${q.answer}" + (contentPreview?.let { "（$it）" } ?: ""),
-                        style = MaterialTheme.typography.titleMedium
+                        style = androidx.compose.ui.text.TextStyle(
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Serif,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                            fontSize = 18.sp
+                        ).merge(MaterialTheme.typography.titleMedium)
                     )
                     if (q.aiGenerated) {
                         Text(

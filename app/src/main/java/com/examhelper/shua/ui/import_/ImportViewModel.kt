@@ -39,6 +39,8 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
         val error: String? = null,
         val providersReady: Boolean = false,
         val concurrency: Int = 4,
+        /** 本次导入使用的 OCR 引擎 */
+        val ocrEngine: String = com.examhelper.shua.data.settings.OcrEngine.ML_KIT,
         /** 分析过程日志（最新在下） */
         val log: List<String> = emptyList()
     )
@@ -117,7 +119,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /** 启动后台流水线 */
-    fun startPipeline(parseMode: String) {
+    fun startPipeline(parseMode: String, ocrEngine: String = _state.value.ocrEngine) {
         val uri = _state.value.pendingUri ?: return
         val jobId = UUID.randomUUID().toString().take(18)
         val s = _state.value
@@ -139,11 +141,16 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                 sourceName = s.sourceName,
                 parseMode = parseMode,
                 providerId = provider?.id,
-                concurrency = s.concurrency
+                concurrency = s.concurrency,
+                ocrEngine = ocrEngine
             )
             _state.value = _state.value.copy(stage = Stage.RUNNING, jobId = jobId, pendingUri = null)
             observeJob(jobId)
         }
+    }
+
+    fun setOcrEngine(v: String) {
+        _state.value = _state.value.copy(ocrEngine = v)
     }
 
     private fun observeJob(jobId: String) {

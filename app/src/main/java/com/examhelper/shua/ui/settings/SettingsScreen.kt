@@ -58,7 +58,7 @@ fun SettingsScreen() {
     var showAdd by remember { mutableStateOf(false) }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("设置") }) },
+        topBar = { com.examhelper.shua.ui.theme.CompactTopBar(title = "设置") },
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = { showAdd = true },
@@ -135,10 +135,10 @@ fun SettingsScreen() {
                         }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(selected = ui.ocrEngine == OcrEngine.RAPID_OCR, onClick = null, enabled = false)
+                        androidx.compose.material3.RadioButton(selected = ui.ocrEngine == OcrEngine.RAPID_OCR, onClick = { vm.setOcrEngine(OcrEngine.RAPID_OCR) })
                         Column {
-                            Text("RapidOCR 高精度（即将上线）")
-                            Text("PP-OCR 模型，复杂扫描件准确率更高", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                            Text("RapidOCR 高精度（已内置）")
+                            Text("PP-OCRv3 离线模型，扫描件/双栏识别更准，导入时可选", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                         }
                     }
                 }

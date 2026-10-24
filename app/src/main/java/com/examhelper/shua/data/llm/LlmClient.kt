@@ -29,14 +29,22 @@ data class ChatCompletionRequest(
     data class ResponseFormat(val type: String = "json_object")
 }
 
-/** 计费用量（DeepSeek/OpenAI 兼容字段） */
+/** 计费用量（DeepSeek 原生字段 + OpenAI 兼容 prompt_tokens_details 回退） */
 @Serializable
 data class ChatUsage(
     @SerialName("prompt_tokens") val promptTokens: Int = 0,
     @SerialName("completion_tokens") val completionTokens: Int = 0,
     @SerialName("prompt_cache_hit_tokens") val cacheHitTokens: Int = 0,
-    @SerialName("prompt_cache_miss_tokens") val cacheMissTokens: Int = 0
-)
+    @SerialName("prompt_cache_miss_tokens") val cacheMissTokens: Int = 0,
+    @SerialName("prompt_tokens_details") val promptTokensDetails: PromptTokensDetails? = null
+) {
+    @Serializable
+    data class PromptTokensDetails(@SerialName("cached_tokens") val cachedTokens: Int = 0)
+
+    /** 归一化命中数：DeepSeek 原生字段优先，缺失时回退 OpenAI 的 cached_tokens */
+    fun normalizedCacheHit(): Int =
+        if (cacheHitTokens > 0) cacheHitTokens else (promptTokensDetails?.cachedTokens ?: 0)
+}
 
 class ChatResult(val content: String, val usage: ChatUsage)
 

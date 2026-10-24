@@ -66,7 +66,16 @@ private val LightColors = lightColorScheme(
     outline = InkFaint,
     outlineVariant = Color(0xFFC9BFA9),
     inverseSurface = Ink,
-    inverseOnSurface = PaperBg
+    inverseOnSurface = PaperBg,
+    // M3 容器角色默认是薰衣草紫系，统一替换为暖纸色
+    surfaceTint = Accent,
+    surfaceDim = Color(0xFFDED7C5),
+    surfaceBright = Color(0xFFFAF6EC),
+    surfaceContainerLowest = Color(0xFFF8F4EA),
+    surfaceContainerLow = Color(0xFFF2EDDF),
+    surfaceContainer = Color(0xFFEEE8D9),
+    surfaceContainerHigh = Color(0xFFE9E3D3),
+    surfaceContainerHighest = Color(0xFFE3DCCA)
 )
 
 private val DarkColors = darkColorScheme(
@@ -95,17 +104,23 @@ private val DarkColors = darkColorScheme(
     outline = NightTextSoft,
     outlineVariant = Color(0xFF4A443A),
     inverseSurface = PaperBg,
-    inverseOnSurface = Ink
+    inverseOnSurface = Ink,
+    surfaceTint = NightAccent,
+    surfaceDim = Color(0xFF14120F),
+    surfaceBright = Color(0xFF2C2822),
+    surfaceContainerLowest = Color(0xFF171511),
+    surfaceContainerLow = Color(0xFF1E1B16),
+    surfaceContainer = Color(0xFF221F1A),
+    surfaceContainerHigh = Color(0xFF26221C),
+    surfaceContainerHighest = Color(0xFF302B24)
 )
 
-// 衬线标题 + 衬线小标注（强调/解释性文字）+ 无衬线正文
+// 衬线仅用于大标题/展示级数字与解释性标注；交互标题与按钮用默认无衬线
 private fun editorialTypography(dark: Boolean) = Typography(
     displayLarge = serifStyle(48.sp, dark),
     displayMedium = serifStyle(42.sp, dark),
     headlineLarge = serifStyle(34.sp, dark),
     headlineMedium = serifStyle(28.sp, dark),
-    titleMedium = serifStyle(18.sp, dark),
-    titleSmall = serifStyle(15.sp, dark),
     labelMedium = serifLabelStyle(13.sp, dark)
 )
 

@@ -116,6 +116,15 @@ fun GenerateScreen(
                         job.errorMessage?.let {
                             Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                         }
+                        // 生成过程日志
+                        if (state.log.isNotEmpty()) {
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text("生成过程", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.outline)
+                                state.log.takeLast(6).forEach { line ->
+                                    Text(line, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                                }
+                            }
+                        }
                     }
                 }
             }

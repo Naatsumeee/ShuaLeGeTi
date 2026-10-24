@@ -116,7 +116,11 @@ class BankDetailViewModel @JvmOverloads constructor(
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             runCatching {
                 val file = bankRepo.exportBank(bankId, includeAiGenerated) ?: error("题库不存在")
-                val text = com.examhelper.shua.data.model.JsonCodec.json.encodeToString(file)
+                // 换行缩进美化，便于用户阅读与二次编辑
+                val text = kotlinx.serialization.json.Json {
+                    prettyPrint = true
+                    ignoreUnknownKeys = true
+                }.encodeToString(file)
                 context.contentResolver.openOutputStream(uri)?.use { out ->
                     out.write(text.toByteArray(Charsets.UTF_8))
                 } ?: error("无法写入文件")
