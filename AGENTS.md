@@ -70,6 +70,7 @@ Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）�
 - 中转 API 可能不透传缓存字段 → token 命中显示 0；已做 OpenAI `prompt_tokens_details.cached_tokens` 回退解析
 - DeepSeek 模型名现为 deepseek-flash / deepseek-v4-pro（旧 deepseek-chat 已下线）
 - APK 体积：debug 全 ABI ~190MB；v1.0.0 起启用 **ABI splits**（arm64-v8a / armeabi-v7a / x86_64），release 用 debug 签名（未配置正式签名）
+- **APK 一律不入库**（v1.0.4 起）：`/app-*.apk` 已被 `.gitignore` 忽略，分发只走 GitHub Releases；但 `启动模拟器.bat` 仍读根目录 APK，所以本地构建后要手动 `cp app/build/outputs/apk/debug/app-<abi>-debug.apk .`
 - 样例题库在 `QuestionBankExample/`（gitignore，版权资料）；`app-debug*.apk` 也 gitignore
 
 ## 常用命令
