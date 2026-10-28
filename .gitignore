@@ -1,8 +1,13 @@
 # 样例题库（版权资料 + 超过 GitHub 100MB 单文件限制，不入库）
 QuestionBankExample/
 
-# 构建产物（模拟器启动脚本用）
+# 构建产物：APK 一律不入库（走 GitHub Releases 分发）
+# 根目录的 app-<abi>-debug.apk 是本地装机用的，启动模拟器.bat 会优先找它
 app-debug*.apk
+/app-*.apk
+
+# 本地临时草稿
+.tmp-*.md
 
 # Android / Gradle
 .gradle/
@@ -24,3 +29,6 @@ Desktop.ini
 .DS_Store
 
 # 第三方 OCR 源码克隆（构建用预编译 AAR，不入库）
+
+# 本地视觉抽查截图（临时）
+.shots/
