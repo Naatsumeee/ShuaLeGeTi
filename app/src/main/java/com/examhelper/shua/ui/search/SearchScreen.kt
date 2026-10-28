@@ -1,35 +1,41 @@
 package com.examhelper.shua.ui.search
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -38,6 +44,14 @@ import com.examhelper.shua.data.db.QuestionDao
 import com.examhelper.shua.data.db.Question
 import com.examhelper.shua.data.model.JsonCodec
 import com.examhelper.shua.ui.bank.typeLabel
+import com.examhelper.shua.ui.theme.ChipTone
+import com.examhelper.shua.ui.theme.CompactTopBar
+import com.examhelper.shua.ui.theme.PaperCard
+import com.examhelper.shua.ui.theme.SemanticChip
+import com.examhelper.shua.ui.theme.safeBottomPadding
+import com.examhelper.shua.ui.theme.safeTopPadding
+import com.examhelper.shua.ui.theme.serifTitle
+import com.examhelper.shua.ui.theme.shuaColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -83,53 +97,98 @@ class SearchViewModel : ViewModel() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SearchScreen(onBack: () -> Unit) {
     val vm: SearchViewModel = viewModel()
     val state by vm.state.collectAsState()
+    val extra = shuaColors
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("全库搜索") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                }
-            )
-        }
-    ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.fillMaxSize().safeTopPadding().safeBottomPadding(minBottom = 6.dp)) {
+        CompactTopBar(title = "全库搜索", onBack = onBack)
+        Column(
+            Modifier.fillMaxSize().padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
             OutlinedTextField(
                 value = state.keyword,
                 onValueChange = vm::updateKeyword,
-                label = { Text("搜索题干 / 选项 / 解析（至少 2 个字）") },
+                placeholder = { Text("搜索题干 / 选项 / 解析（≥2 字）", style = MaterialTheme.typography.bodySmall) },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
+                shape = RoundedCornerShape(14.dp),
                 trailingIcon = {
                     IconButton(onClick = vm::search) {
-                        Icon(Icons.Filled.Search, contentDescription = "搜索")
+                        Icon(Icons.Filled.Search, contentDescription = "搜索", tint = extra.terracotta)
                     }
                 }
             )
-            if (state.results.isEmpty() && !state.searching && state.keyword.length >= 2) {
-                Text("没有匹配结果", color = MaterialTheme.colorScheme.outline)
-            }
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(state.results, key = { it.id }) { row ->
-                    Card(onClick = { vm.openDetail(row.id) }, modifier = Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Row {
-                                Text(typeLabel(row.type), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                                androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
-                                Text(row.bankName, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+
+            when {
+                state.searching -> Box(Modifier.fillMaxWidth().padding(top = 24.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp, color = extra.terracotta)
+                }
+                state.results.isEmpty() && state.keyword.length >= 2 -> Box(
+                    Modifier.fillMaxWidth().padding(top = 36.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("没有匹配结果", style = serifTitle(16.sp, FontWeight.Medium))
+                        Text(
+                            "换个关键词试试，至少两个字",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                }
+                state.results.isEmpty() -> Box(
+                    Modifier.fillMaxWidth().padding(top = 36.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "在全部题库中检索题干、选项与解析",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                }
+                else -> {
+                    Text(
+                        "找到 ${state.results.size} 条",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.padding(start = 4.dp)
+                    )
+                    LazyColumn(
+                        Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(7.dp),
+                        contentPadding = PaddingValues(bottom = 20.dp)
+                    ) {
+                        items(state.results, key = { it.id }) { row ->
+                            PaperCard(
+                                Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(15.dp),
+                                onClick = { vm.openDetail(row.id) }
+                            ) {
+                                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                        SemanticChip(typeLabel(row.type), ChipTone.Brand)
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            row.bankName,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.outline,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+                                    Text(
+                                        row.stem,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
-                            Text(
-                                row.stem.take(60) + if (row.stem.length > 60) "…" else "",
-                                style = MaterialTheme.typography.bodyMedium
-                            )
                         }
                     }
                 }
@@ -140,21 +199,35 @@ fun SearchScreen(onBack: () -> Unit) {
     state.detail?.let { q ->
         AlertDialog(
             onDismissRequest = vm::closeDetail,
-            title = { Text(typeLabel(q.type) + (q.subtype?.let { " · $it" } ?: "")) },
+            shape = RoundedCornerShape(22.dp),
+            containerColor = MaterialTheme.colorScheme.surface,
+            title = { Text(typeLabel(q.type) + (q.subtype?.let { " · $it" } ?: ""), style = serifTitle(17.sp, FontWeight.Medium)) },
             text = {
-                Column {
+                Column(
+                    Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     q.sharedStem?.let {
-                        Text("【共用题干】$it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                        Text("共用题干", style = MaterialTheme.typography.labelSmall, color = extra.amber)
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Text(q.stem, style = MaterialTheme.typography.bodyMedium)
                     JsonCodec.decodeOptions(q.optionsJson).forEach {
                         Text("${it.key}. ${it.text}", style = MaterialTheme.typography.bodySmall)
                     }
-                    q.answer?.let { Text("答案：$it", color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 6.dp)) }
-                    q.analysis?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline) }
+                    q.answer?.let {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            SemanticChip("答案", ChipTone.Brand)
+                            Spacer(Modifier.width(6.dp))
+                            Text(it, style = MaterialTheme.typography.bodyMedium, color = extra.terracotta, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                    q.analysis?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             },
-            confirmButton = { TextButton(onClick = vm::closeDetail) { Text("关闭") } }
+            confirmButton = { TextButton(onClick = vm::closeDetail) { Text("关闭", color = extra.terracotta) } }
         )
     }
 }

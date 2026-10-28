@@ -1,28 +1,30 @@
 package com.examhelper.shua.ui.wrongbook
 
 import android.app.Application
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -32,6 +34,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.AndroidViewModel
@@ -42,6 +46,13 @@ import com.examhelper.shua.data.db.FavoriteRecord
 import com.examhelper.shua.data.db.Question
 import com.examhelper.shua.data.db.WrongRecord
 import com.examhelper.shua.ui.bank.typeLabel
+import com.examhelper.shua.ui.theme.ChipTone
+import com.examhelper.shua.ui.theme.CompactTopBar
+import com.examhelper.shua.ui.theme.MonoText
+import com.examhelper.shua.ui.theme.PaperCard
+import com.examhelper.shua.ui.theme.SemanticChip
+import com.examhelper.shua.ui.theme.serifTitle
+import com.examhelper.shua.ui.theme.shuaColors
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -123,81 +134,126 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     fun reviveKill(questionId: Long) = viewModelScope.launch { studyRepo.reviveKill(questionId) }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WrongBookScreen(onOpenBank: (Long) -> Unit) {
+fun WrongBookScreen(
+    onOpenBank: (Long) -> Unit,
+    contentPadding: PaddingValues = PaddingValues(0.dp)
+) {
     val vm: LibraryViewModel = viewModel()
     val lists by vm.lists.collectAsState()
     val selectedBank by vm.selectedBank.collectAsState()
     var tab by remember { mutableIntStateOf(0) }
     var detail by remember { mutableStateOf<Question?>(null) }
+    val extra = shuaColors
 
-    Scaffold(
-        topBar = { com.examhelper.shua.ui.theme.CompactTopBar(title = "错题本") }
-    ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
-            // 两行页签：数字加粗放大（主题红）+ 小字标签
-            val tabDefs = listOf(
-                "未掌握" to lists.wrong.size,
-                "已掌握" to lists.mastered.size,
-                "收藏" to lists.favorites.size,
-                "斩题墙" to lists.kills.size
-            )
-            Row(Modifier.fillMaxWidth()) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(top = contentPadding.calculateTopPadding() + 4.dp)
+    ) {
+        CompactTopBar(
+            title = "错题本",
+        )
+
+        // 数字 + 小字标签的分段控件
+        val tabDefs = listOf(
+            "未掌握" to lists.wrong.size,
+            "已掌握" to lists.mastered.size,
+            "收藏" to lists.favorites.size,
+            "斩题墙" to lists.kills.size
+        )
+        PaperCard(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            shape = RoundedCornerShape(18.dp),
+            container = MaterialTheme.colorScheme.surface,
+            borderColor = extra.creamLine
+        ) {
+            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                 tabDefs.forEachIndexed { i, (label, count) ->
                     val selected = tab == i
                     Column(
-                        Modifier.weight(1f)
+                        Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
                             .clickable { tab = i }
-                            .padding(vertical = 6.dp),
+                            .padding(vertical = 4.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
                             "$count",
-                            style = androidx.compose.ui.text.TextStyle(
-                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                                fontSize = 20.sp,
-                                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
-                            )
+                            style = serifTitle(20.sp, FontWeight.Medium),
+                            color = if (selected) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.outline
                         )
                         Text(
                             label,
-                            style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
-                            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                            color = if (selected) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.outline,
+                            maxLines = 1
                         )
                     }
                 }
             }
-            // 题库筛选
-            if (lists.bankNames.isNotEmpty()) {
-                Row(
-                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    androidx.compose.material3.FilterChip(
+        }
+
+        // 题库筛选
+        if (lists.bankNames.isNotEmpty()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = selectedBank == null,
+                    onClick = { vm.selectBank(null) },
+                    label = { Text("全部题库", style = MaterialTheme.typography.labelMedium) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    ),
+                    border = FilterChipDefaults.filterChipBorder(
+                        enabled = true,
                         selected = selectedBank == null,
-                        onClick = { vm.selectBank(null) },
-                        label = { Text("全部题库") }
+                        borderColor = extra.creamLine,
+                        selectedBorderColor = extra.terracotta.copy(alpha = 0.4f)
                     )
-                    lists.bankNames.forEach { (id, name) ->
-                        androidx.compose.material3.FilterChip(
+                )
+                lists.bankNames.forEach { (id, name) ->
+                    FilterChip(
+                        selected = selectedBank == id,
+                        onClick = { vm.selectBank(id) },
+                        label = { Text(name.take(10), maxLines = 1, style = MaterialTheme.typography.labelMedium) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = true,
                             selected = selectedBank == id,
-                            onClick = { vm.selectBank(id) },
-                            label = { Text(name.take(10), maxLines = 1) }
+                            borderColor = extra.creamLine,
+                            selectedBorderColor = extra.terracotta.copy(alpha = 0.4f)
                         )
-                    }
+                    )
                 }
             }
-            val bankFilter: (Question?) -> Boolean = { q ->
-                selectedBank == null || q?.bankId == selectedBank
-            }
-            val entries = when (tab) {
-                0 -> lists.wrong.filter { bankFilter(it.second) }
-                1 -> lists.mastered.filter { bankFilter(it.second) }
-                2 -> lists.favorites.filter { bankFilter(it.second) }
-                else -> lists.kills.filter { bankFilter(it.second) }
-            }
-            if (entries.isEmpty()) {
+        } else {
+            Spacer(Modifier.height(6.dp))
+        }
+
+        val bankFilter: (Question?) -> Boolean = { q ->
+            selectedBank == null || q?.bankId == selectedBank
+        }
+        val entries = when (tab) {
+            0 -> lists.wrong.filter { bankFilter(it.second) }
+            1 -> lists.mastered.filter { bankFilter(it.second) }
+            2 -> lists.favorites.filter { bankFilter(it.second) }
+            else -> lists.kills.filter { bankFilter(it.second) }
+        }
+        if (entries.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
                 Text(
                     when (tab) {
                         0 -> "还没有错题，刷题去吧！"
@@ -205,33 +261,44 @@ fun WrongBookScreen(onOpenBank: (Long) -> Unit) {
                         2 -> "还没有收藏，做题时点右上角星标"
                         else -> "还没有斩过的题——做题时点剪刀图标斩掉已掌握的题"
                     },
-                    Modifier.fillMaxWidth().padding(24.dp),
+                    Modifier.fillMaxWidth().padding(32.dp),
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.outline
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-            } else {
-                LazyColumn(
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(entries, key = { it.second?.id ?: it.hashCode().toLong() }) { (meta, q) ->
-                        if (q == null) return@items
-                        Card(onClick = { detail = q }, Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Row {
-                                    Text(typeLabel(q.type), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                                    Spacer(Modifier.weight(1f))
-                                    when (meta) {
-                                        is WrongRecord -> Text("错 ${meta.wrongCount} 次", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
-                                        is FavoriteRecord -> Text("收藏", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
-                                        is com.examhelper.shua.data.db.KillRecord -> Text("已斩", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
-                                    }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 100.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(entries, key = { it.second?.id ?: it.hashCode().toLong() }) { (meta, q) ->
+                    if (q == null) return@items
+                    PaperCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        onClick = { detail = q }
+                    ) {
+                        Column(Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                SemanticChip(typeLabel(q.type), ChipTone.Brand)
+                                q.chapter?.let {
+                                    Spacer(Modifier.width(6.dp))
+                                    SemanticChip(it.take(10), ChipTone.Neutral)
                                 }
-                                Text(
-                                    q.stem.take(50) + if (q.stem.length > 50) "…" else "",
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
+                                Spacer(Modifier.weight(1f))
+                                when (meta) {
+                                    is WrongRecord -> SemanticChip("错 ${meta.wrongCount} 次", ChipTone.Sage)
+                                    is FavoriteRecord -> SemanticChip("收藏", ChipTone.Amber)
+                                    is com.examhelper.shua.data.db.KillRecord -> SemanticChip("已斩", ChipTone.Neutral)
+                                }
                             }
+                            Text(
+                                q.stem.take(60) + if (q.stem.length > 60) "…" else "",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                lineHeight = 21.sp
+                            )
                         }
                     }
                 }
@@ -242,15 +309,25 @@ fun WrongBookScreen(onOpenBank: (Long) -> Unit) {
     detail?.let { q ->
         AlertDialog(
             onDismissRequest = { detail = null },
-            title = { Text(typeLabel(q.type)) },
+            containerColor = MaterialTheme.colorScheme.surface,
+            title = { Text(typeLabel(q.type), style = serifTitle(18.sp, FontWeight.Medium)) },
             text = {
-                Column {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(q.stem, style = MaterialTheme.typography.bodyMedium)
                     q.answer?.let {
-                        Text("答案：$it", Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.primary)
+                        Text(
+                            "参考答案：$it",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Medium
+                        )
                     }
                     q.analysis?.let {
-                        Text(it, Modifier.padding(top = 4.dp), style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             },
@@ -269,7 +346,7 @@ fun WrongBookScreen(onOpenBank: (Long) -> Unit) {
                         TextButton(onClick = {
                             vm.removeWrong(q.id)
                             detail = null
-                        }) { Text("移出错题本") }
+                        }) { Text("移出错题本", color = extra.sage) }
                     }
                 }
             },

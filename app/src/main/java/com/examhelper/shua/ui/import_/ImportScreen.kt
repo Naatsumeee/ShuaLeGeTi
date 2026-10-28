@@ -3,33 +3,33 @@ package com.examhelper.shua.ui.import_
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -39,16 +39,30 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.examhelper.shua.data.db.QuestionType
 import com.examhelper.shua.data.model.ParsedLine
 import com.examhelper.shua.ui.bank.typeLabel
+import com.examhelper.shua.ui.theme.ChipTone
+import com.examhelper.shua.ui.theme.CompactTopBar
+import com.examhelper.shua.ui.theme.GlassSurface
+import com.examhelper.shua.ui.theme.PaperCard
+import com.examhelper.shua.ui.theme.SectionLabel
+import com.examhelper.shua.ui.theme.SemanticChip
+import com.examhelper.shua.ui.theme.isCompactWidth
+import com.examhelper.shua.ui.theme.safeBottomPadding
+import com.examhelper.shua.ui.theme.safeTopPadding
+import com.examhelper.shua.ui.theme.serifTitle
+import com.examhelper.shua.ui.theme.shuaColors
 import java.io.File
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ImportScreen(
     jobId: String? = null,
@@ -57,6 +71,7 @@ fun ImportScreen(
     val vm: ImportViewModel = viewModel()
     val state by vm.state.collectAsState()
     val context = LocalContext.current
+    val extra = shuaColors
 
     LaunchedEffect(jobId) {
         if (jobId != null) vm.resumeJob(jobId)
@@ -85,131 +100,132 @@ fun ImportScreen(
         if (uri != null) vm.importBankFile(uri)
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("导入题库") },
-                navigationIcon = {
-                    IconButton(onClick = onDone) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                }
-            )
-        }
-    ) { padding ->
+    Column(Modifier.fillMaxSize().safeTopPadding().safeBottomPadding(minBottom = 6.dp)) {
+        CompactTopBar(
+            title = when (state.stage) {
+                ImportViewModel.Stage.IDLE -> "导入题库"
+                ImportViewModel.Stage.CHOOSING_PARSE -> "选择解析方式"
+                ImportViewModel.Stage.RUNNING -> "解析中"
+                else -> "确认导入"
+            },
+            onBack = onDone
+        )
+
         when (state.stage) {
             ImportViewModel.Stage.IDLE -> Column(
-                Modifier.fillMaxSize().padding(padding).padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("选择题库来源", style = MaterialTheme.typography.titleMedium)
                 OutlinedTextField(
                     value = state.bankName,
                     onValueChange = vm::updateBankName,
                     label = { Text("题库名称（可选）") },
                     modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp)
                 )
-                Button(
-                    onClick = {
-                        runCatching {
-                            if (android.os.Build.VERSION.SDK_INT >= 33) notifPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                PrimaryAction("选择文件 · PDF / docx / 图片", extra.terracotta) {
+                    runCatching {
+                        if (android.os.Build.VERSION.SDK_INT >= 33) {
+                            notifPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
                         }
-                        filePicker.launch(arrayOf(
+                    }
+                    filePicker.launch(
+                        arrayOf(
                             "application/pdf",
                             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                             "image/*"
-                        ))
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("选择文件（PDF / docx / 图片）") }
-                OutlinedButton(
-                    onClick = {
-                        val file = File(context.cacheDir, "camera_${System.currentTimeMillis()}.jpg")
-                        val uri = FileProvider.getUriForFile(
-                            context, context.packageName + ".fileprovider", file
                         )
+                    )
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SecondaryAction("拍照导入", Modifier.weight(1f)) {
+                        // 拍照输出统一落到 cacheDir/temp/camera（FileProvider 只暴露这一个子目录）
+                        val file = com.examhelper.shua.data.storage.AppStorage.newCameraPhoto(context)
+                        val uri = FileProvider.getUriForFile(context, context.packageName + ".fileprovider", file)
                         cameraUri = uri
                         cameraLauncher.launch(uri)
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("拍照导入") }
-                OutlinedButton(
-                    onClick = { jsonPicker.launch(arrayOf("application/json")) },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("导入标准题库文件（.json，本 App 导出格式）") }
-                Text(
-                    "扫描 PDF 自动逐页离线 OCR；解析在后台进行，切出应用/锁屏不会中断（状态栏有进度通知），完成后回来确认入库。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline
-                )
-                state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    }
+                    SecondaryAction("导入 .json", Modifier.weight(1f)) {
+                        jsonPicker.launch(arrayOf("application/json"))
+                    }
+                }
+                GlassSurface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), elevation = 8.dp) {
+                    Row(Modifier.padding(13.dp), verticalAlignment = Alignment.Top) {
+                        SemanticChip("提示", ChipTone.Amber)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "扫描 PDF 会逐页离线 OCR；解析在后台运行，切出应用或锁屏都不会中断，完成后状态栏提醒。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                state.error?.let { Text(it, color = extra.sage, style = MaterialTheme.typography.bodySmall) }
             }
 
             ImportViewModel.Stage.CHOOSING_PARSE -> Column(
-                Modifier.fillMaxSize().padding(padding).padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("已选择：${state.sourceName}", style = MaterialTheme.typography.titleMedium)
                 OutlinedTextField(
                     value = state.bankName,
                     onValueChange = vm::updateBankName,
                     label = { Text("题库名称") },
                     modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp)
                 )
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("OCR 引擎", style = MaterialTheme.typography.titleSmall)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            androidx.compose.material3.FilterChip(
-                                selected = state.ocrEngine == "mlkit",
-                                onClick = { vm.setOcrEngine("mlkit") },
-                                label = { Text("ML Kit · 快") }
-                            )
-                            androidx.compose.material3.FilterChip(
-                                selected = state.ocrEngine == "rapidocr",
-                                onClick = { vm.setOcrEngine("rapidocr") },
-                                label = { Text("RapidOCR · 精度高") }
-                            )
+                PaperCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text("OCR 引擎", style = serifTitle(15.sp, FontWeight.Medium), modifier = Modifier.weight(1f))
+                            SemanticChip(if (state.ocrEngine == "mlkit") "ML Kit" else "RapidOCR", ChipTone.Brand)
+                        }
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            EngineTab("ML Kit · 快", state.ocrEngine == "mlkit", Modifier.weight(1f)) { vm.setOcrEngine("mlkit") }
+                            EngineTab("RapidOCR · 准", state.ocrEngine == "rapidocr", Modifier.weight(1f)) { vm.setOcrEngine("rapidocr") }
                         }
                         Text(
-                            "扫描件质量差、双栏密集或 ML Kit 识别不理想时建议用 RapidOCR（PP-OCRv3，离线）",
-                            style = MaterialTheme.typography.labelMedium,
+                            "扫描件质量差、双栏密集或 ML Kit 识别不理想时建议 RapidOCR（PP-OCRv3，离线）",
+                            style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.outline
                         )
-                        Button(onClick = { vm.startPipeline("ai") }, modifier = Modifier.fillMaxWidth()) {
-                            Text("AI 智能解析（推荐 · 后台运行）")
-                        }
-                        Text(
-                            if (state.providersReady)
-                                "主模型解析，${state.concurrency} 路并行，可切出应用。支持 A1/A2/A3/B 型题分组识别。"
-                            else
-                                "尚未配置模型——请先到\"设置\"添加，或改用离线解析。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (state.providersReady) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.error
-                        )
-                        OutlinedButton(
-                            onClick = { vm.startPipeline("offline") },
-                            modifier = Modifier.fillMaxWidth()
-                        ) { Text("离线快解析（规整文本）") }
                     }
                 }
-                OutlinedButton(onClick = vm::cancelChoosing, modifier = Modifier.fillMaxWidth()) {
-                    Text("返回重选")
+                PrimaryAction("AI 智能解析（推荐 · 后台运行）", extra.terracotta) { vm.startPipeline("ai") }
+                Text(
+                    if (state.providersReady)
+                        "主模型解析，${state.concurrency} 路并行，可切出应用。支持 A1/A2/A3/B 型题分组识别。"
+                    else
+                        "尚未配置模型——请先到设置添加，或改用离线解析。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (state.providersReady) MaterialTheme.colorScheme.outline else extra.sage
+                )
+                SecondaryAction("离线快解析（规整文本）", Modifier.fillMaxWidth()) { vm.startPipeline("offline") }
+                TextButton(onClick = vm::cancelChoosing, modifier = Modifier.fillMaxWidth()) {
+                    Text("返回重选", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
-            ImportViewModel.Stage.RUNNING -> Column(
-                Modifier.fillMaxSize().padding(padding).padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
+            ImportViewModel.Stage.RUNNING -> {
                 val job = state.job
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(Modifier.padding(end = 8.dp))
-                            Column(Modifier.weight(1f)) {
+                Column(
+                    Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(9.dp)
+                ) {
+                    GlassSurface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp), elevation = 10.dp) {
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(
+                                    Modifier.size(20.dp),
+                                    strokeWidth = 2.dp,
+                                    color = extra.terracotta
+                                )
+                                Spacer(Modifier.width(10.dp))
                                 Text(
                                     when (job?.stage) {
                                         "INGEST" -> "正在识别文件（OCR）…"
@@ -218,83 +234,119 @@ fun ImportScreen(
                                         "CANCELED" -> "已取消"
                                         else -> "准备中…"
                                     },
-                                    style = MaterialTheme.typography.titleSmall
+                                    style = serifTitle(15.sp, FontWeight.Medium)
                                 )
-                                job?.message?.let {
-                                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-                                }
                             }
-                        }
-                        if ((job?.totalUnits ?: 0) > 0) {
-                            LinearProgressIndicator(
-                                progress = { job!!.doneUnits.toFloat() / job.totalUnits },
-                                modifier = Modifier.fillMaxWidth()
-                            )
+                            job?.message?.let {
+                                Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            if (job != null && job.totalUnits > 0) {
+                                val total = job.totalUnits
+                                val done = job.doneUnits
+                                Box(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .height(6.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                                ) {
+                                    Box(
+                                        Modifier
+                                            .fillMaxWidth(done.toFloat() / total)
+                                            .height(6.dp)
+                                            .clip(CircleShape)
+                                            .background(extra.terracotta)
+                                    )
+                                }
+                                Text(
+                                    "$done/$total 段 · 已解析 ${job.parsedCount} 题",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                             Text(
-                                "${job!!.doneUnits}/${job.totalUnits} 段 · 已解析 ${job.parsedCount} 题",
-                                style = MaterialTheme.typography.bodySmall
+                                "后台运行中，可以切出应用或锁屏，回来继续。",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline
                             )
-                        }
-                        Text(
-                            "任务在后台运行：可以切出应用、锁屏甚至杀掉界面，回到这里继续。完成后通知栏会提醒。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                        if (job?.stage == "FAILED") {
-                            job.errorMessage?.let {
-                                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                            }
-                            Button(onClick = vm::resumeJob) { Text("重试") }
-                        } else {
-                            OutlinedButton(onClick = vm::cancelJob) { Text("取消任务") }
-                        }
-                        // 分析过程日志
-                        if (state.log.isNotEmpty()) {
-                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text("分析过程", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.outline)
-                                state.log.takeLast(6).forEach { line ->
-                                    Text(line, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                            if (job?.stage == "FAILED") {
+                                job.errorMessage?.let {
+                                    Text(it, color = extra.sage, style = MaterialTheme.typography.labelSmall)
                                 }
+                                SecondaryAction("重试", Modifier.fillMaxWidth()) { vm.resumeJob() }
+                            } else {
+                                SecondaryAction("取消任务", Modifier.fillMaxWidth()) { vm.cancelJob() }
                             }
                         }
                     }
-                }
-                if (state.preview.isNotEmpty()) {
-                    Text("已解析（实时）", style = MaterialTheme.typography.titleSmall)
-                    LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        itemsIndexed(state.preview.takeLast(100)) { i, q ->
-                            ParsedCard(state.preview.size - (state.preview.takeLast(100)).size + i + 1, q)
+                    if (state.log.isNotEmpty()) {
+                        state.log.takeLast(5).forEach { line ->
+                            Text(
+                                line,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
+                    }
+                    if (state.preview.isNotEmpty()) {
+                        SectionLabel("已解析（实时）", trailing = "${state.preview.size} 题")
+                        LazyColumn(
+                            Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                            contentPadding = PaddingValues(bottom = 20.dp)
+                        ) {
+                            itemsIndexed(state.preview.takeLast(100)) { i, q ->
+                                ParsedCard(state.preview.size - (state.preview.takeLast(100)).size + i + 1, q)
+                            }
+                        }
+                    } else {
+                        Spacer(Modifier.weight(1f))
                     }
                 }
             }
 
             ImportViewModel.Stage.PREVIEW, ImportViewModel.Stage.SAVING -> Column(
-                Modifier.fillMaxSize().padding(padding).padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("解析出 ${state.preview.size} 道题", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "解析出 ${state.preview.size} 道题",
+                            style = serifTitle(17.sp, FontWeight.Medium)
+                        )
                         state.job?.message?.let {
-                            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                            Text(
+                                it,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                     if (state.job?.stage == "FAILED" || state.job?.stage == "CANCELED") {
-                        TextButton(onClick = vm::resumeJob) { Text("补齐失败段") }
+                        TextButton(onClick = vm::resumeJob) { Text("补齐失败段", color = extra.terracotta) }
                     }
                 }
-                LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    itemsIndexed(state.preview) { i, q ->
-                        ParsedCard(i + 1, q)
-                    }
+                LazyColumn(
+                    Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(7.dp),
+                    contentPadding = PaddingValues(bottom = 6.dp)
+                ) {
+                    itemsIndexed(state.preview) { i, q -> ParsedCard(i + 1, q) }
                 }
                 if (state.stage == ImportViewModel.Stage.SAVING) {
                     Row(
-                        Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center,
+                        Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                        horizontalArrangement = Arrangement.Center,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        CircularProgressIndicator(Modifier.padding(4.dp)); Text("导入中…")
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = extra.terracotta)
+                        Spacer(Modifier.width(8.dp))
+                        Text("导入中…", style = MaterialTheme.typography.bodySmall)
                     }
                 } else {
                     OutlinedTextField(
@@ -302,66 +354,117 @@ fun ImportScreen(
                         onValueChange = vm::updateBankName,
                         label = { Text("题库名称") },
                         modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp)
                     )
-                    Button(
-                        onClick = { vm.save(onDone) },
-                        enabled = state.preview.isNotEmpty(),
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("确认导入 ${state.preview.size} 题") }
+                    PrimaryAction("确认导入 ${state.preview.size} 题", extra.terracotta, enabled = state.preview.isNotEmpty()) {
+                        vm.save(onDone)
+                    }
                 }
-                state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                state.error?.let { Text(it, color = extra.sage, style = MaterialTheme.typography.bodySmall) }
             }
         }
     }
 }
 
 @Composable
+private fun PrimaryAction(text: String, color: androidx.compose.ui.graphics.Color, enabled: Boolean = true, onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        shape = RoundedCornerShape(15.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = color)
+    ) { Text(text, style = MaterialTheme.typography.labelLarge) }
+}
+
+@Composable
+private fun SecondaryAction(text: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        modifier = modifier.heightIn(min = 48.dp),
+        shape = RoundedCornerShape(15.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, shuaColors.creamLine),
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
+    ) { Text(text, style = MaterialTheme.typography.labelLarge, maxLines = 1) }
+}
+
+@Composable
+private fun EngineTab(text: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val extra = shuaColors
+    Box(
+        modifier
+            .heightIn(min = 42.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (selected) extra.terracotta else MaterialTheme.colorScheme.surfaceVariant)
+            .then(Modifier.padding(0.dp))
+            .clickableTab(onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1
+        )
+    }
+}
+
+private fun Modifier.clickableTab(onClick: () -> Unit): Modifier =
+    this.then(Modifier.clickable(onClick = onClick))
+
+@Composable
 private fun ParsedCard(index: Int, q: ParsedLine) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row {
-                AssistChip(onClick = {}, label = {
-                    Text(
-                        runCatching { typeLabel(QuestionType.valueOf(q.type)) }.getOrDefault("单选") +
-                            (q.subtype?.let { " · $it" } ?: "")
-                    )
-                })
-                Spacer(Modifier.padding(2.dp))
-                if (q.answer != null) AssistChip(onClick = {}, label = { Text("有答案") })
-                else AssistChip(onClick = {}, label = { Text("无答案·待AI") })
-                q.chapter?.let {
-                    Spacer(Modifier.padding(2.dp))
-                    AssistChip(onClick = {}, label = { Text(it.take(10)) })
+    val extra = shuaColors
+    val compact = isCompactWidth()
+    PaperCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(15.dp)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    Modifier
+                        .size(21.dp)
+                        .clip(CircleShape)
+                        .background(extra.terracottaSoft),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("$index", style = MaterialTheme.typography.labelSmall, color = extra.terracotta)
+                }
+                SemanticChip(
+                    runCatching { typeLabel(QuestionType.valueOf(q.type)) }.getOrDefault("单选") +
+                        (q.subtype?.let { "·$it" } ?: ""),
+                    ChipTone.Brand
+                )
+                if (q.answer != null) SemanticChip("有答案", ChipTone.Neutral)
+                else SemanticChip("待AI", ChipTone.Amber)
+                if (!compact) {
+                    q.chapter?.let {
+                        SemanticChip(it.take(8), ChipTone.Neutral)
+                    }
                 }
             }
             q.sharedStem?.let {
                 Text(
-                    "[共用题干] ${it.take(40)}…",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.tertiary
+                    "共用题干 ${it.take(38)}…",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = extra.amber
                 )
             }
-            if (q.sharedOptions.isNotEmpty()) {
-                Text(
-                    "[共用选项] " + q.sharedOptions.joinToString("  ") { "${it.key}.${it.text.take(10)}" },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.tertiary
-                )
-            }
-            Text(
-                "$index. ${q.stem.take(60)}${if (q.stem.length > 60) "…" else ""}",
-                style = MaterialTheme.typography.bodyMedium
-            )
+            Text(q.stem, style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
             if (q.options.isNotEmpty()) {
                 Text(
-                    q.options.joinToString("  ") { "${it.key}.${it.text.take(12)}" },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline
+                    q.options.joinToString("  ") { "${it.key}.${it.text.take(10)}" },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
             q.answer?.let {
-                Text("答案：$it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                Text("答案 $it", style = MaterialTheme.typography.labelSmall, color = extra.terracotta)
             }
         }
     }

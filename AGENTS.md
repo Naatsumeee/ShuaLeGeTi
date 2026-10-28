@@ -33,7 +33,32 @@ Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）�
 - 答案生成：`data/generate/AnswerGenerator.kt` 批量 12 题/请求 × 3 批并发；三省六部=主部高权重 0.6 + 一致率 0.4，分歧存 dissent；**与题库原答案冲突时**原答案存 `Question.originalAnswer` 做题页双展示
 - 解析：AI（`LlmQuestionParser`，6000 字分块，页码标记 `[[PG:n]]` 贯穿到 `Question.sourcePage`）+ 离线正则兜底（`TextQuestionParser`）；`OptionNormalizer` 合并重复选项字母并重映射答案（OCR 重复 B 类问题的修复）
 - 判分：`StudyRepository.judgeAnswer`（伴生对象，字母优先+选项内容兜底+文本归一化）
-- UI 主题：纸感阅读风（`ui/theme/Theme.kt`，editorial-reader 色板：米纸 #F2EEE3/赭红 #B5532A/墨色；**surfaceContainer 系列已覆盖为暖色**，M3 默认是薰衣草紫）；衬线仅用于大数字/标注/参考答案，标题按钮默认无衬线；紧凑 48dp 标题栏 `CompactTopBar`、56dp 底部导航（避让手势条）
+- UI 主题：**Anthropic 暖纸 + 苹果液态玻璃 v2**（`ui/theme/Theme.kt` 色板与排版 + `ui/theme/Glass.kt` 玻璃组件与安全区扩展）。双套色板 `PaperPalette`（日间）/`OlivePalette`（夜间）：画布暖中性 Parchment、表层 Ivory、主色 Terracotta `#D97757`、错误 Sage `#B53333`、标注 Amber `#D97706`、边框 CreamLine `#F0EEE6`（夜间 `#30302E`）。字体：标题/大数字衬线（`serifTitle`，Georgia/Noto Serif CJK，字重 500），正文无衬线行高 1.6–1.75，数据等宽（`monoNumber`）。玻璃拟态统一走 `GlassSurface`/`PaperCard`/`CompactTopBar`/`FloatingDock`（backdrop blur 16dp + 半透明白内衬 + 高光边 + 内发光倒角）。
+  - **安全区硬规范**：每页根容器必须 `.safeTopPadding().safeBottomPadding()`（`Glass.kt` 里的 Modifier 扩展）。Android 15 edge-to-edge 下自绘 Surface 不会自动避让状态栏/手势条，漏写就会被安卓状态栏或导航条盖住。
+  - 一级导航是**底部悬浮玻璃胶囊 Dock**（4 tab），距底 `max(14dp, 手势条安全区)`；tabs 页面的 `contentPadding` 由 `AppRoot` 传入 `top = 状态栏高度`。
+  - 暗黑模式由用户在设置页决定（`SettingsStore.darkMode`：FOLLOW/LIGHT/DARK），**不再跟随系统**；`MainActivity` 读设置后传给 `ShuaTheme(darkTheme = ...)`。
+  - 做题/测试页刻意压成一屏：`CompactTopBar` 48dp + 题干/选项紧凑卡 + 底部固定控制条，避免反复滚动。
+
+## 问 AI（`ui/study/AskAiPanel.kt` + `StudyViewModel`）
+
+- 做题页**常驻入口两处**：`CompactTopBar` 右侧 `AskAiButton`（小屏自动收成纯图标）、解析区 `DeepSolveRow` 里的「追问 AI」。无参考答案的分支**不能提前 return**，否则连深度解题入口都没了。
+- 上下文 = `Prompts.ASK_DEFAULT` 系统提示 + 题目全文（题干/选项/参考答案/解析/当前作答）+ 已有对话轮次；`llmClient.chatWithMessages(jsonMode=false, maxTokens=1500)`。
+- 默认走 `providerDao.getPrimary()`，没有主部时退化为第一个启用中的模型；两者都没有 → "尚未配置 AI 模型，请到设置页添加"。
+- 对话状态只在内存（`StudyUiState.chat`），**切题即清空**（`reload` 重建 state）；请求途中切题用 `askedForId` 守卫，回答不会落到新题上。
+- 深度解题成功后 `askOpen = true` 自动弹面板；`applyDeepSolve` 返回的 `updated` 必须回写 `questions` 与 `session.question`，否则页面仍显示旧解析。
+
+## 本地文件存储规范（**硬要求**）
+
+- 唯一入口 `data/storage/AppStorage.kt`，全工程不要自己 `new File(context.cacheDir, "...")` 拼路径。
+- **绝不写 `/sdcard`、`/storage/emulated/0`、`Environment.getExternalStorageDirectory()`**；不申请 `WRITE_EXTERNAL_STORAGE`（只保留读图片权限用于选图）。
+- 目录布局（全部在应用私有 `cacheDir` 下，一用途一子目录，根目录不堆文件）：
+  `cache/import/`（OCR 原文 `raw_<jobId>.txt` + 分块 `parsed_<jobId>.jsonl`，断点续跑依据，保留 7 天）、
+  `cache/temp/`（PDF 落地等一次性文件，用完即删，保留 2 小时）、
+  `cache/temp/camera/`（相机输出，**唯一**对 FileProvider 暴露的目录）、
+  `cache/sfx/`（合成音效 wav）。
+- 用户要拿走的成品（题库导出、学习记录导出）一律走 **SAF**：`ActivityResultContracts.CreateDocument` + `contentResolver.openOutputStream(uri)`，落点由用户决定（`LocalDataRepository` / `BankViewModels` / `SettingsScreen`）。
+- `res/xml/file_paths.xml` 只放行 `temp/camera/`，**禁止**写 `<cache-path path="."/>`（等于把整个缓存授权给任意应用）。
+- `AppStorage.cleanupStale()` 在 `Application.onCreate` 里跑：按保留期清理上述三个目录，并顺手删掉旧版本遗留在 `cacheDir` 根目录的 `import_raw_*`/`ingest_*`/`camera_*`/`sfx_*` 前缀文件。
 
 ## 页面地图（ui/）
 

@@ -6,30 +6,39 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Card
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.examhelper.shua.ShuaApp
+import com.examhelper.shua.ui.theme.CompactTopBar
+import com.examhelper.shua.ui.theme.MonoText
+import com.examhelper.shua.ui.theme.PaperCard
+import com.examhelper.shua.ui.theme.SectionLabel
+import com.examhelper.shua.ui.theme.serifTitle
+import com.examhelper.shua.ui.theme.shuaColors
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -98,66 +107,64 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun StatsScreen() {
+fun StatsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
     val vm: StatsViewModel = viewModel()
     val ui by vm.ui.collectAsState()
     val heat by vm.heat.collectAsState()
 
-    Scaffold(
-        topBar = { com.examhelper.shua.ui.theme.CompactTopBar(title = "刷题统计") }
-    ) { padding ->
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(top = contentPadding.calculateTopPadding() + 4.dp)
+    ) {
+        CompactTopBar(title = "刷题统计")
         LazyColumn(
-            Modifier.fillMaxSize().padding(padding),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+            Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 100.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    StatCard("今日刷题", "${ui.todayCount}", Modifier.weight(1f))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    StatCard("今日刷题", "${ui.todayCount}", "题", Modifier.weight(1f))
                     StatCard(
                         "今日正确率",
-                        if (ui.todayCount == 0) "—" else "${ui.todayCorrect * 100 / ui.todayCount}%",
-                        Modifier.weight(1f)
+                        if (ui.todayCount == 0) "—" else "${ui.todayCorrect * 100 / ui.todayCount}",
+                        "%",
+                        Modifier.weight(1f),
+                        accent = true
                     )
                 }
             }
             item {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    StatCard("累计刷题", "${ui.totalCount}", Modifier.weight(1f))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    StatCard("累计刷题", "${ui.totalCount}", "题", Modifier.weight(1f))
                     StatCard(
                         "累计正确率",
-                        if (ui.totalCount == 0) "—" else "${ui.totalCorrect * 100 / ui.totalCount}%",
-                        Modifier.weight(1f)
+                        if (ui.totalCount == 0) "—" else "${ui.totalCorrect * 100 / ui.totalCount}",
+                        "%",
+                        Modifier.weight(1f),
+                        accent = true
                     )
                 }
             }
-            item {
-                Text("各题库", style = MaterialTheme.typography.titleMedium)
-            }
-            item {
-                Heatmap(heat)
-            }
+            item { SectionLabel("刷题热力图", trailing = "近 16 周") }
+            item { Heatmap(heat) }
+            item { SectionLabel("各题库", trailing = "${ui.perBank.size} 个") }
             if (ui.perBank.isEmpty()) {
                 item {
-                    Text("还没有刷题记录", color = MaterialTheme.colorScheme.outline)
+                    PaperCard(Modifier.fillMaxWidth()) {
+                        Text(
+                            "还没有刷题记录",
+                            Modifier.padding(16.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             } else {
                 items(ui.perBank) { (name, cnt, ok) ->
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(12.dp)) {
-                            Row {
-                                Text(name, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-                                Text("$cnt 题", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-                            }
-                            Text(
-                                "正确 $ok / $cnt（${if (cnt == 0) 0 else ok * 100 / cnt}%）",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
+                    BankStatRow(name, cnt, ok)
                 }
             }
         }
@@ -165,32 +172,104 @@ fun StatsScreen() {
 }
 
 @Composable
-private fun StatCard(label: String, value: String, modifier: Modifier = Modifier) {
-    Card(modifier) {
-        Column(Modifier.padding(16.dp)) {
-            Text(value, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.primary)
-            Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+private fun StatCard(
+    label: String,
+    value: String,
+    unit: String,
+    modifier: Modifier = Modifier,
+    accent: Boolean = false
+) {
+    val extra = shuaColors
+    PaperCard(modifier, shape = RoundedCornerShape(18.dp)) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 14.dp)) {
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(
+                    value,
+                    style = serifTitle(30.sp, FontWeight.Medium),
+                    color = if (accent) extra.terracotta else MaterialTheme.colorScheme.onSurface
+                )
+                if (value != "—") {
+                    Spacer(Modifier.size(2.dp))
+                    Text(
+                        unit,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (accent) extra.terracotta else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 6.dp, start = 2.dp)
+                    )
+                }
+            }
+            Spacer(Modifier.height(2.dp))
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
 
-/** 近 16 周刷题热力图（GitHub 格子墙风格） */
+@Composable
+private fun BankStatRow(name: String, cnt: Int, ok: Int) {
+    val extra = shuaColors
+    val rate = if (cnt == 0) 0 else ok * 100 / cnt
+    PaperCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+        Column(Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    name,
+                    Modifier.weight(1f),
+                    style = serifTitle(14.sp, FontWeight.Medium),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1
+                )
+                MonoText("$cnt 题")
+            }
+            // 正确率进度条
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(5.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(rate / 100f)
+                        .height(5.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(extra.terracotta)
+                )
+            }
+            Row {
+                Text(
+                    "正确 $ok / $cnt",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.weight(1f))
+                MonoText("$rate%", color = extra.terracotta)
+            }
+        }
+    }
+}
+
+/** 近 16 周刷题热力图（暖纸格子墙） */
 @Composable
 private fun Heatmap(heat: Map<String, Int>) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("刷题热力图（近 16 周）", style = MaterialTheme.typography.titleSmall)
+    val extra = shuaColors
+    PaperCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             val startWeek = java.util.Calendar.getInstance()
             startWeek.add(java.util.Calendar.DAY_OF_YEAR, -(16 * 7 - 1))
             while (startWeek.get(java.util.Calendar.DAY_OF_WEEK) != java.util.Calendar.MONDAY) {
                 startWeek.add(java.util.Calendar.DAY_OF_YEAR, -1)
             }
-            val primary = MaterialTheme.colorScheme.primary
-            val light = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
-            val mid = MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)
+            val primary = extra.terracotta
+            val light = primary.copy(alpha = 0.30f)
+            val mid = primary.copy(alpha = 0.62f)
             val bg = MaterialTheme.colorScheme.surfaceVariant
             val cellSize = 12.dp
-            val gap = 2.dp
+            val gap = 3.dp
             val weeks = 17
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -202,14 +281,13 @@ private fun Heatmap(heat: Map<String, Int>) {
                         repeat(7) {
                             val count = heat[StatsViewModel.dayKey(cal.timeInMillis)] ?: 0
                             Box(
-                                Modifier.size(cellSize).background(
+                                Modifier.size(cellSize).clip(RoundedCornerShape(3.dp)).background(
                                     when {
                                         count == 0 -> bg
                                         count < 10 -> light
                                         count < 40 -> mid
                                         else -> primary
-                                    },
-                                    RoundedCornerShape(2.dp)
+                                    }
                                 )
                             )
                             cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
@@ -217,10 +295,14 @@ private fun Heatmap(heat: Map<String, Int>) {
                     }
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text("少", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
                 listOf(bg, light, mid, primary).forEach { c ->
-                    Box(Modifier.size(cellSize).background(c, RoundedCornerShape(2.dp)))
+                    Box(Modifier.size(cellSize).clip(RoundedCornerShape(3.dp)).background(c))
                 }
                 Text("多", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
             }

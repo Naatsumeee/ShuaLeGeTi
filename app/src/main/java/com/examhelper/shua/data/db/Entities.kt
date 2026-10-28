@@ -68,6 +68,12 @@ data class Question(
     val answer: String? = null,
     /** AI 重新生成与原题库答案冲突时，保留的题库原答案（答案页双展示） */
     val originalAnswer: String? = null,
+    /** AI 给出的答案（无论是否与题库一致；answer 为题库权威答案优先） */
+    val aiAnswer: String? = null,
+    /** AI 答案与题库参考答案一致（做对时页面标「与参考答案一致」） */
+    val answerVerified: Boolean = false,
+    /** 该题解析是否经「深度解题」升级过 */
+    val deepSolved: Boolean = false,
     val analysis: String? = null,
     /** 答案解析是否由 AI 生成 */
     val aiGenerated: Boolean = false,

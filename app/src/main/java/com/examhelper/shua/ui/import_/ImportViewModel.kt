@@ -242,9 +242,11 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 bankRepo.createBank(s.bankName.ifBlank { job.bankName }, job.sourceName.ifBlank { null }, parsed)
             }.onSuccess {
-                // 清理任务与临时文件
+                // 清理任务与中间产物（DB 里记录的旧路径可能是老版本的 cacheDir 根目录文件名，一并删掉）
                 job.rawTextPath?.let { File(it).delete() }
                 job.parsedPath?.let { File(it).delete() }
+                com.examhelper.shua.data.storage.AppStorage
+                    .deleteImportArtifacts(getApplication(), job.id)
                 jobDao.delete(job.id)
                 onDone()
             }.onFailure {

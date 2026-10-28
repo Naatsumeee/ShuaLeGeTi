@@ -105,35 +105,44 @@ class DocumentIngestor(
         val file = cachePdf(uri)
         val result = StringBuilder()
 
-        // 第一遍：PDFBox 打开并逐页处理
-        PDDocument.load(file).use { doc ->
-            val stripper = PDFTextStripper()
-            stripper.sortByPosition = true
-            val total = doc.numberOfPages
-            for (i in 1..total) {
-                onProgress(IngestProgress("extract", i, total, "读取第 $i/$total 页"))
-                stripper.startPage = i
-                stripper.endPage = i
-                val pageText = runCatching { stripper.getText(doc) }.getOrDefault("").trim()
-                result.appendLine("[[PG:$i]]")
-                if (pageText.length >= 20) {
-                    result.appendLine(pageText)
-                } else {
-                    // 文字过少 → 判定为扫描页，走 OCR
-                    result.appendLine(ocrPdfPage(file, i, onProgress, i, total))
+        // 临时 PDF 必须保证删除：中途 OCR 抛异常时也要落到 finally，否则缓存会一直涨
+        try {
+            // 第一遍：PDFBox 打开并逐页处理
+            PDDocument.load(file).use { doc ->
+                val stripper = PDFTextStripper()
+                stripper.sortByPosition = true
+                val total = doc.numberOfPages
+                for (i in 1..total) {
+                    onProgress(IngestProgress("extract", i, total, "读取第 $i/$total 页"))
+                    stripper.startPage = i
+                    stripper.endPage = i
+                    val pageText = runCatching { stripper.getText(doc) }.getOrDefault("").trim()
+                    result.appendLine("[[PG:$i]]")
+                    if (pageText.length >= 20) {
+                        result.appendLine(pageText)
+                    } else {
+                        // 文字过少 → 判定为扫描页，走 OCR
+                        result.appendLine(ocrPdfPage(file, i, onProgress, i, total))
+                    }
                 }
             }
+        } finally {
+            file.delete()
         }
-        file.delete()
         if (result.isBlank()) throw IllegalArgumentException("PDF 中没有可识别的内容")
         return result.toString()
     }
 
     private fun cachePdf(uri: Uri): java.io.File {
-        val target = java.io.File(context.cacheDir, "ingest_${System.currentTimeMillis()}.pdf")
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            target.outputStream().use { input.copyTo(it) }
-        } ?: throw IllegalArgumentException("无法读取 PDF")
+        val target = com.examhelper.shua.data.storage.AppStorage.newIngestPdf(context)
+        try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                target.outputStream().use { input.copyTo(it) }
+            } ?: throw IllegalArgumentException("无法读取 PDF")
+        } catch (e: Throwable) {
+            target.delete()
+            throw e
+        }
         return target
     }
 

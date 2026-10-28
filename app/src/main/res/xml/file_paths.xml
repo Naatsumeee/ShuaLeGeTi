@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider 暴露范围：只放行 cacheDir/temp/camera 这一个子目录（拍照输出）。
+
+  规范：不要写成 <cache-path name="x" path="."/> —— 那等于把整个缓存目录（含数据库导出中间文件、
+  OCR 原文、音效 wav）全部授权给拿到 content:// 的任意应用，属于过度暴露。
+  用户需要拿走的成品文件一律走 SAF（ACTION_CREATE_DOCUMENT），不经 FileProvider。
+-->
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <cache-path name="camera_cache" path="." />
+    <cache-path name="camera_cache" path="temp/camera/" />
 </paths>

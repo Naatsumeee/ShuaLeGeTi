@@ -185,8 +185,7 @@ class StudyRepository(
     }
 
     /** 随机巩固重置（重新乱序） */
-    suspend fun resetRandom(bankId: Long, questionIds: List<Long>) {
-        progressDao.upsert(
+    suspend fun resetRandom(bankId: Long, questionIds: List<Long>) {        progressDao.upsert(
             StudyProgress(
                 bankId = bankId,
                 mode = StudyMode.RANDOM,
@@ -202,6 +201,60 @@ class StudyRepository(
         progressDao.upsert(p.copy(currentIndex = index.coerceAtLeast(0), updatedAt = System.currentTimeMillis()))
     }
 
+    /** 作答即刷新该模式的最近活动时间，保证「上次进度」的时间戳真实可信 */
+    suspend fun touchProgress(bankId: Long, mode: StudyMode) {
+        progressDao.touch(bankId, mode, System.currentTimeMillis())
+    }
+
+    /** 清掉某模式进度（「重新开始」用） */
+    suspend fun resetProgress(bankId: Long, mode: StudyMode) {
+        progressDao.upsert(
+            StudyProgress(bankId = bankId, mode = mode, currentIndex = 0, randomCursor = 0)
+        )
+    }
+
+    /** 一条可恢复的学习进度，「回到上次进度」列表用 */
+    data class SavedProgress(
+        val mode: StudyMode,
+        /** 当前第几题（1-based） */
+        val position: Int,
+        val total: Int,
+        /** 所在章节（无章节时为空） */
+        val chapter: String?,
+        val updatedAt: Long,
+        val filterJson: String?
+    ) {
+        val hasRealProgress: Boolean get() = position > 1 || total > 0
+    }
+
+    /**
+     * 该题库下所有"做了一半"的模式进度，按最近活动倒序。
+     * 只有真的往前走过（position > 1）才算可恢复，避免刚进入就提示。
+     */
+    suspend fun savedProgress(bankId: Long, filterJson: String? = null): List<SavedProgress> {
+        val rows = progressDao.allByBank(bankId)
+        if (rows.isEmpty()) return emptyList()
+        return rows.mapNotNull { row ->
+            val questions = filteredQuestions(bankId, com.examhelper.shua.data.model.StudyFilter.fromFingerprint(row.filterJson))
+            val total = if (row.mode == StudyMode.RANDOM) {
+                com.examhelper.shua.data.model.JsonCodec.decodeIdList(row.randomOrderJson).size
+            } else {
+                questions.size
+            }
+            val pos = if (row.mode == StudyMode.RANDOM) row.randomCursor + 1 else row.currentIndex + 1
+            if (pos <= 1) return@mapNotNull null
+            val chapter = questions.getOrNull(pos - 1)?.chapter?.takeIf { it.isNotBlank() }
+            SavedProgress(
+                mode = row.mode,
+                position = pos.coerceAtMost(total.coerceAtLeast(pos)),
+                total = total,
+                chapter = chapter,
+                updatedAt = row.updatedAt,
+                filterJson = row.filterJson
+            )
+        }.sortedByDescending { it.updatedAt }
+    }
+
     suspend fun toggleFavorite(question: Question): Boolean {
         val existing = recordDao.getFavorite(question.id)
         return if (existing != null) {
@@ -214,6 +267,16 @@ class StudyRepository(
     }
 
     suspend fun isFavorite(questionId: Long): Boolean = recordDao.getFavorite(questionId) != null
+
+    /** 该题最近一次作答（用于「划回已做题不重复作答」） */
+    suspend fun latestAttempt(questionId: Long) = recordDao.latestAttempt(questionId)
+
+    /** 深度解题：把详细解析写回题目，并标记 deepSolved */
+    suspend fun applyDeepSolve(question: Question, analysis: String): Question {
+        val updated = question.copy(analysis = analysis, deepSolved = true)
+        bankRepo.updateQuestion(updated)
+        return updated
+    }
 
     suspend fun markMastered(questionId: Long) = recordDao.markMastered(questionId)
 

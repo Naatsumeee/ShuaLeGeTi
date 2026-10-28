@@ -7,6 +7,7 @@ import com.examhelper.shua.ShuaApp
 import com.examhelper.shua.data.db.QuestionBank
 import com.examhelper.shua.data.db.StudyMode
 import com.examhelper.shua.data.model.StudyFilter
+import com.examhelper.shua.data.repo.StudyRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -28,6 +29,8 @@ class StudySetupViewModel(
         val filter: StudyFilter = StudyFilter(),
         val matchCount: Int = 0,
         val examCount: Int = 30,
+        /** 该题库下未做完的进度（倒序，用于「回到上次进度」） */
+        val saved: List<StudyRepository.SavedProgress> = emptyList(),
         val loading: Boolean = true
     )
 
@@ -49,8 +52,17 @@ class StudySetupViewModel(
                 subtypesPresent = questions.mapNotNull { it.subtype }.distinct().sorted(),
                 filter = StudyFilter(),
                 matchCount = questions.size,
+                saved = runCatching { container.studyRepo.savedProgress(bankId) }.getOrDefault(emptyList()),
                 loading = false
             )
+        }
+    }
+
+    /** 丢弃某条进度记录（用户不想再回到它） */
+    fun forget(mode: StudyMode) {
+        viewModelScope.launch {
+            runCatching { container.studyRepo.resetProgress(bankId, mode) }
+            _state.value = _state.value.copy(saved = _state.value.saved.filterNot { it.mode == mode })
         }
     }
 

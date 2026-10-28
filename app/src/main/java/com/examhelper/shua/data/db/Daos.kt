@@ -99,6 +99,14 @@ interface ProgressDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(progress: StudyProgress)
 
+    /** 全库各模式进度（「回到上次进度」用，按最近活动倒序） */
+    @Query("SELECT * FROM study_progress WHERE bankId = :bankId ORDER BY updatedAt DESC")
+    suspend fun allByBank(bankId: Long): List<StudyProgress>
+
+    /** 实时刷新最近活动时间：作答即算触达，不必等点“下一题” */
+    @Query("UPDATE study_progress SET updatedAt = :ts WHERE bankId = :bankId AND mode = :mode")
+    suspend fun touch(bankId: Long, mode: StudyMode, ts: Long)
+
     @Query("DELETE FROM study_progress WHERE bankId = :bankId")
     suspend fun deleteByBank(bankId: Long)
 }
@@ -205,6 +213,32 @@ interface RecordDao {
 
     @Query("SELECT * FROM kill_records WHERE questionId = :questionId")
     suspend fun getKill(questionId: Long): KillRecord?
+
+    // ---- 本地学习数据管理（设置页） ----
+
+    /** 导出用：全部作答记录 */
+    @Query("SELECT * FROM attempt_records ORDER BY answeredAt ASC")
+    suspend fun allAttempts(): List<AttemptRecord>
+
+    /** 导出用：全部错题记录 */
+    @Query("SELECT * FROM wrong_records ORDER BY lastWrongAt ASC")
+    suspend fun allWrong(): List<WrongRecord>
+
+    /** 导出用：全部收藏 */
+    @Query("SELECT * FROM favorites ORDER BY createdAt ASC")
+    suspend fun allFavorites(): List<FavoriteRecord>
+
+    /** 导出用：全部斩题记录 */
+    @Query("SELECT * FROM kill_records ORDER BY killedAt ASC")
+    suspend fun allKills(): List<KillRecord>
+
+    /** 清空收藏夹（返回删除条数） */
+    @Query("DELETE FROM favorites")
+    suspend fun clearAllFavorites(): Int
+
+    /** 重置刷题进度（游标/乱序队列全清，题库与作答历史保留） */
+    @Query("DELETE FROM study_progress")
+    suspend fun clearAllProgress(): Int
 
     @Transaction
     suspend fun submitAnswer(

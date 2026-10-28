@@ -36,7 +36,7 @@ class Converters {
         ImportJob::class,
         GenerateJob::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -118,6 +118,15 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v4 → v5：AI 答案分离（aiAnswer/answerVerified）+ 深度解题标记 */
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE questions ADD COLUMN aiAnswer TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE questions ADD COLUMN answerVerified INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE questions ADD COLUMN deepSolved INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -128,7 +137,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "shua.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .fallbackToDestructiveMigration()
                     .build()
                     .also { instance = it }

@@ -124,6 +124,13 @@ object JsonCodec {
         runCatching { json.decodeFromString<List<Long>>(raw ?: return emptyList()) }
             .getOrDefault(emptyList())
 
+    fun encodeStringList(items: List<String>): String? =
+        if (items.isEmpty()) null else json.encodeToString(items)
+
+    fun decodeStringList(raw: String?): List<String> =
+        runCatching { json.decodeFromString<List<String>>(raw ?: return emptyList()) }
+            .getOrDefault(emptyList())
+
     /** 读取 JSONL（容忍空行与坏行） */
     fun readParsedLines(file: java.io.File): List<ParsedLine> =
         runCatching {

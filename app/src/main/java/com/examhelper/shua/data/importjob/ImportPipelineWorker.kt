@@ -91,8 +91,8 @@ class ImportPipelineWorker(
 
     private fun jobDao() = container.database.importJobDao()
 
-    private fun rawFile(jobId: String) = File(applicationContext.cacheDir, "import_raw_$jobId.txt")
-    private fun parsedFile(jobId: String) = File(applicationContext.cacheDir, "import_parsed_$jobId.jsonl")
+    private fun rawFile(jobId: String) = com.examhelper.shua.data.storage.AppStorage.importRawFile(applicationContext, jobId)
+    private fun parsedFile(jobId: String) = com.examhelper.shua.data.storage.AppStorage.importParsedFile(applicationContext, jobId)
 
     override suspend fun doWork(): Result {
         val jobId = inputData.getString(KEY_JOB_ID) ?: return Result.failure()

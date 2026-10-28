@@ -94,11 +94,32 @@ class LlmClient(
         jsonMode: Boolean = false,
         temperature: Double? = provider.temperature.toDouble(),
         maxTokens: Int? = null
+    ): ChatResult = chatWithMessages(
+        provider = provider,
+        messages = listOf(
+            ChatMessage("system", systemPrompt),
+            ChatMessage("user", userPrompt)
+        ),
+        jsonMode = jsonMode,
+        temperature = temperature,
+        maxTokens = maxTokens
+    )
+
+    /**
+     * 多轮对话：把已经整理好的消息列表原样发送（system 必须在最前）。
+     * 用于做题页的「追问 AI」——需要保留上下文才能连续追问。
+     */
+    suspend fun chatWithMessages(
+        provider: LlmProvider,
+        messages: List<ChatMessage>,
+        jsonMode: Boolean = false,
+        temperature: Double? = provider.temperature.toDouble(),
+        maxTokens: Int? = null
     ): ChatResult = withContext(Dispatchers.IO) {
-        runCatching { chatOnce(provider, systemPrompt, userPrompt, jsonMode, temperature, maxTokens) }
+        runCatching { chatOnce(provider, messages, jsonMode, temperature, maxTokens) }
             .recoverCatching {
                 // 部分兼容端点不支持 response_format / max_tokens，去掉后重试一次
-                if (it is LlmException) chatOnce(provider, systemPrompt, userPrompt, false, temperature, null)
+                if (it is LlmException) chatOnce(provider, messages, false, temperature, null)
                 else throw it
             }
             .getOrThrow()
@@ -106,18 +127,14 @@ class LlmClient(
 
     private fun chatOnce(
         provider: LlmProvider,
-        systemPrompt: String,
-        userPrompt: String,
+        messages: List<ChatMessage>,
         jsonMode: Boolean,
         temperature: Double?,
         maxTokens: Int?
     ): ChatResult {
         val body = ChatCompletionRequest(
             model = provider.model,
-            messages = listOf(
-                ChatMessage("system", systemPrompt),
-                ChatMessage("user", userPrompt)
-            ),
+            messages = messages,
             temperature = temperature,
             responseFormat = if (jsonMode) ChatCompletionRequest.ResponseFormat() else null,
             maxTokens = maxTokens

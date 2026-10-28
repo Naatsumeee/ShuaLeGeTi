@@ -38,18 +38,27 @@ class GenerateWorker(
         const val KEY_BANK_ID = "bankId"
         const val KEY_FORCE_ALL = "forceAll"
         const val KEY_CONCURRENCY = "concurrency"
+        /** 章节范围（JSON 字符串数组，空 = 全部章节） */
+        const val KEY_CHAPTERS = "chapters"
         const val CHANNEL_ID = "generate_pipeline"
         private const val NOTIFICATION_ID = 2001
 
         fun uniqueName(bankId: Long) = "generate_$bankId"
 
-        fun enqueue(context: Context, bankId: Long, forceAll: Boolean, concurrency: Int) {
+        fun enqueue(
+            context: Context,
+            bankId: Long,
+            forceAll: Boolean,
+            concurrency: Int,
+            chapters: List<String> = emptyList()
+        ) {
             val request = OneTimeWorkRequestBuilder<GenerateWorker>()
                 .setInputData(
                     workDataOf(
                         KEY_BANK_ID to bankId,
                         KEY_FORCE_ALL to forceAll,
-                        KEY_CONCURRENCY to concurrency
+                        KEY_CONCURRENCY to concurrency,
+                        KEY_CHAPTERS to (JsonCodec.encodeStringList(chapters) ?: "")
                     )
                 )
                 .build()
@@ -90,8 +99,10 @@ class GenerateWorker(
             )
 
             // 断点续传：非 forceAll 只处理无答案题目（已生成的天然跳过）
-            val all = bankRepo.getQuestions(bankId)
-            val targets = if (forceAll) all else all.filter { it.answer.isNullOrBlank() }
+            val chapters = JsonCodec.decodeStringList(inputData.getString(KEY_CHAPTERS))
+            val scoped = if (chapters.isEmpty()) bankRepo.getQuestions(bankId)
+            else bankRepo.getQuestions(bankId).filter { it.chapter in chapters }
+            val targets = if (forceAll) scoped else scoped.filter { it.answer.isNullOrBlank() }
             if (targets.isEmpty()) {
                 dao.upsert(GenerateJob(bankId = bankId, stage = "DONE", total = 0, message = "没有需要生成的题目"))
                 return Result.success()
@@ -136,16 +147,21 @@ class GenerateWorker(
                         batch.forEachIndexed { i, q ->
                             val v = verdicts.getOrNull(i)
                             if (v != null && v.answer != null) {
-                                val conflict = !q.answer.isNullOrBlank() && !q.aiGenerated &&
-                                    !AnswerGenerator.answersMatch(q.answer, v.answer)
+                                // 题库/OCR 已有参考答案 → 以原答案为准（AI 只作旁证），
+                                // 避免「选项识别不清时 AI 编一个」；一致则标记已核对。
+                                val bankAnswer = q.answer?.takeIf { it.isNotBlank() }
+                                val match = bankAnswer != null &&
+                                    AnswerGenerator.answersMatch(bankAnswer, v.answer)
                                 bankRepo.updateQuestion(
                                     q.copy(
-                                        answer = v.answer,
+                                        answer = bankAnswer ?: v.answer,
+                                        aiAnswer = v.answer,
+                                        answerVerified = match,
                                         analysis = v.analysis ?: q.analysis,
                                         aiGenerated = true,
                                         confidence = v.confidence,
                                         agreement = v.agreement,
-                                        originalAnswer = if (conflict) q.answer else null,
+                                        originalAnswer = if (bankAnswer != null && !match) bankAnswer else null,
                                         dissentJson = v.dissents.takeIf { it.isNotEmpty() }
                                             ?.let(JsonCodec::encodeDissent)
                                     )
