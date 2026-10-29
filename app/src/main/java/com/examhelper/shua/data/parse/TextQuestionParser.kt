@@ -28,6 +28,8 @@ object TextQuestionParser {
     private val sharedOptionsHintRegex = Regex("""共用备选答案|共用选项|备选答案""")
     private val caseStartRegex = Regex("""^(患者|某男|某女|某患|男[，,].{0,3}\d|女[，,].{0,3}\d|病历|病例|一[名位].{0,6}(岁|男|女))""")
     private val pageMarkerRegex = Regex("""^\[\[PG:(\d+)\]\]$""")
+    /** Markdown 标题行 `# xxx` ~ `###### xxx` 当作章节标题；组1=井号、组2=标题（井号后必须有空白，避免误吃题干） */
+    private val headingRegex = Regex("""^\s{0,3}(#{1,6})[ \t]+(.*?)[ \t]*#*[ \t]*$""")
 
     private val trueWords = setOf("对", "正确", "√", "T", "是", "Y")
     private val falseWords = setOf("错", "错误", "×", "X", "F", "否", "N")
@@ -36,6 +38,10 @@ object TextQuestionParser {
         val questions = mutableListOf<ParsedQuestion>()
         var current: ParsedQuestion? = null
         var currentSection: String? = null
+        // Markdown 标题层级栈：level → 标题。做题时的「章节」取当前标题链，
+        // 这样 `# 第一章` 下的 `## 单选` 里的题会记成「第一章 · 单选」，
+        // 既不会丢掉上层信息，也不会把整份文档的题都塞进同一个叫「单选」的章里。
+        val headingStack = mutableMapOf<Int, String>()
         var appendingTo = 0 // 0=stem 1=analysis 2=option-last 3=sharedStem 4=sharedOptions
 
         var sharedStemBuf = StringBuilder()
@@ -62,8 +68,27 @@ object TextQuestionParser {
             }
 
             // 章节标题
+            val hm = headingRegex.find(line)
+            if (hm != null) {
+                flush()
+                val level = hm.groupValues[1].length
+                val title = hm.groupValues[2].trim()
+                // 更深或同级标题覆盖，更浅的祖先保留
+                headingStack.keys.filter { it >= level }.forEach { headingStack.remove(it) }
+                if (title.isNotBlank()) headingStack[level] = title
+                // 章节取「最深的、不像题型标签的」标题：
+                // Markdown 题库常见 `# 第一章` → `## 单项选择题` → 题目，
+                // 若把「单项选择题」当章节，同一章的题会被拆成好几组，按章节刷题就散了。
+                val chain = headingStack.toSortedMap().values.filter { it.isNotBlank() }
+                currentSection = chain.lastOrNull { !isTypeHeading(it) }
+                    ?: chain.lastOrNull()
+                appendingTo = 0
+                continue
+            }
             if (sectionRegex.matches(line)) {
                 flush()
+                // 纯文本的「第一章 / 一、」是平铺结构，不再继承 Markdown 标题链
+                headingStack.clear()
                 currentSection = line.trimStart('第', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十', ' ', '、', '.', '（', '）', '(', ')')
                     .ifBlank { line }
                 continue
@@ -144,7 +169,7 @@ object TextQuestionParser {
 
             when (appendingTo) {
                 0 -> q.stem = if (q.stem.endsWith("-")) q.stem.dropLast(1) + line else q.stem + line
-                1 -> q.analysis = (q.analysis ?: "") + line
+                1 -> q.analysis = (q.analysis ?: "").let { if (it.isEmpty()) line else it + "\n" + line }
                 2 -> if (q.options.isNotEmpty()) {
                     val last = q.options.removeAt(q.options.lastIndex)
                     q.options += last.copy(text = last.text + line)
@@ -203,7 +228,11 @@ object TextQuestionParser {
                 val a = q.answer
                 when {
                     a != null && (a == "对" || a == "错") -> QuestionType.JUDGE
-                    q.stem.contains("___") || q.stem.contains("__") -> QuestionType.FILL
+                    // 有下划线不一定就是填空：答案是一长句时（概念题常写成「解释××：___」）
+                    // 判定为名词解释/简答更贴近实际，否则用户会被要求「填空」答一整段话。
+                    q.stem.contains("___") || q.stem.contains("__") ->
+                        if (a != null && a.length > 10 && isTermStem(q.stem)) QuestionType.TERM
+                        else QuestionType.FILL
                     isTermStem(q.stem) -> QuestionType.TERM
                     else -> QuestionType.SHORT_ANSWER
                 }
@@ -226,6 +255,18 @@ object TextQuestionParser {
         }
     }
 
+    /** 「单项选择题 / 多选题 / 判断题 / 填空题 / 名词解释」这类标题是题型分组，不是章节 */
+    private fun isTypeHeading(title: String): Boolean {
+        val t = title.replace(" ", "")
+        if (t.length > 14) return false
+        return typeHeadingKeywords.any { t.contains(it) }
+    }
+
+    private val typeHeadingKeywords = listOf(
+        "选择题", "单选题", "多选题", "判断题", "填空题", "名词解释", "简答题",
+        "论述题", "案例分析", "问答", "计算题", "配伍题", "共用题干", "共用备选"
+    )
+
     fun normalizeAnswer(raw: String?): String? {
         var a = raw?.trim()?.uppercase() ?: return null
         when {
@@ -245,5 +286,5 @@ object TextQuestionParser {
     }
 
     private val termPrefixRegex =
-        Regex("^(名词解释|解释名词|解释[:：]|什么是|什么是\"|何谓|试述)")
+        Regex("^(名词解释|解释名词|解释|什么是|什么是\"|何谓|试述)")
 }

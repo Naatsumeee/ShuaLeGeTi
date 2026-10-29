@@ -173,8 +173,11 @@ fun GenerateScreen(
                             }
                             if (job.cacheHitTokens + job.cacheMissTokens > 0) {
                                 val totalTok = job.cacheHitTokens + job.cacheMissTokens + job.outputTokens
+                                // 价目按**主模型的 model 字段**挑：flash 与 v4-pro 差一个数量级，
+                                // 拿 flash 价去显示 v4-pro 的用量会低估十倍。
                                 val cost = com.examhelper.shua.data.generate.Cost.yuan(
-                                    job.cacheHitTokens, job.cacheMissTokens, job.outputTokens
+                                    job.cacheHitTokens, job.cacheMissTokens, job.outputTokens,
+                                    state.primaryModel
                                 )
                                 val rate = com.examhelper.shua.data.generate.Cost.hitRate(
                                     job.cacheHitTokens, job.cacheMissTokens
@@ -182,17 +185,25 @@ fun GenerateScreen(
                                 Text(
                                     "总 token ${com.examhelper.shua.data.generate.Cost.tokens(totalTok)}" +
                                         " / 缓存命中 $rate%" +
-                                        " / 参考成本 ${com.examhelper.shua.data.generate.Cost.format(cost)} 元",
+                                        (cost?.let { " / 参考成本 ${com.examhelper.shua.data.generate.Cost.format(it)} 元" }
+                                            ?: " / 参考成本 未知模型不计价"),
                                     style = monoStyleSafe(),
                                     color = extra.amber
                                 )
                                 Text(
-                                    if (com.examhelper.shua.data.generate.Cost.isOffPeak())
-                                        "按 DeepSeek 官方优惠时段（00:30–08:30）计价"
-                                    else "按 DeepSeek 官方标准时段计价，00:30–08:30 为优惠时段",
+                                    com.examhelper.shua.data.generate.Cost.costNote(state.primaryModel),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.outline
                                 )
+                                // 命中恒 0 且未命中量很大 → 多半是中转没透传缓存字段，
+                                // 显示 0% 会误导成「一条都没缓存」，这里如实说明。
+                                if (job.cacheHitTokens == 0L && job.cacheMissTokens > 10_000) {
+                                    Text(
+                                        "若确认已复用同一前缀仍显示 0，多为中转端未透传缓存字段，实际计费可能低于此参考值。",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.outline
+                                    )
+                                }
                             }
                             job.errorMessage?.let {
                                 Text(it, color = extra.sage, style = MaterialTheme.typography.bodySmall)

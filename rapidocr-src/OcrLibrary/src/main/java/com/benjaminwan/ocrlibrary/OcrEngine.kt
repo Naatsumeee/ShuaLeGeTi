@@ -7,16 +7,28 @@ import android.graphics.Bitmap
 class OcrEngine(context: Context) {
     companion object {
         const val numThread: Int = 4
+
+        /**
+         * 内置模型（PP-OCRv5 mobile）。
+         * - det：ch_PP-OCRv5_det_mobile，4.6MB，与 v3 同样的 DB 后处理与 imagenet 归一化
+         * - rec：ch_PP-OCRv5_rec_mobile，16MB，输入高 48（与 v3 一致），输出 18385 类
+         * - cls：沿用 v2.0 文字方向分类（输入 48x192，与 AngleNet 的 dstWidth/dstHeight 匹配）
+         * - 字典：ppocrv5_dict.txt（18383 行 + blank + space = 18385，与 rec 输出严格对齐）
+         */
+        private const val DET_MODEL = "ch_PP-OCRv5_det_mobile.onnx"
+        private const val CLS_MODEL = "ch_ppocr_mobile_v2.0_cls_infer.onnx"
+        private const val REC_MODEL = "ch_PP-OCRv5_rec_mobile.onnx"
+        private const val KEYS_FILE = "ppocrv5_dict.txt"
     }
 
     init {
         System.loadLibrary("RapidOcr")
         val ret = init(
             context.assets, numThread,
-            "ch_PP-OCRv3_det_infer.onnx",
-            "ch_ppocr_mobile_v2.0_cls_infer.onnx",
-            "ch_PP-OCRv3_rec_infer.onnx",
-            "ppocr_keys_v1.txt"
+            DET_MODEL,
+            CLS_MODEL,
+            REC_MODEL,
+            KEYS_FILE
         )
         if (!ret) throw IllegalArgumentException()
     }

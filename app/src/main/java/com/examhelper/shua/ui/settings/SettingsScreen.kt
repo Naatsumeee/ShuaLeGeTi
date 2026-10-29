@@ -334,7 +334,7 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                         OcrOption(
                             selected = ui.ocrEngine == OcrEngine.RAPID_OCR,
                             title = "RapidOCR 高精度（已内置）",
-                            desc = "PP-OCRv3 离线模型，扫描件/双栏识别更准",
+                            desc = "PP-OCRv5 离线模型，扫描件/双栏识别更准",
                             onClick = { vm.setOcrEngine(OcrEngine.RAPID_OCR) }
                         )
                     }
@@ -703,7 +703,7 @@ private fun AboutCard(onOpen: (String) -> Unit) {
             )
             Text(
                 "本项目以 MIT License 开源，源码公开于 GitHub，欢迎查阅与共建。" +
-                    "OCR 采用 Google ML Kit（离线中文识别）与 RapidOCR（PP-OCRv3，Apache-2.0）。" +
+                    "OCR 采用 Google ML Kit（离线中文识别）与 RapidOCR（PP-OCRv5，Apache-2.0）。" +
                     "题库内容与解析结果均由用户自行导入或 AI 生成，仅用于个人学习，" +
                     "请遵守所使用模型服务商的条款与当地法律法规。",
                 style = MaterialTheme.typography.labelSmall,

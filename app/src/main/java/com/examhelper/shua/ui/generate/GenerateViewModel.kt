@@ -33,6 +33,8 @@ class GenerateViewModel(
         val noAnalysis: Int = 0,
         val providers: Int = 0,
         val primaryName: String? = null,
+        /** 主模型的 model 字段：成本估算按它挑价目（flash / v4-pro 差价很大） */
+        val primaryModel: String? = null,
         val sanSheng: Boolean = false,
         val concurrency: Int = 3,
         val job: GenerateJob? = null,
@@ -128,6 +130,7 @@ class GenerateViewModel(
             noAnalysis = questions.count { it.analysis.isNullOrBlank() },
             providers = providers.size,
             primaryName = providers.firstOrNull { it.isPrimary }?.name,
+            primaryModel = (providers.firstOrNull { it.isPrimary } ?: providers.firstOrNull())?.model,
             sanSheng = settings.sanShengLiuBu && providers.size >= 2,
             concurrency = settings.parseConcurrency.coerceIn(1, 6),
             chapters = sortChapters(questions.mapNotNull { it.chapter?.takeIf { c -> c.isNotBlank() } }.distinct())

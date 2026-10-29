@@ -256,7 +256,19 @@ class ImportPipelineWorker(
                 return Result.failure()
             }
 
-            val totalParsed = JsonCodec.readParsedLines(parsed).size
+            // 跨块收口：同一道题被相邻分段重复解析的合并成一条；原文答案集中
+            // 给在文末的，按题号回填到前面缺答案的题目上。
+            var totalParsed = JsonCodec.readParsedLines(parsed).size
+            if (okCount > 0) {
+                val before = JsonCodec.readParsedLines(parsed)
+                val after = LlmQuestionParser.finalizeLines(before, text)
+                if (after.size != before.size || after.indices.any { after[it] != before[it] }) {
+                    runCatching {
+                        parsed.writeText(after.joinToString("\n") { JsonCodec.json.encodeToString(it) } + "\n")
+                    }
+                    totalParsed = after.size
+                }
+            }
             if (okCount == 0 && chunks.isNotEmpty()) {
                 return fail(jobId, "AI 解析全部失败：${provider.name} 连接异常或返回不可解析")
             }

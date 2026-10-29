@@ -2,6 +2,7 @@ package com.examhelper.shua.ui.stats
 
 import android.app.Application
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -24,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -33,11 +36,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.AndroidViewModel
@@ -268,12 +277,15 @@ private fun BankStatRow(name: String, cnt: Int, ok: Int) {
 /** 热力图时间范围（周） */
 private val HEAT_RANGES = listOf(8 to "近 8 周", 16 to "近 16 周", 32 to "近 32 周")
 
-/** 刷题热力图（暖纸格子墙）：长按/点按格子看当天日期与题数，可切换时间范围 */
+/** 刷题热力图（暖纸格子墙）：长按/点按格子在手指上方弹出悬浮气泡，可切换时间范围 */
+
+/** 一次选中：日期、题数、以及按下点在热力图容器坐标系中的位置 */
+private class HeatPick(val key: String, val count: Int, val x: Float, val y: Float)
 
 @Composable
 private fun Heatmap(heat: Map<String, Int>, weeks: Int, onWeeksChange: (Int) -> Unit) {
     val extra = shuaColors
-    var picked by remember { mutableStateOf<String?>(null) }
+    var picked by remember { mutableStateOf<HeatPick?>(null) }
 
     PaperCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -310,55 +322,104 @@ private fun Heatmap(heat: Map<String, Int>, weeks: Int, onWeeksChange: (Int) -> 
             val bg = MaterialTheme.colorScheme.surfaceVariant
             val gap = 3.dp
             val totalWeeks = weeks
-            // 图块按可用宽度自适应放大，8 周时铺满整行、32 周时可横向滚动
+
+            // 先把 7×weeks 的日期与题数算好：手势命中测试要靠下标反查，不能依赖逐格回调
+            val grid: List<List<Pair<String, Int>>> = remember(weeks, heat) {
+                val c = startWeek.clone() as java.util.Calendar
+                List(totalWeeks) {
+                    List(7) {
+                        val k = StatsViewModel.dayKey(c.timeInMillis)
+                        c.add(java.util.Calendar.DAY_OF_YEAR, 1)
+                        k to (heat[k] ?: 0)
+                    }
+                }
+            }
+
             BoxWithConstraints(Modifier.fillMaxWidth()) {
                 val avail = maxWidth
                 val fitted = (avail - gap * (totalWeeks - 1)) / totalWeeks
                 // 8 周时铺满整行（约 36dp），周数越多越小，最小 11dp 后改为横向滚动
                 val cellSize = fitted.coerceIn(11.dp, 36.dp)
-                Row(
-                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(gap)
+                val density = LocalDensity.current
+                val stepPx = with(density) { (cellSize + gap).toPx() }
+                val cellPx = with(density) { cellSize.toPx() }
+                val hostW = with(density) { avail.toPx() }
+                val gapPx = with(density) { 12.dp.toPx() }
+                val scroll = rememberScrollState()
+                val pickedKey = picked?.key
+
+                // 手势挂在容器上而不是每格上：这样横向滚动照常工作，
+                // 又能直接拿到按下点在容器内的坐标，气泡才能贴着手指显示
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .pointerInput(stepPx, grid) {
+                            detectTapGestures(
+                                onTap = { off -> pick(off, stepPx, scroll.value, grid)?.let { picked = it } },
+                                onLongPress = { off -> pick(off, stepPx, scroll.value, grid)?.let { picked = it } }
+                            )
+                        }
                 ) {
-                    val cal = startWeek.clone() as java.util.Calendar
-                    repeat(totalWeeks) {
-                        Column(verticalArrangement = Arrangement.spacedBy(gap)) {
-                            repeat(7) {
-                                val key = StatsViewModel.dayKey(cal.timeInMillis)
-                                val count = heat[key] ?: 0
-                                Box(
-                                    Modifier
-                                        .size(cellSize)
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(
-                                            when {
-                                                count == 0 -> bg
-                                                count < 10 -> light
-                                                count < 40 -> mid
-                                                else -> primary
-                                            }
-                                        )
-                                        // 长按与点按都能查看：长按是需求指定的手势，点按顺带可用
-                                        .pointerInput(key) {
-                                            detectTapGestures(
-                                                onTap = { picked = key },
-                                                onLongPress = { picked = key }
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(scroll),
+                        horizontalArrangement = Arrangement.spacedBy(gap)
+                    ) {
+                        grid.forEach { column ->
+                            Column(verticalArrangement = Arrangement.spacedBy(gap)) {
+                                column.forEach { (key, count) ->
+                                    Box(
+                                        Modifier
+                                            .size(cellSize)
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(
+                                                when {
+                                                    count == 0 -> bg
+                                                    count < 10 -> light
+                                                    count < 40 -> mid
+                                                    else -> primary
+                                                }
                                             )
-                                        }
-                                        .semantics { contentDescription = "$key 刷了 $count 题" }
-                                )
-                                cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
+                                            .then(
+                                                if (key == pickedKey)
+                                                    Modifier.border(1.5.dp, extra.terracottaDeep, RoundedCornerShape(4.dp))
+                                                else Modifier
+                                            )
+                                            .semantics { contentDescription = "$key 刷了 $count 题" }
+                                    )
+                                }
                             }
                         }
                     }
+
+                    val p = picked
+                    if (p != null) {
+                        // 气泡自动收起，避免用户要点别的格子时还得先关一次
+                        LaunchedEffect(p.key, p.x, p.y) {
+                            kotlinx.coroutines.delay(2600)
+                            picked = null
+                        }
+                        var bubbleSize by remember { mutableStateOf(IntSize.Zero) }
+                        val bubbleH = bubbleSize.height
+                        val bubbleW = bubbleSize.width
+                        val above = p.y - bubbleH - gapPx > 0f
+                        val bx = (p.x - bubbleW / 2f).coerceIn(0f, (hostW - bubbleW).coerceAtLeast(0f))
+                        val by = if (above) p.y - bubbleH - gapPx else p.y + cellPx + gapPx
+                        HeatBubble(
+                            key = p.key,
+                            count = p.count,
+                            modifier = Modifier
+                                .align(Alignment.TopStart)
+                                .onSizeChanged { bubbleSize = it }
+                                .offset { IntOffset(bx.toInt(), by.toInt()) }
+                        )
+                    }
                 }
             }
-            // 选中日期详情
-            val shown = picked
+            // 气泡会自动消失，这里只留一句常驻提示
             Text(
-                if (shown == null) "长按任意格子查看当天日期与题数" else "$shown · 刷了 ${heat[shown] ?: 0} 题",
+                "长按任意格子查看当天日期与题数",
                 style = MaterialTheme.typography.labelSmall,
-                color = if (shown == null) MaterialTheme.colorScheme.outline else extra.terracotta
+                color = MaterialTheme.colorScheme.outline
             )
             Row(
                 Modifier.fillMaxWidth(),
@@ -374,3 +435,49 @@ private fun Heatmap(heat: Map<String, Int>, weeks: Int, onWeeksChange: (Int) -> 
         }
     }
 }
+
+/** 按下点反查命中的格子；横向滚动过的列要加回 scrollX */
+private fun pick(
+    off: Offset,
+    stepPx: Float,
+    scrollX: Int,
+    grid: List<List<Pair<String, Int>>>
+): HeatPick? {
+    if (stepPx <= 0f) return null
+    val ci = ((off.x + scrollX) / stepPx).toInt()
+    val ri = (off.y / stepPx).toInt()
+    if (ci !in grid.indices || ri !in 0..6) return null
+    val (key, count) = grid[ci][ri]
+    return HeatPick(key, count, off.x, off.y)
+}
+
+/** 跟随手指的日期气泡：赤陶深底白字，自动在 2.6 秒后收起 */
+@Composable
+private fun HeatBubble(key: String, count: Int, modifier: Modifier = Modifier) {
+    val extra = shuaColors
+    val shadowC = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f)
+    Box(
+        modifier
+            .shadow(8.dp, RoundedCornerShape(10.dp), ambientColor = shadowC, spotColor = shadowC)
+            .clip(RoundedCornerShape(10.dp))
+            .background(extra.terracottaDeep)
+            .padding(horizontal = 11.dp, vertical = 7.dp)
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                key,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Medium,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                color = Color.White
+            )
+            Text(
+                if (count == 0) "未刷题" else "刷了 $count 题",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White
+            )
+        }
+    }
+}
+

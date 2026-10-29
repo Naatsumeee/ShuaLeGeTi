@@ -118,13 +118,13 @@ fun AskAiPanel(
         }
     }
 
-    // 键盘 / 手势条只取「两者中更大的那个」，绝不叠加：
-    // 早先这里同时用了 imePadding() + safeBottomPadding()，而 safeDrawing 本身
-    // 已包含 IME 高度，两份键盘高度相加 → 一大块空白把输入框顶出屏幕、
-    // 发送按钮被挤到屏幕外（这正是「输入框被空白遮盖且丢失发送按钮」的根因）。
+    // 外层是 ModalBottomSheet：它自己会跟随 IME 上移（Sheet 的容器已经吃掉了键盘高度）。
+    // 这里再补一份 ime inset，就会在「关闭」下面多出一块和键盘等高的空白，
+    // 把整个 Column 撑到屏幕最大高度 —— 视觉上就是「输入框被一片空白压住」。
+    // 所以键盘可见时只留一点点呼吸位，键盘收起时才需要给手势条让位。
     val imeBottom = WindowInsets.ime.asPaddingValues().calculateBottomPadding()
     val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    val bottomInset = maxOf(imeBottom, navBottom, 10.dp)
+    val bottomInset = if (imeBottom > 0.dp) 8.dp else maxOf(navBottom, 10.dp)
 
     Column(
         Modifier
@@ -174,9 +174,14 @@ fun AskAiPanel(
 
         // ---- 对话区 ----
         if (state.chat.isEmpty() && !state.asking) {
+            // 空态与「有消息」必须走同一套尺寸语义（weight + fill = false）：
+            // 之前空态只有 heightIn(min = 88.dp)、没有 weight，键盘弹起时
+            // 面板高度不随键盘收缩，底部多出的空白把输入框和发送按钮顶到可视区外
+            // —— 这正是「无消息时输入框被空白遮盖、发送按钮消失，有消息就正常」的原因。
             Box(
                 Modifier
                     .fillMaxWidth()
+                    .weight(1f, fill = false)
                     .heightIn(min = 88.dp)
                     .clip(RoundedCornerShape(14.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),

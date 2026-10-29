@@ -77,15 +77,41 @@ class MlKitOcrEngine : OcrProvider {
                 left.size + right.size >= blocks.size * 7 / 10
 
             return if (twoColumn) {
-                val header = spanning.sortedBy { it.box?.top ?: 0 }.joinToString("\n") { it.text }
-                val leftText = left.sortedWith(compareBy({ it.box!!.top }, { it.box!!.left })).joinToString("\n") { it.text }
-                val rightText = right.sortedWith(compareBy({ it.box!!.top }, { it.box!!.left })).joinToString("\n") { it.text }
+                val header = sortByLines(spanning).joinToString("\n") { it.text }
+                val leftText = sortByLines(left).joinToString("\n") { it.text }
+                val rightText = sortByLines(right).joinToString("\n") { it.text }
                 listOf(header, leftText, rightText).filter { it.isNotBlank() }.joinToString("\n")
             } else {
-                blocks.sortedWith(
-                    compareBy({ it.box?.top ?: 0 }, { it.box?.left ?: 0 })
-                ).joinToString("\n") { it.text }
+                sortByLines(blocks).joinToString("\n") { it.text }
             }
+        }
+
+        /**
+         * 行聚类排序：先把块聚成"视觉行"，行内按 left 从左到右，行间按 top 从上到下。
+         *
+         * 修复的 bug：同一行并排的两个选项（如 "A. 支气管哮喘    B. 高血压"）在 OCR 结果里
+         * 每块 top 常有 1~2px 抖动，若直接用 compareBy(top, left) 全量排序，会退化成
+         * "B. 高血压 / A. 支气管哮喘" 这种按列优先的错乱，导致选项内容与答案字母错位。
+         */
+        private fun sortByLines(blocks: List<OcrBlock>): List<OcrBlock> {
+            val withBox = blocks.filter { it.box != null }
+            val noBox = blocks.filter { it.box == null }
+            if (withBox.isEmpty()) return blocks
+            val rows = mutableListOf<MutableList<OcrBlock>>()
+            for (b in withBox.sortedBy { it.box!!.centerY() }) {
+                val box = b.box!!
+                val row = rows.firstOrNull { r -> r.any { sameLine(it.box!!, box) } }
+                if (row != null) row.add(b) else rows.add(mutableListOf(b))
+            }
+            return rows.sortedBy { r -> r.minOf { it.box!!.top } }
+                .flatMap { r -> r.sortedBy { it.box!!.left } } + noBox
+        }
+
+        /** 两块视为同一行：纵向重叠超过较矮者高度的一半 */
+        private fun sameLine(a: Rect, b: Rect): Boolean {
+            val overlap = minOf(a.bottom, b.bottom) - maxOf(a.top, b.top)
+            if (overlap <= 0) return false
+            return overlap.toFloat() >= minOf(a.height(), b.height()) * 0.5f
         }
     }
 }

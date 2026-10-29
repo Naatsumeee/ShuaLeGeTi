@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.examhelper.shua.data.db.QuestionType
+import com.examhelper.shua.data.llm.Prompts
 import com.examhelper.shua.data.model.ParsedLine
 import com.examhelper.shua.ui.bank.typeLabel
 import com.examhelper.shua.ui.theme.ChipTone
@@ -72,6 +73,14 @@ fun ImportScreen(
     val state by vm.state.collectAsState()
     val context = LocalContext.current
     val extra = shuaColors
+    // 复制提示词是「做完了但界面无变化」的操作，必须有可见反馈
+    var promptCopied by remember { mutableStateOf(false) }
+    LaunchedEffect(promptCopied) {
+        if (promptCopied) {
+            kotlinx.coroutines.delay(4000)
+            promptCopied = false
+        }
+    }
 
     LaunchedEffect(jobId) {
         if (jobId != null) vm.resumeJob(jobId)
@@ -124,7 +133,7 @@ fun ImportScreen(
                     singleLine = true,
                     shape = RoundedCornerShape(14.dp)
                 )
-                PrimaryAction("选择文件 · PDF / docx / 图片", extra.terracotta) {
+                PrimaryAction("选择文件 · PDF / docx / Markdown / 图片", extra.terracotta) {
                     runCatching {
                         if (android.os.Build.VERSION.SDK_INT >= 33) {
                             notifPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
@@ -134,6 +143,11 @@ fun ImportScreen(
                         arrayOf(
                             "application/pdf",
                             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            // .md / .txt：不同 ROM 的 DocumentsProvider 给的 MIME 不统一，
+                            // 三个都列上，实在没有的靠文件名扩展名兜底（见 DocumentIngestor）
+                            "text/markdown",
+                            "text/plain",
+                            "text/x-markdown",
                             "image/*"
                         )
                     )
@@ -149,6 +163,27 @@ fun ImportScreen(
                     SecondaryAction("导入 .json", Modifier.weight(1f)) {
                         jsonPicker.launch(arrayOf("application/json"))
                     }
+                }
+                // 没有电脑时不至于卡死：把格式规范复制给任意大模型，让它把 OCR 出来的
+                // 乱文本整理成 Markdown，再回来用「选择文件」导入 .md
+                SecondaryAction(
+                    if (promptCopied) "已复制到剪贴板 ✓" else "复制格式化提示词给 AI",
+                    Modifier.fillMaxWidth()
+                ) {
+                    val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                        as android.content.ClipboardManager
+                    cm.setPrimaryClip(
+                        android.content.ClipData.newPlainText("题库格式化提示词", Prompts.MARKDOWN_CONVERT)
+                    )
+                    promptCopied = true
+                }
+                if (promptCopied) {
+                    Text(
+                        "已复制。粘给任意 AI（ChatGPT / DeepSeek / Kimi 都行），让它按格式整理题目，" +
+                            "把结果存成 .md 再用「选择文件」导入。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = extra.terracottaDeep
+                    )
                 }
                 GlassSurface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), elevation = 8.dp) {
                     Row(Modifier.padding(13.dp), verticalAlignment = Alignment.Top) {
@@ -176,25 +211,38 @@ fun ImportScreen(
                     singleLine = true,
                     shape = RoundedCornerShape(14.dp)
                 )
-                PaperCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) {
-                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text("OCR 引擎", style = serifTitle(15.sp, FontWeight.Medium), modifier = Modifier.weight(1f))
-                            SemanticChip(if (state.ocrEngine == "mlkit") "ML Kit" else "RapidOCR", ChipTone.Brand)
+                // Markdown / 纯文本本来就有文字，不需要 OCR —— 这种情况下把引擎选择整块隐藏，
+                // 否则用户会以为还要等一次「识别」，白担心一遍进度。
+                val lower = state.sourceName.lowercase()
+                val plainTextSource = lower.endsWith(".md") || lower.endsWith(".markdown") ||
+                    lower.endsWith(".txt") || lower.endsWith(".text")
+                if (!plainTextSource) {
+                    PaperCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) {
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text("OCR 引擎", style = serifTitle(15.sp, FontWeight.Medium), modifier = Modifier.weight(1f))
+                                SemanticChip(if (state.ocrEngine == "mlkit") "ML Kit" else "RapidOCR", ChipTone.Brand)
+                            }
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                EngineTab("ML Kit · 快", state.ocrEngine == "mlkit", Modifier.weight(1f)) { vm.setOcrEngine("mlkit") }
+                                EngineTab("RapidOCR · 准", state.ocrEngine == "rapidocr", Modifier.weight(1f)) { vm.setOcrEngine("rapidocr") }
+                            }
+                            Text(
+                                "扫描件质量差、双栏密集或 ML Kit 识别不理想时建议 RapidOCR（PP-OCRv5，离线）",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
                         }
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            EngineTab("ML Kit · 快", state.ocrEngine == "mlkit", Modifier.weight(1f)) { vm.setOcrEngine("mlkit") }
-                            EngineTab("RapidOCR · 准", state.ocrEngine == "rapidocr", Modifier.weight(1f)) { vm.setOcrEngine("rapidocr") }
-                        }
-                        Text(
-                            "扫描件质量差、双栏密集或 ML Kit 识别不理想时建议 RapidOCR（PP-OCRv3，离线）",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline
-                        )
                     }
+                } else {
+                    Text(
+                        "文本类文件直接读取，不需要 OCR。Markdown 的 # 标题会作为章节，**粗体**、表格、代码围栏等标记在解析前统一清理；公式 \$…\$ 原样保留。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
                 }
                 PrimaryAction("AI 智能解析（推荐 · 后台运行）", extra.terracotta) { vm.startPipeline("ai") }
                 Text(
@@ -476,3 +524,4 @@ private fun queryName(context: android.content.Context, uri: Uri): String = runC
         if (idx >= 0 && c.moveToFirst()) c.getString(idx) else uri.lastPathSegment ?: ""
     } ?: ""
 }.getOrDefault("")
+

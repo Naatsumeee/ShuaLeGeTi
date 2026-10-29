@@ -73,6 +73,15 @@ private data class DeepSolveBatchPayload(
     val results: List<DeepSolvePayload> = emptyList()
 )
 
+/**
+ * 深度解题的输出预算。
+ *
+ * 推理型模型（deepseek-v4-pro / reasoner 一类）会先花预算写思维链，正文才轮到输出。
+ * 2600 在带 Markdown 章节的深度解析上时常不够，会出现「正文被砍半」或「只有思考没有正文」，
+ * 用户侧表现就是"概率性生成失败"。4096 兼顾完整性；仍被截断时上层会重试。
+ */
+private const val DEEP_SOLVE_MAX_TOKENS = 4096
+
 class StudyViewModel(
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
@@ -330,7 +339,7 @@ class StudyViewModel(
         _state.value = s.copy(deepSolving = true, deepError = null)
         Haptics.tap()
         viewModelScope.launch {
-            val result = runCatching { requestDeepSolve(q) }
+            val result = requestDeepSolveWithRetry(q)
             result.fold(
                 onSuccess = { payload ->
                     val analysis = payload.analysis?.takeIf { it.isNotBlank() }
@@ -343,13 +352,19 @@ class StudyViewModel(
                         val updated = studyRepo.applyDeepSolve(q, analysis)
                         // 同步内存里的这道题，否则页面仍显示旧解析（deepSolve 后要立刻读到新内容）
                         questions = questions.map { if (it.id == updated.id) updated else it }
+                        // 只有还停在原来那道题时才回填，否则请求期间的切题会被旧结果覆盖
+                        val stillHere = _state.value.session?.question?.id == q.id
                         _state.value = _state.value.copy(
                             deepSolving = false,
-                            deepSolved = true,
+                            deepSolved = if (stillHere) true else _state.value.deepSolved,
                             deepError = null,
-                            // 需求：深度解题完成后自动开启对话输入框，方便接着追问
-                            askOpen = true,
-                            session = _state.value.session?.copy(question = updated)
+                            // 深度解题完成后**不要**自动弹出追问面板：解析刚生成，用户要先读。
+                            // 追问入口常驻在解析下方（DeepSolveRow），想接着问点一下即可。
+                            session = if (stillHere) {
+                                _state.value.session?.copy(question = updated)
+                            } else {
+                                _state.value.session
+                            }
                         )
                         Haptics.ok()
                     }
@@ -362,6 +377,44 @@ class StudyViewModel(
                 }
             )
         }
+    }
+
+    /**
+     * 深度解题重试包装。
+     *
+     * 「概率性生成失败」的真实成因是一批**非确定性**失败：模型偶发返回空内容
+     * （推理型模型把 token 先花在思考上，被 max_tokens 截断后 content 为空）、
+     * 网关偶发 5xx / 连接被重置、长回答撞上读超时。这些全都换一次请求就能过，
+     * 直接抛给用户就表现为「有时能生成、有时不能」。所以这里做 3 次带退避的重试，
+     * 只对「确定不该重试」的错误（未配置模型、鉴权失败、参数错误）立即放弃。
+     */
+    private suspend fun requestDeepSolveWithRetry(q: Question): Result<DeepSolvePayload> {
+        var lastError: Throwable? = null
+        val delays = longArrayOf(0L, 900L, 2200L)
+        for ((attempt, wait) in delays.withIndex()) {
+            if (wait > 0) kotlinx.coroutines.delay(wait)
+            val r = runCatching { requestDeepSolve(q) }
+            val payload = r.getOrNull()
+            if (payload != null && !payload.analysis.isNullOrBlank()) return r
+            val err = r.exceptionOrNull()
+                ?: IllegalStateException("模型未返回解析内容（第 ${attempt + 1} 次尝试）")
+            lastError = err
+            if (!isRetryable(err)) break
+        }
+        return Result.failure(lastError ?: IllegalStateException("深度解题失败"))
+    }
+
+    /** 鉴权 / 配置 / 参数类错误重试多少次都一样，立刻失败（省时也省钱） */
+    private fun isRetryable(e: Throwable): Boolean {
+        val msg = e.message.orEmpty()
+        if (msg.contains("尚未配置 AI 模型")) return false
+        if (msg.contains("HTTP 401") || msg.contains("HTTP 403")) return false
+        if (msg.contains("HTTP 400") || msg.contains("HTTP 404") || msg.contains("HTTP 422")) return false
+        if (msg.contains("无效") && msg.contains("API Key")) return false
+        // 余额不足 / 鉴权失败这类错误重复请求没有意义
+        if (msg.contains("Insufficient Balance") || msg.contains("insufficient_quota")) return false
+        if (msg.contains("Authentication") || msg.contains("Unauthorized")) return false
+        return true
     }
 
     private suspend fun requestDeepSolve(q: Question): DeepSolvePayload {
@@ -391,14 +444,23 @@ class StudyViewModel(
         // 而它要求模型输出 {"results":[...]}，解析成 DeepSolvePayload 时 analysis 必为 null，
         // 于是永远报「模型未返回解析内容」——那曾是该 bug 的根因。
         val system = com.examhelper.shua.data.llm.Prompts.DEEP_SOLVE_DEFAULT
-        val raw = llmClient.chat(
+        // max_tokens 给足：推理型模型（deepseek-v4-pro 等）会先花一部分预算写思维链，
+        // 早先给 2600 时常出现「正文还没开始就被截断」→ content 为空/半截，
+        // 表现就是「有时能生成、有时不能」。4096 是兼顾成本与完整性的折中。
+        val result = llmClient.chatWithUsage(
             provider = provider,
             systemPrompt = system,
             userPrompt = prompt,
             jsonMode = false,
-            maxTokens = 2600
+            maxTokens = DEEP_SOLVE_MAX_TOKENS
         )
-        return parseDeepSolve(raw)
+        val payload = parseDeepSolve(result.content)
+        // 被 max_tokens 截断时解析必然是残缺的，直接判失败让上层重试，
+        // 绝不能把半截解析写库覆盖原解析（那比报错更糟，用户会以为解析就该这么短）。
+        if (result.truncated && payload.analysis.isNullOrBlank()) {
+            error("模型输出被长度限制截断，请重试")
+        }
+        return payload
     }
 
     /**

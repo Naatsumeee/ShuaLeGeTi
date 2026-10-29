@@ -101,7 +101,10 @@ object Latex {
         "triangle" to "△", "square" to "□", "prime" to "′", "cdots" to "⋯",
         "ldots" to "…", "dots" to "…", "vdots" to "⋮", "ddots" to "⋱",
         "sum" to "∑", "prod" to "∏", "coprod" to "∐", "int" to "∫", "iint" to "∬",
-        "oint" to "∮", "partial" to "∂", "nabla" to "∇",
+        "oint" to "∮", "iiint" to "∭", "partial" to "∂", "nabla" to "∇",
+        // 这几个在 bigOps 里（上下限叠在符号上下方渲染），缺了映射会原样吐出命令名
+        "bigcup" to "⋃", "bigcap" to "⋂", "bigoplus" to "⨁", "bigotimes" to "⨂",
+        "bigvee" to "⋁", "bigwedge" to "⋀",
         "percent" to "%", "ell" to "ℓ", "hbar" to "ℏ", "Re" to "ℜ", "Im" to "ℑ",
         "aleph" to "ℵ", "dagger" to "†", "S" to "§", "P" to "¶",
         "colon" to ":", "mid" to "∣", "nmid" to "∤", "backslash" to "\\"
@@ -117,7 +120,8 @@ object Latex {
 
     /** 大运算符：行间公式里上下限要归到符号的上下方 */
     private val bigOps: Set<String> = setOf(
-        "sum", "prod", "coprod", "int", "iint", "oint", "bigcup", "bigcap"
+        "sum", "prod", "coprod", "int", "iint", "iiint", "oint", "bigcup", "bigcap",
+        "bigoplus", "bigotimes", "bigvee", "bigwedge"
     )
 
     private fun symbol(name: String): String = symbols[name] ?: name
@@ -422,8 +426,7 @@ object Latex {
         data class Env(val kind: Int, val rows: List<List<List<Node>>>) : Node
     }
 
-    private fun parseSeq(c: Cursor, stopAtBrace: Boolean, stopAtEnvEnd: String?): List<Node> {
-        val out = mutableListOf<Node>()
+    private fun parseSeq(c: Cursor, stopAtBrace: Boolean, stopAtEnvEnd: String?): List<Node> {        val out = mutableListOf<Node>()
         val text = StringBuilder()
 
         fun flushText() {
@@ -530,7 +533,21 @@ object Latex {
         flush: () -> Unit,
         push: (Node) -> Unit
     ) {
+        // 必须先把缓冲区里的文本落地再判断「底数是谁」。
+        // 否则 `\int_{0}^{1} x^{2}` 里 x 还在 text 缓冲里，`^{2}` 会误以为
+        // 底数还是前面那个积分号，把积分上限 1 覆盖成 2 —— 这就是
+        // 「∫₀¹x²dx 渲染成 ∫₀²x dx、∑_{i=1}^{n}i² 渲染成 ∑_{i=1}^{2}i」的根因。
+        flush()
         val last = out.lastOrNull()
+        // 大运算符（∫ ∑ ∏ ⋃ …）的上下限要贴着符号本身，渲染成符号上下方的小字，
+        // 而不是退化成右侧并列的普通上下标。
+        if (last is Node.BigOp) {
+            out[out.size - 1] = last.copy(
+                sup = sup ?: last.sup,
+                sub = sub ?: last.sub
+            )
+            return
+        }
         if (last is Node.Script) {
             out[out.size - 1] = last.copy(
                 sup = sup ?: last.sup,
@@ -542,7 +559,6 @@ object Latex {
             out.removeAt(out.size - 1)
             out += Node.Script(listOf(last), sup, sub)
         } else {
-            flush()
             out += Node.Script(emptyList(), sup, sub)
         }
     }
@@ -691,6 +707,48 @@ object Latex {
         s = s.replace("\\(", "\$").replace("\\)", "\$")
         s = s.replace("\\[", "\$\$").replace("\\]", "\$\$")
         return s
+    }
+
+    /**
+     * 仅供单元测试：把公式源码的解析结果摊平成可断言的文本。
+     *
+     * 上下标写成 `底^(上)` / `底_(下)`，大运算符写成 `∫_(下限)^(上限)`。
+     * 之所以要这个入口：上下标挂错底数是纯解析层的问题，只有拿到节点树才能稳定断言，
+     * 光看截图放大肉眼比对既慢又容易漏（∫₀¹x²dx 曾被渲染成 ∫₀²x dx 正是这么漏掉的）。
+     */
+    internal fun debugTree(source: String): String =
+        flat(parseSeq(Cursor(normalizeSource(source)), stopAtBrace = false, stopAtEnvEnd = null))
+
+    private fun flat(nodes: List<Node>): String = buildString {
+        nodes.forEach { n ->
+            when (n) {
+                is Node.Txt -> append(n.text)
+                is Node.Seq -> append(flat(n.items))
+                is Node.Frac -> append("(").append(flat(n.num)).append(")/(").append(flat(n.den)).append(")")
+                is Node.Root -> {
+                    append("√")
+                    n.index?.let { append("[").append(flat(it)).append("]") }
+                    append("(").append(flat(n.body)).append(")")
+                }
+                is Node.Script -> {
+                    append(flat(n.base))
+                    n.sup?.let { append("^(").append(flat(it)).append(")") }
+                    n.sub?.let { append("_(").append(flat(it)).append(")") }
+                }
+                is Node.BigOp -> {
+                    append(symbol(n.name))
+                    n.sub?.let { append("_(").append(flat(it)).append(")") }
+                    n.sup?.let { append("^(").append(flat(it)).append(")") }
+                }
+                is Node.Delim -> append(n.open).append(flat(n.body)).append(n.close)
+                is Node.Accent -> append("acc").append(n.kind).append("(").append(flat(n.body)).append(")")
+                is Node.Gap -> append(" ")
+                is Node.Env -> append("env").append(n.kind)
+                    .append(n.rows.joinToString(",", "[", "]") { row ->
+                        row.joinToString("|") { cell -> flat(cell) }
+                    })
+            }
+        }
     }
 
     /** 行间公式：用真布局渲染（分式堆叠、根号线、矩阵、求和号归位） */

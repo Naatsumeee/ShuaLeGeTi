@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import com.examhelper.shua.data.ocr.MlKitOcrEngine
+import com.examhelper.shua.data.parse.MarkdownToText
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
@@ -23,7 +24,7 @@ data class IngestProgress(
 )
 
 /**
- * 统一文档入口：根据 Uri 与扩展名分流到 docx / PDF / 图片三条路径，
+ * 统一文档入口：根据 Uri 与扩展名分流到 docx / PDF / Markdown / 纯文本 / 图片五条路径，
  * 全部产出纯文本。
  */
 class DocumentIngestor(
@@ -37,13 +38,46 @@ class DocumentIngestor(
     ): String = withContext(Dispatchers.IO) {
         val name = queryDisplayName(uri) ?: ""
         val lower = name.lowercase()
+        // 部分文件管理器 / 云盘返回的 display name 没有扩展名，退回 ContentResolver 的 MIME 判断
+        val mime = if (lower.endsWith(".docx") || lower.endsWith(".pdf") || lower.endsWith(".doc") ||
+            lower.endsWith(".md") || lower.endsWith(".markdown") || lower.endsWith(".txt") ||
+            lower.endsWith(".text")
+        ) "" else context.contentResolver.getType(uri).orEmpty().lowercase()
+        val asMarkdown = lower.endsWith(".md") || lower.endsWith(".markdown") ||
+            mime.contains("markdown")
+        val asPlainText = asMarkdown || lower.endsWith(".txt") || lower.endsWith(".text") ||
+            (mime.startsWith("text/") && !mime.contains("html"))
         when {
             lower.endsWith(".docx") -> extractDocx(uri)
             lower.endsWith(".pdf") -> ingestPdf(uri, onProgress)
             lower.endsWith(".doc") ->
                 throw IllegalArgumentException("暂不支持旧版 .doc，请在 Word 中另存为 .docx 后导入")
+            asPlainText -> extractPlainText(uri, asMarkdown, onProgress)
             else -> ingestImage(uri, onProgress)
         }
+    }
+
+    /**
+     * Markdown / 纯文本直接读取：不走 OCR，也不做 PDF 那种逐页标记。
+     * Markdown 先做一次结构降级（详见 [MarkdownToText]），把 `## 章节`、`**粗体**`、
+     * 表格竖线、围栏代码块交给下游解析器能吃的形态；LaTeX 数学区原样保留。
+     */
+    private suspend fun extractPlainText(
+        uri: Uri,
+        asMarkdown: Boolean,
+        onProgress: suspend (IngestProgress) -> Unit
+    ): String {
+        onProgress(IngestProgress("extract", 1, 1, if (asMarkdown) "读取 Markdown 文本" else "读取文本文件"))
+        val raw = readTextUtf8(uri)
+        if (raw.isBlank()) throw IllegalArgumentException("文件中没有可读文本")
+        return if (asMarkdown) MarkdownToText.normalize(raw) else raw
+    }
+
+    private fun readTextUtf8(uri: Uri): String {
+        val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            ?: throw IllegalArgumentException("无法读取文件")
+        val body = String(bytes, Charsets.UTF_8)
+        return if (body.startsWith("\uFEFF")) body.substring(1) else body
     }
 
     private fun queryDisplayName(uri: Uri): String? = runCatching {

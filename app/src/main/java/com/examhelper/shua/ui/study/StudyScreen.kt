@@ -2,6 +2,14 @@
 
 package com.examhelper.shua.ui.study
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -59,6 +67,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -180,11 +189,18 @@ fun StudyScreen(
                         }
                     }
 
-                    // ---- 题干 + 选项：可滚动主体（左右滑动切题）----
-                    Column(
+                    // ---- 题干 + 选项：可滚动主体（左右滑动切题 + 左右平移过渡）----
+                    // 切题给一个横向位移动画：新题从手势方向滑入、旧题反向滑出，
+                    // 让「左右划动切换前后题目」这个手势有对应的空间直觉。
+                    val pageKey = if (state.mode == StudyMode.RANDOM) {
+                        session?.doneCount ?: 0
+                    } else {
+                        session?.indexInQueue ?: 0
+                    }
+                    Box(
                         Modifier
                             .weight(1f)
-                            .pointerInput(state.session?.indexInQueue, state.mode) {
+                            .pointerInput(pageKey, state.mode) {
                                 // 左右划切题：横向位移超过阈值即翻页；已作答的题恢复作答状态
                                 var total = 0f
                                 detectHorizontalDragGestures(
@@ -197,15 +213,40 @@ fun StudyScreen(
                                     }
                                 )
                             }
-                            .verticalScroll(rememberScrollState())
-                            .padding(horizontal = 14.dp)
-                            .padding(top = 2.dp, bottom = 6.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        if (q == null) {
-                            Text("题目加载中…")
-                        } else {
-                            QuestionBody(q = q, state = state, vm = vm, compact = compact)
+                        AnimatedContent(
+                            targetState = pageKey,
+                            transitionSpec = {
+                                val forward = targetState >= initialState
+                                val spec = tween<IntOffset>(durationMillis = 280, easing = FastOutSlowInEasing)
+                                val fade = tween<Float>(durationMillis = 170)
+                                // 新旧两页必须等宽反向平移（±w 整屏），不能只让旧的挪 1/4 屏就淡出：
+                                // 那样两页会在屏幕上叠在一起，题干的字互相穿透成重影。
+                                if (forward) {
+                                    (slideInHorizontally(spec) { w -> w } + fadeIn(fade)) togetherWith
+                                        (slideOutHorizontally(spec) { w -> -w } + fadeOut(fade))
+                                } else {
+                                    (slideInHorizontally(spec) { w -> -w } + fadeIn(fade)) togetherWith
+                                        (slideOutHorizontally(spec) { w -> w } + fadeOut(fade))
+                                }
+                            },
+                            label = "questionPage",
+                            modifier = Modifier.fillMaxSize()
+                        ) { _ ->
+                            Column(
+                                Modifier
+                                    .fillMaxSize()
+                                    .verticalScroll(rememberScrollState())
+                                    .padding(horizontal = 14.dp)
+                                    .padding(top = 2.dp, bottom = 6.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                if (q == null) {
+                                    Text("题目加载中…")
+                                } else {
+                                    QuestionBody(q = q, state = state, vm = vm, compact = compact)
+                                }
+                            }
                         }
                     }
 

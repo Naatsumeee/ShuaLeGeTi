@@ -14,7 +14,16 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
 @Serializable
-data class ChatMessage(val role: String, val content: String)
+data class ChatMessage(
+    val role: String,
+    val content: String,
+    /**
+     * 推理型模型（DeepSeek reasoner / v4-pro 等）的思维链字段。
+     * 只用于**读取**响应：若 content 为空而它有内容，说明模型的输出预算被思考耗尽，
+     * 这是「深度解题概率性没有结果」的典型成因之一，必须能分辨出来而不是报「未返回内容」。
+     */
+    @SerialName("reasoning_content") val reasoningContent: String? = null
+)
 
 @Serializable
 data class ChatCompletionRequest(
@@ -46,7 +55,17 @@ data class ChatUsage(
         if (cacheHitTokens > 0) cacheHitTokens else (promptTokensDetails?.cachedTokens ?: 0)
 }
 
-class ChatResult(val content: String, val usage: ChatUsage)
+class ChatResult(
+    val content: String,
+    val usage: ChatUsage,
+    /**
+     * 结束原因。`length` 表示被 max_tokens 截断 —— 深度解题这类长回答必须能识别出来：
+     * 截断的解析看起来"有内容"，但会被当作完整结果写库覆盖原解析，比直接失败更糟。
+     */
+    val finishReason: String? = null
+) {
+    val truncated: Boolean get() = finishReason == "length"
+}
 
 @Serializable
 data class ChatCompletionResponse(
@@ -56,7 +75,11 @@ data class ChatCompletionResponse(
     val error: ApiError? = null
 ) {
     @Serializable
-    data class Choice(val index: Int = 0, val message: ChatMessage? = null)
+    data class Choice(
+        val index: Int = 0,
+        val message: ChatMessage? = null,
+        @SerialName("finish_reason") val finishReason: String? = null
+    )
 
     @Serializable
     data class ApiError(val message: String? = null, val type: String? = null)
@@ -71,8 +94,12 @@ class LlmException(message: String, cause: Throwable? = null) : Exception(messag
 class LlmClient(
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(180, TimeUnit.SECONDS)
+        // 非流式请求要等整段响应体到达才返回，readTimeout 就是「总等待上限」。
+        // 深度解题走推理型模型 + 4096 输出预算，实际耗时经常超过 3 分钟；
+        // 早先的 180s 会在长回答上稳定超时，表现为「有时能生成、有时不能」。
+        .readTimeout(300, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
+        // 不设 callTimeout：它会把重试等待也算进去，反而更容易误杀长请求
         .build()
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
@@ -155,9 +182,21 @@ class LlmClient(
             val parsed = runCatching { json.decodeFromString<ChatCompletionResponse>(text) }
                 .getOrElse { throw LlmException("响应解析失败: ${text.take(200)}", it) }
             parsed.error?.let { throw LlmException(it.message ?: "API 错误") }
-            val content = parsed.choices.firstOrNull()?.message?.content
+            val choice = parsed.choices.firstOrNull()
                 ?: throw LlmException("模型未返回内容")
-            ChatResult(content, parsed.usage ?: ChatUsage())
+            val content = choice.message?.content.orEmpty()
+            val reasoning = choice.message?.reasoningContent.orEmpty()
+            if (content.isBlank()) {
+                // 推理型模型偶发把整段预算花在思维链上 → content 为空但 reasoning 有内容。
+                // 这时重试（换一次请求通常就能拿到正文）比让用户看到「未返回内容」更合理，
+                // 抛 LlmException 也能被上层 isRetryable 捕捉到。
+                throw LlmException(
+                    if (reasoning.isNotBlank())
+                        "模型只输出了思考过程未给出正文（可能被 max_tokens 截断），请重试"
+                    else "模型未返回内容"
+                )
+            }
+            ChatResult(content, parsed.usage ?: ChatUsage(), choice.finishReason)
         }
     }
 

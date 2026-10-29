@@ -20,9 +20,30 @@ data class NoteItem(val kind: Kind, val text: String) {
 
 val RELEASE_NOTES: List<ReleaseNote> = listOf(
     ReleaseNote(
+        version = "1.0.7",
+        date = "2026-10-30",
+        current = true,
+        items = listOf(
+            NoteItem(NoteItem.Kind.NEW, "支持直接导入 Markdown 题库（.md / .markdown）：识别 # 章节标题、1. 题号、- A. 选项、【答案】【解析】、公式与表格，无需先转成 PDF 或 docx"),
+            NoteItem(NoteItem.Kind.NEW, "导入页新增「复制格式化提示词给 AI」：一键复制整理规范，粘给任意 AI 让它把杂乱题目整理成标准 Markdown，再存成 .md 导回即可"),
+            NoteItem(NoteItem.Kind.IMPROVE, "RapidOCR 升级到 PP-OCRv5 模型：中文、符号（β、t₁/₂）与密集小字的识别明显更准，同时删掉旧模型与多余词表，安装包反而更小"),
+            NoteItem(NoteItem.Kind.FIX, "修复扫描件里同一行并排的两个选项顺序颠倒的问题（如「A. 支气管哮喘  B. 高血压」被识别成 B 在前），该问题会导致选项与答案字母错位"),
+            NoteItem(NoteItem.Kind.FIX, "修复长文本切块解析时把一道题劈成两半、造成缺题或选项不全的问题：现在按题目边界切分并保留重叠，跨段落的答案会自动回填到对应题目"),
+            NoteItem(NoteItem.Kind.FIX, "修复成本预估不准：改为按 DeepSeek 官方价目分模型（flash / v4-pro）计价，并正确区分高峰与空闲时段（周末与法定节假日全天按空闲价）"),
+            NoteItem(NoteItem.Kind.FIX, "修复 AI 回答与解析里单行 *斜体* / _斜体_ 标记不生效、直接露出星号下划线的问题，同时保证公式中的下标不被误当斜体"),
+            NoteItem(NoteItem.Kind.FIX, "修复深度解题与「问 AI」输出里 ${'$'}${'$'}…${'$'}${'$'} 行间公式被当成普通文字整段吐出的问题（现在分式、根号、积分求和都能正常排版）"),
+            NoteItem(NoteItem.Kind.FIX, "修复积分号与求和号的上下限被后面的变量指数覆盖（∫₀¹x² 曾显示成 ∫₀²x），以及 \\bigcup / \\bigcap 原样吐出符号名的问题"),
+            NoteItem(NoteItem.Kind.FIX, "修复深度解题「有时能生成、有时报错」：对模型空返回、网关偶发错误与超时自动重试，上下文长度上限放宽，正文被截断时直接重试而不会写入半截解析"),
+            NoteItem(NoteItem.Kind.IMPROVE, "深度解题完成后不再自动弹出「问 AI」面板——解析刚出来，先读为要；想追问点解析下方的「追问 AI」即可"),
+            NoteItem(NoteItem.Kind.FIX, "修复「问 AI」还没有任何消息时，键盘弹起会把输入框压在一大片空白下、发送按钮不见的问题"),
+            NoteItem(NoteItem.Kind.NEW, "切题增加左右平移动画：新题从手势方向滑入、旧题反向滑出，配合左右滑动切题的操作直觉"),
+            NoteItem(NoteItem.Kind.IMPROVE, "统计页热力图长按后，日期与题数气泡改为悬浮在手指上方，不再固定在图下方"),
+        )
+    ),
+    ReleaseNote(
         version = "1.0.6",
         date = "2026-10-29",
-        current = true,
+        current = false,
         items = listOf(
             NoteItem(NoteItem.Kind.NEW, "公式渲染全面重写：行内公式（如 x²、aₙ₊₁、Σᵢ₌₁ⁿ i）与正文同处一行自然换行；独占一行的公式按真实排版绘制——分式真正上下分层并带分数线、根号带横线罩住被开方数、求和与积分符号上下限归位、矩阵与分段函数成组排版"),
             NoteItem(NoteItem.Kind.NEW, "解析区支持完整 Markdown：标题、粗体、斜体、代码、引用、有序/无序列表、表格、分隔线都与公式混排，AI 回答不再是一坨纯文本"),

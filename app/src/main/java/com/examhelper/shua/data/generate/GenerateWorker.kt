@@ -239,11 +239,12 @@ class GenerateWorker(
                 return Result.failure()
             }
 
+            val costYuan = Cost.yuan(usage.hit, usage.miss, usage.out, primary.model)
             dao.upsert(
                 (dao.get(bankId) ?: GenerateJob(bankId = bankId)).copy(
                     stage = "DONE",
                     message = "完成：成功 $ok，失败 $fail · 缓存命中 ${Cost.hitRate(usage.hit, usage.miss)}%" +
-                        " · 参考成本 ${Cost.format(Cost.yuan(usage.hit, usage.miss, usage.out))} 元"
+                        costYuan?.let { " · 参考成本 ${Cost.format(it)} 元" }.orEmpty()
                 )
             )
             notifyDone(ok)
