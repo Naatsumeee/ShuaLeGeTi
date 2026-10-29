@@ -92,6 +92,23 @@ TOKEN=$(printf "protocol=https\nhost=github.com\n\n" | git credential fill | gre
 GH_TOKEN=$TOKEN gh release list                    # GitHub API 操作
 ```
 
+### 推送卡住的坑（**必看**）
+
+`credential.helper=helper-selector`（指向 GCM 2.9.1）在后台/无交互 shell 里会**永久挂起**：`git push` 停在 `Pushing to https://github.com/...` 不动，`git credential fill` 也一起卡死。`git ls-remote` 却很快——因为本仓库公开、读不需要认证，极易误判成网络问题。
+
+已验证的绕过办法（注意别把 token 写进日志）：
+
+```bash
+printf "protocol=https\nhost=github.com\n\n" | GCM_INTERACTIVE=never git credential-manager get > cred.txt
+grep '^password=' cred.txt | cut -d= -f2- > tok && chmod 600 tok
+printf '#!/bin/sh\ncat "%s"\n' "$PWD/tok" > askpass.sh && chmod +x askpass.sh
+GIT_ASKPASS="$PWD/askpass.sh" GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never \
+  git -c credential.helper= push origin main
+rm -f tok askpass.sh cred.txt                      # 用完立刻删
+```
+
+关键是 `git -c credential.helper=` 把会挂起的 helper 清空，改由 `GIT_ASKPASS` 供密码。
+
 ## 历史里程碑
 
 M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI 生成+置信度 → M4 模式补全 → M5 三省六部 → M6 错题本/统计/收藏/导出 → 后台解析+提速 → A1/A2/A3/B 型题+筛选+斩题+测试模式+热力图+搜索 → 纸感主题 → 导出增强（AI 内容开关+章节汇总+完整往返）→ 生成后台化+断点续传+费用透明 → 字体/配色/错题本重设计 → RapidOCR 上线 → 16KB 页对齐修复（NDK 重编）→ **v1.0.0** → 视觉层 v2 重做（暖纸+液态玻璃+底部悬浮 Dock+设置页音效/暗黑/数据管理）→ v1.0.1~v1.0.3（顶栏统一、底栏重写、Serif 加粗、暗绿正确色、震动与音效拆分、左右滑切题、AI 深度解题、LaTeX 自研渲染、回到上次进度、更新日志）→ v1.0.4（问 AI 追问面板+常驻入口）→ v1.0.5（8 bug 修复 + 成本显示/错题本章节重刷/热力图增强/名词解释独立题型）→ **v1.0.6**（LaTeX 渲染器全量重写 + Markdown 渲染器，公式与 Markdown 全站混排）。
