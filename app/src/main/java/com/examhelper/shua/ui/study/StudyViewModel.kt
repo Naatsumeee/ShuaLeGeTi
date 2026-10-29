@@ -13,7 +13,6 @@ import com.examhelper.shua.data.repo.StudySession
 import com.examhelper.shua.data.settings.AppSettings
 import com.examhelper.shua.data.settings.SettingsStore
 import com.examhelper.shua.ui.sound.Haptics
-import com.examhelper.shua.ui.sound.SoundEffects
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -191,8 +190,7 @@ class StudyViewModel(
             revealed = true,
             selected = selected
         )
-        // 音效反馈：答对/答错轻提示音 + 微振动（设置里可关）
-        SoundEffects.verdict(correct)
+        // 震动反馈：答对/答错微振动（设置里可关）
         if (correct == true) Haptics.ok() else Haptics.ng()
         if (hasAnswer) {
             viewModelScope.launch {
@@ -232,7 +230,6 @@ class StudyViewModel(
             )
             runCatching { studyRepo.touchProgress(bankId, mode) }
             _state.value = _state.value.copy(answered = true, correct = correct)
-            SoundEffects.verdict(correct)
             if (correct) Haptics.ok() else Haptics.ng()
             if (mode == StudyMode.SPEED) beginCountdown(appSettings.speedModeSeconds)
         }
@@ -354,7 +351,6 @@ class StudyViewModel(
                             askOpen = true,
                             session = _state.value.session?.copy(question = updated)
                         )
-                        SoundEffects.verdict(true)
                         Haptics.ok()
                     }
                 },
@@ -390,17 +386,17 @@ class StudyViewModel(
                 appendLine("现有简析（供参考，可推翻）：${it.take(300)}")
             }
         }
-        // 深度解题必须用「单题 JSON」提示词。
+        // 深度解题用「单题 Markdown」提示词（用户明确要求输出 Markdown，不再强制 JSON）。
         // 早先这里错把「批量生成答案」的自定义提示词（长度>200 即采用）拿来复用，
         // 而它要求模型输出 {"results":[...]}，解析成 DeepSolvePayload 时 analysis 必为 null，
-        // 于是永远报「模型未返回解析内容」——这才是该 bug 的根因。
+        // 于是永远报「模型未返回解析内容」——那曾是该 bug 的根因。
         val system = com.examhelper.shua.data.llm.Prompts.DEEP_SOLVE_DEFAULT
         val raw = llmClient.chat(
             provider = provider,
             systemPrompt = system,
             userPrompt = prompt,
-            jsonMode = true,
-            maxTokens = 2000
+            jsonMode = false,
+            maxTokens = 2600
         )
         return parseDeepSolve(raw)
     }
@@ -412,11 +408,16 @@ class StudyViewModel(
      * 可能包在代码块里、可能输出 {"results":[{...}]}、也可能干脆只吐一段纯文本解析。
      * 这几种都要能取到解析，否则用户会反复看到「模型未返回解析内容」。
      */
+    private val NL_JOIN = "\n"
+
     private fun parseDeepSolve(raw: String): DeepSolvePayload {
-        val text = raw.trim()
-        val cleaned = text
-            .removePrefix("```json").removePrefix("```JSON").removePrefix("```")
+        val cleaned = raw.trim()
+            .removePrefix("```markdown").removePrefix("```md").removePrefix("```")
             .removeSuffix("```").trim()
+        if (cleaned.isEmpty()) return DeepSolvePayload(null, null, null)
+
+        // 新格式（Markdown）：首行「答案：X」，其余整段是解析。
+        // 但历史数据 / 部分兼容端点仍可能回 JSON，所以先试 JSON，再按 Markdown 解析。
         val start = cleaned.indexOfFirst { it == '{' || it == '[' }
         val end = maxOf(cleaned.lastIndexOf('}'), cleaned.lastIndexOf(']'))
         if (start >= 0 && end > start) {
@@ -425,15 +426,38 @@ class StudyViewModel(
                 .getOrNull()
                 ?.takeIf { !it.analysis.isNullOrBlank() }
                 ?.let { return it }
-            // 兼容 {"results":[{...}]} 这种批量结构（只取第一条）
             runCatching {
                 json.decodeFromString<DeepSolveBatchPayload>(body).results.firstOrNull()
             }.getOrNull()
                 ?.takeIf { !it.analysis.isNullOrBlank() }
                 ?.let { return it }
         }
-        // 最后兜底：模型直接吐了一段自然语言解析，就整段当解析用，别把答案丢掉
-        return DeepSolvePayload(answer = null, analysis = cleaned.takeIf { it.isNotBlank() }, confidence = null)
+
+        // Markdown 正文：取首行的「答案：…」，剩下的作为解析
+        val lines = cleaned.lines()
+        val answerRe = Regex("""^\s*(?:\*\*)?(?:最终)?答案(?:\*\*)?\s*[:：]\s*(.+)$""")
+        var answer: String? = null
+        var consumed = 0
+        for ((idx, line) in lines.withIndex()) {
+            if (line.isBlank()) {
+                if (answer != null) { consumed = idx + 1; break }
+                continue
+            }
+            val m = answerRe.find(line)
+            if (m != null) {
+                answer = m.groupValues[1].trim().trim('*', ' ', '`', '。')
+                consumed = idx + 1
+                break
+            }
+            // 首行不是答案行，说明模型没按格式走，整段当解析
+            break
+        }
+        val body = lines.drop(consumed).joinToString(NL_JOIN).trim().ifBlank { cleaned }
+        return DeepSolvePayload(
+            answer = answer?.takeIf { it.isNotBlank() },
+            analysis = body.takeIf { it.isNotBlank() },
+            confidence = null
+        )
     }
 
     // ------------------------------------------------------------------
@@ -491,7 +515,6 @@ class StudyViewModel(
                         asking = false,
                         askError = null
                     )
-                    SoundEffects.verdict(true)
                 },
                 onFailure = { e ->
                     if (_state.value.session?.question?.id != askedForId) return@fold

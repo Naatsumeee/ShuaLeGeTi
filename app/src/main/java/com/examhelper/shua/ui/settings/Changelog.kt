@@ -20,9 +20,22 @@ data class NoteItem(val kind: Kind, val text: String) {
 
 val RELEASE_NOTES: List<ReleaseNote> = listOf(
     ReleaseNote(
-        version = "1.0.5",
+        version = "1.0.6",
         date = "2026-10-29",
         current = true,
+        items = listOf(
+            NoteItem(NoteItem.Kind.NEW, "公式渲染全面重写：行内公式（如 x²、aₙ₊₁、Σᵢ₌₁ⁿ i）与正文同处一行自然换行；独占一行的公式按真实排版绘制——分式真正上下分层并带分数线、根号带横线罩住被开方数、求和与积分符号上下限归位、矩阵与分段函数成组排版"),
+            NoteItem(NoteItem.Kind.NEW, "解析区支持完整 Markdown：标题、粗体、斜体、代码、引用、有序/无序列表、表格、分隔线都与公式混排，AI 回答不再是一坨纯文本"),
+            NoteItem(NoteItem.Kind.NEW, "深度解题与「问 AI」的回答同样走 Markdown + 公式渲染，多步推导可以分条列出"),
+            NoteItem(NoteItem.Kind.IMPROVE, "参考答案、选项、共用题干、错题本详情、测试报告、编辑列表统一接入公式渲染，不再出现裸露的 $\\frac{a}{b}$ 源码"),
+            NoteItem(NoteItem.Kind.IMPROVE, "列表预览改为按行数省略，不再按字符硬截断（避免把公式命令从中间切断写成乱码）"),
+            NoteItem(NoteItem.Kind.FIX, "选项里混入行间公式时整张卡片被撑成两行、内容居中错位的问题")
+        )
+    ),
+    ReleaseNote(
+        version = "1.0.5",
+        date = "2026-10-29",
+        current = false,
         items = listOf(
             NoteItem(NoteItem.Kind.NEW, "成本显示：生成答案的 Token 用量改为「总 token / 缓存命中 / 参考成本（元）」，按 DeepSeek 官方峰谷分时定价计算"),
             NoteItem(NoteItem.Kind.NEW, "错题本章节重刷：错题按章节归拢，可单选或多选章节做「全部重刷 / 随机抽检」，做题页与题库刷题完全一致"),

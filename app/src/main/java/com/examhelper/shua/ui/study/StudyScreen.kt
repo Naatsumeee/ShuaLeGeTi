@@ -70,6 +70,7 @@ import com.examhelper.shua.ui.bank.typeLabel
 import com.examhelper.shua.ui.theme.ChipTone
 import com.examhelper.shua.ui.theme.CompactTopBar
 import com.examhelper.shua.ui.theme.GlassSurface
+import com.examhelper.shua.ui.theme.Markdown
 import com.examhelper.shua.ui.theme.Latex
 import com.examhelper.shua.ui.theme.MonoText
 import com.examhelper.shua.ui.theme.PaperCard
@@ -354,7 +355,11 @@ private fun QuestionBody(
                     style = MaterialTheme.typography.labelSmall,
                     color = extra.amber
                 )
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                Latex.LatexText(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
             }
         }
     }
@@ -464,7 +469,8 @@ private fun AnswerCard(q: Question, state: StudyUiState, vm: StudyViewModel) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 if (q.analysis?.isNotBlank() == true) {
-                    Latex.LatexText(
+                    // 深度解题后的解析是 Markdown，这里统一走 Markdown 渲染
+                    Markdown.MarkdownText(
                         text = q.analysis!!,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface
@@ -513,19 +519,25 @@ private fun AnswerCard(q: Question, state: StudyUiState, vm: StudyViewModel) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.width(8.dp))
-                Text(
-                    q.answer.orEmpty(),
-                    style = serifTitle(19.sp, FontWeight.SemiBold).copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
-                    color = extra.terracotta
+                // 答案本身也可能是公式（如选项内容是 $x^2+1$），走 LaTeX 行内渲染
+                Latex.LatexText(
+                    text = q.answer.orEmpty(),
+                    style = serifTitle(19.sp, FontWeight.SemiBold)
+                        .copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                    color = extra.terracotta,
+                    modifier = Modifier.weight(1f, fill = false),
+                    allowDisplay = false
                 )
                 contentPreview?.let {
                     Spacer(Modifier.width(8.dp))
-                    Text(
-                        it,
+                    // 选项内容同样可能带公式，走行内 LaTeX，单行省略
+                    Latex.LatexText(
+                        text = it,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f, fill = false),
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        allowDisplay = false
                     )
                 }
             }
@@ -553,7 +565,7 @@ private fun AnswerCard(q: Question, state: StudyUiState, vm: StudyViewModel) {
                 }
             }
             q.analysis?.let {
-                Latex.LatexText(
+                Markdown.MarkdownText(
                     text = it,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface
@@ -756,7 +768,9 @@ private fun OptionRow(
             text = text,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.weight(1f),
+            // 选项是单行高度受限的条目：不允许 $$ 撑成行间公式，否则整行错位
+            allowDisplay = false
         )
         if (isAnswer) Icon(Icons.Filled.Check, "正确", modifier = Modifier.size(16.dp), tint = extra.verdant)
         if (isWrongPick) Icon(Icons.Filled.Close, "错误", modifier = Modifier.size(16.dp), tint = extra.sage)
@@ -917,6 +931,7 @@ private fun answerContentPreview(q: Question): String? {
     if (letters.isEmpty()) return null
     val options = JsonCodec.decodeOptions(q.optionsJson)
     return options.filter { it.key.isNotEmpty() && letters.contains(it.key[0]) }
-        .joinToString("、") { it.text.take(18) }
+        // 不按字符硬切：LaTeX 命令被截断后会渲染成源码。完整传入，由 maxLines + Ellipsis 在排版层省略
+        .joinToString("、") { it.text }
         .ifBlank { null }
 }

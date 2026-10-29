@@ -23,9 +23,7 @@ data class AppSettings(
     val sanShengLiuBu: Boolean = false, // 三省六部模式开关
     val parseConcurrency: Int = 4,      // AI 解析分块并发数
     val fontScale: Float = 1.0f,        // 全局字体缩放
-    /** 做题音效反馈开关 */
-    val soundEnabled: Boolean = true,
-    /** 震动反馈开关（与音效独立） */
+    /** 震动反馈开关 */
     val hapticEnabled: Boolean = true,
     /** 震动强度：1=轻 2=中 3=强 */
     val hapticStrength: Int = 2,
@@ -44,7 +42,6 @@ class SettingsStore(private val context: Context) {
         val SAN_SHENG = booleanPreferencesKey("san_sheng_liu_bu")
         val PARSE_CONCURRENCY = intPreferencesKey("parse_concurrency")
         val FONT_SCALE = androidx.datastore.preferences.core.floatPreferencesKey("font_scale")
-        val SOUND_ENABLED = booleanPreferencesKey("sound_enabled")
         val HAPTIC_ENABLED = booleanPreferencesKey("haptic_enabled")
         val HAPTIC_STRENGTH = intPreferencesKey("haptic_strength")
         val DARK_MODE = stringPreferencesKey("dark_mode") // "system" / "on" / "off"
@@ -60,7 +57,6 @@ class SettingsStore(private val context: Context) {
             sanShengLiuBu = p[Keys.SAN_SHENG] ?: false,
             parseConcurrency = (p[Keys.PARSE_CONCURRENCY] ?: 4).coerceIn(1, 8),
             fontScale = (p[Keys.FONT_SCALE] ?: 1.0f).coerceIn(0.8f, 1.5f),
-            soundEnabled = p[Keys.SOUND_ENABLED] ?: true,
             hapticEnabled = p[Keys.HAPTIC_ENABLED] ?: true,
             hapticStrength = (p[Keys.HAPTIC_STRENGTH] ?: 2).coerceIn(1, 3),
             darkMode = when (p[Keys.DARK_MODE]) {
@@ -79,7 +75,6 @@ class SettingsStore(private val context: Context) {
     suspend fun setSanShengLiuBu(v: Boolean) = context.dataStore.edit { it[Keys.SAN_SHENG] = v }
     suspend fun setParseConcurrency(v: Int) = context.dataStore.edit { it[Keys.PARSE_CONCURRENCY] = v.coerceIn(1, 8) }
     suspend fun setFontScale(v: Float) = context.dataStore.edit { it[Keys.FONT_SCALE] = v.coerceIn(0.8f, 1.5f) }
-    suspend fun setSoundEnabled(v: Boolean) = context.dataStore.edit { it[Keys.SOUND_ENABLED] = v }
     suspend fun setHapticEnabled(v: Boolean) = context.dataStore.edit { it[Keys.HAPTIC_ENABLED] = v }
     suspend fun setHapticStrength(v: Int) = context.dataStore.edit { it[Keys.HAPTIC_STRENGTH] = v.coerceIn(1, 3) }
     suspend fun setDarkMode(v: Boolean?) = context.dataStore.edit {

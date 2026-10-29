@@ -57,6 +57,7 @@ import com.examhelper.shua.ui.bank.typeLabel
 import com.examhelper.shua.ui.theme.ChipTone
 import com.examhelper.shua.ui.theme.CompactTopBar
 import com.examhelper.shua.ui.theme.GlassSurface
+import com.examhelper.shua.ui.theme.Latex
 import com.examhelper.shua.ui.theme.MonoText
 import com.examhelper.shua.ui.theme.PaperCard
 import com.examhelper.shua.ui.theme.SemanticChip
@@ -174,14 +175,18 @@ fun ExamScreen(
                                 }
                                 Spacer(Modifier.height(7.dp))
                                 q.sharedStem?.let {
-                                    Text(
-                                        it,
+                                    Latex.LatexText(
+                                        text = it,
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                     Spacer(Modifier.height(6.dp))
                                 }
-                                Text(q.stem, style = MaterialTheme.typography.bodyLarge)
+                                Latex.LatexText(
+                                    text = q.stem,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
                             }
                         }
 
@@ -372,11 +377,12 @@ private fun ExamOptionRow(key: String, text: String, selected: Boolean, onClick:
             )
         }
         Spacer(Modifier.width(10.dp))
-        Text(
-            text,
+        Latex.LatexText(
+            text = text,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.weight(1f),
+            allowDisplay = false
         )
         if (selected) {
             Icon(Icons.Filled.Check, "已选", modifier = Modifier.size(16.dp), tint = extra.terracotta)
@@ -398,10 +404,11 @@ fun SharedOptionsCard(sharedOptionsJson: String) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 9.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("共用选项 · B 型题", style = MaterialTheme.typography.labelSmall, color = extra.amber)
             shared.forEach {
-                Text(
-                    "${it.key}. ${it.text}",
+                Latex.LatexText(
+                    text = "${it.key}. ${it.text}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = MaterialTheme.colorScheme.onSurface,
+                    allowDisplay = false
                 )
             }
         }

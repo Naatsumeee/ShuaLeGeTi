@@ -32,3 +32,6 @@ Desktop.ini
 
 # 本地视觉抽查截图（临时）
 .shots/
+
+# DSH 进度输出
+.dsh-progress/

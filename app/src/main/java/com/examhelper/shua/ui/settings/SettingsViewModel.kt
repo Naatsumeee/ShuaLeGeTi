@@ -12,7 +12,6 @@ import com.examhelper.shua.data.repo.LocalDataRepository
 import com.examhelper.shua.data.settings.OcrEngine
 import com.examhelper.shua.data.settings.SettingsStore
 import com.examhelper.shua.ui.sound.Haptics
-import com.examhelper.shua.ui.sound.SoundEffects
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -38,7 +37,6 @@ class SettingsViewModel(
         val sanShengLiuBu: Boolean = false,
         val parseConcurrency: Int = 4,
         val fontScale: Float = 1.0f,
-        val soundEnabled: Boolean = true,
         val hapticEnabled: Boolean = true,
         val hapticStrength: Int = 2,
         val darkMode: Boolean? = null,
@@ -66,14 +64,12 @@ class SettingsViewModel(
                     sanShengLiuBu = it.sanShengLiuBu,
                     parseConcurrency = it.parseConcurrency,
                     fontScale = it.fontScale,
-                    soundEnabled = it.soundEnabled,
                     hapticEnabled = it.hapticEnabled,
                     hapticStrength = it.hapticStrength,
                     darkMode = it.darkMode,
                     customParsePrompt = it.customParsePrompt,
                     customAnswerPrompt = it.customAnswerPrompt
                 )
-                SoundEffects.setEnabled(it.soundEnabled)
                 Haptics.setEnabled(it.hapticEnabled)
                 Haptics.setStrength(it.hapticStrength)
             }
@@ -88,13 +84,7 @@ class SettingsViewModel(
     fun setCustomParsePrompt(v: String) = viewModelScope.launch { settingsStore.setCustomParsePrompt(v) }
     fun setCustomAnswerPrompt(v: String) = viewModelScope.launch { settingsStore.setCustomAnswerPrompt(v) }
 
-    // ---- 音效 / 暗黑模式 ----
-
-    fun setSoundEnabled(v: Boolean) = viewModelScope.launch {
-        settingsStore.setSoundEnabled(v)
-        SoundEffects.setEnabled(v)
-        if (v) SoundEffects.correct() // 打开时给一声试听反馈
-    }
+    // ---- 震动 / 暗黑模式 ----
 
     fun setHapticEnabled(v: Boolean) = viewModelScope.launch {
         settingsStore.setHapticEnabled(v)

@@ -55,6 +55,7 @@ import com.examhelper.shua.ui.bank.typeLabel
 import com.examhelper.shua.ui.theme.ChipTone
 import com.examhelper.shua.ui.theme.CompactTopBar
 import com.examhelper.shua.ui.theme.GlassSurface
+import com.examhelper.shua.ui.theme.Latex
 import com.examhelper.shua.ui.theme.PaperCard
 import com.examhelper.shua.ui.theme.SectionLabel
 import com.examhelper.shua.ui.theme.SemanticChip
@@ -220,11 +221,11 @@ private fun QuestionRow(index: Int, q: Question, onClick: () -> Unit) {
             }
             Spacer(Modifier.width(9.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    q.stem,
+                Latex.LatexText(
+                    text = q.stem,
                     style = MaterialTheme.typography.bodySmall,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                     q.sourcePage?.let { SemanticChip("P$it", ChipTone.Neutral) }

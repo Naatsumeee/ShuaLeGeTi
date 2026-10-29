@@ -49,6 +49,8 @@ import com.examhelper.shua.ShuaApp
 import com.examhelper.shua.data.repo.StudyRepository
 import com.examhelper.shua.ui.theme.CompactTopBar
 import com.examhelper.shua.ui.theme.GlassSurface
+import com.examhelper.shua.ui.theme.Latex
+import com.examhelper.shua.ui.theme.Markdown
 import com.examhelper.shua.ui.theme.MonoText
 import com.examhelper.shua.ui.theme.PaperCard
 import com.examhelper.shua.ui.theme.SemanticChip
@@ -233,11 +235,13 @@ fun ExamReportScreen(
                                 )
                             }
                             Spacer(Modifier.width(8.dp))
-                            Text(
-                                item.question.stem.take(42) + if (item.question.stem.length > 42) "…" else "",
+                            // 题干可能含公式：完整传入交给排版层省略，避免截断 LaTeX 命令
+                            Latex.LatexText(
+                                text = item.question.stem,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier.weight(1f),
+                                maxLines = 2
                             )
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -248,8 +252,8 @@ fun ExamReportScreen(
                             SemanticChip("正确 ${item.question.answer ?: "无"}", ChipTone.Neutral)
                         }
                         item.question.analysis?.let {
-                            Text(
-                                it,
+                            Markdown.MarkdownText(
+                                text = it,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

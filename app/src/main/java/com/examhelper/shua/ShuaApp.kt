@@ -7,7 +7,6 @@ import com.examhelper.shua.data.repo.BankRepository
 import com.examhelper.shua.data.repo.LocalDataRepository
 import com.examhelper.shua.data.repo.StudyRepository
 import com.examhelper.shua.data.settings.SettingsStore
-import com.examhelper.shua.ui.sound.SoundEffects
 
 class AppContainer(app: Application) {
     val database: AppDatabase = AppDatabase.get(app)
@@ -31,7 +30,6 @@ class ShuaApp : Application() {
             val app = this
             Thread { com.examhelper.shua.data.storage.AppStorage.cleanupStale(app) }.start()
         }
-        runCatching { SoundEffects.prepare(this) }
     }
 
     companion object {

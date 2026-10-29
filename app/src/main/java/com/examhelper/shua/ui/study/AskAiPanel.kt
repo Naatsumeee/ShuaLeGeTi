@@ -48,6 +48,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.examhelper.shua.ui.theme.Markdown
 import com.examhelper.shua.ui.theme.Latex
 import com.examhelper.shua.ui.theme.monoStyle
 import com.examhelper.shua.ui.theme.safeBottomPadding
@@ -303,11 +304,13 @@ private fun ChatBubble(turn: ChatTurn) {
             if (isUser) {
                 Text(turn.text, style = MaterialTheme.typography.bodyMedium)
             } else {
-                // 模型回答里的公式也走 LaTeX 渲染，与解析区表现一致
-                Latex.LatexText(
+                // 模型回答常带 Markdown 与 $公式$，交给 Markdown 渲染器统一处理
+                // （Markdown 内部会把公式段落转交 Latex 渲染，两者混排表现一致）
+                Markdown.MarkdownText(
                     text = turn.text,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = MaterialTheme.colorScheme.onSurface,
+                    tight = true
                 )
             }
         }

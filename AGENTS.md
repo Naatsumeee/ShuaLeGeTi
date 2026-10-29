@@ -1,6 +1,6 @@
 # AGENTS.md — 刷了个题 (ShuaGeLeTi) 项目记忆
 
-> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：v1.0.5（2026-10-29）。
+> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：v1.0.6（2026-10-29）。
 
 ## 项目一句话
 
@@ -47,6 +47,14 @@ Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）�
 - 对话状态只在内存（`StudyUiState.chat`），**切题即清空**（`reload` 重建 state）；请求途中切题用 `askedForId` 守卫，回答不会落到新题上。
 - 深度解题成功后 `askOpen = true` 自动弹面板；`applyDeepSolve` 返回的 `updated` 必须回写 `questions` 与 `session.question`，否则页面仍显示旧解析。
 
+## 公式与 Markdown 渲染（`ui/theme/Latex.kt` + `ui/theme/Markdown.kt`，v1.0.6）
+
+- 两套渲染器**都是自研、零第三方依赖**。调研过 `ru.noties:jlatexmath-android`（GPL+CE、只出 AndroidView）与 `io.github.huarangmeng:latex-renderer`（MIT 但要求 compileSdk 36），都不合用。
+- `Latex` 双路径：**行内**（`$x^2$`）走 `annotate()` 压平成一条 `AnnotatedString`（BaselineShift 上下标、分式压 `a/b`、根式 `√(x)`），与中文同处一行可自然换行；**行间**（独占一行的 `$$..$$`）走 `LatexView` 真布局节点（`Column(width=IntrinsicSize.Max)` + `HorizontalDivider` 做分数线、根号横线罩住被开方数、大运算符上下限归位、`cases/matrix/aligned` 成组）。
+- 对外入口 `Latex.LatexText(text, style, color, maxLines, allowDisplay)`。**`allowDisplay = false` 是选项/预览/单行场景的必填项**：否则选项里出现 `$$` 会被当成行间公式，把整张卡片撑成两行并居中错位。
+- `Markdown.MarkdownText(text, style, color, tight)` 支持标题/粗斜体/行内代码/引用/有序无序列表/表格/分隔线，内部把公式段落转交 `Latex`。所有展示 AI 输出的地方（解析、深度解题、问 AI 回答、错题本详情、测试报告）都走它。
+- **列表预览不要按字符 `take(n)` 截断**——会把 LaTeX 命令从中间切断渲染成乱码；改成完整传入 + `maxLines` 由排版层省略。
+
 ## 本地文件存储规范（**硬要求**）
 
 - 唯一入口 `data/storage/AppStorage.kt`，全工程不要自己 `new File(context.cacheDir, "...")` 拼路径。
@@ -86,7 +94,7 @@ GH_TOKEN=$TOKEN gh release list                    # GitHub API 操作
 
 ## 历史里程碑
 
-M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI 生成+置信度 → M4 模式补全 → M5 三省六部 → M6 错题本/统计/收藏/导出 → 后台解析+提速 → A1/A2/A3/B 型题+筛选+斩题+测试模式+热力图+搜索 → 纸感主题 → 导出增强（AI 内容开关+章节汇总+完整往返）→ 生成后台化+断点续传+费用透明 → 字体/配色/错题本重设计 → RapidOCR 上线 → 16KB 页对齐修复（NDK 重编）→ **v1.0.0** → 视觉层 v2 重做（暖纸+液态玻璃+底部悬浮 Dock+设置页音效/暗黑/数据管理）→ v1.0.1~v1.0.3（顶栏统一、底栏重写、Serif 加粗、暗绿正确色、震动与音效拆分、左右滑切题、AI 深度解题、LaTeX 自研渲染、回到上次进度、更新日志）→ v1.0.4（问 AI 追问面板+常驻入口）→ **v1.0.5**（8 bug 修复 + 成本显示/错题本章节重刷/热力图增强/名词解释独立题型）。
+M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI 生成+置信度 → M4 模式补全 → M5 三省六部 → M6 错题本/统计/收藏/导出 → 后台解析+提速 → A1/A2/A3/B 型题+筛选+斩题+测试模式+热力图+搜索 → 纸感主题 → 导出增强（AI 内容开关+章节汇总+完整往返）→ 生成后台化+断点续传+费用透明 → 字体/配色/错题本重设计 → RapidOCR 上线 → 16KB 页对齐修复（NDK 重编）→ **v1.0.0** → 视觉层 v2 重做（暖纸+液态玻璃+底部悬浮 Dock+设置页音效/暗黑/数据管理）→ v1.0.1~v1.0.3（顶栏统一、底栏重写、Serif 加粗、暗绿正确色、震动与音效拆分、左右滑切题、AI 深度解题、LaTeX 自研渲染、回到上次进度、更新日志）→ v1.0.4（问 AI 追问面板+常驻入口）→ v1.0.5（8 bug 修复 + 成本显示/错题本章节重刷/热力图增强/名词解释独立题型）→ **v1.0.6**（LaTeX 渲染器全量重写 + Markdown 渲染器，公式与 Markdown 全站混排）。
 
 ## 待办池（按价值排序）
 

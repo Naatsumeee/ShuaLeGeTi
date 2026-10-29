@@ -54,6 +54,8 @@ import com.examhelper.shua.data.model.StudyFilter
 import com.examhelper.shua.ui.bank.typeLabel
 import com.examhelper.shua.ui.theme.ChipTone
 import com.examhelper.shua.ui.theme.CompactTopBar
+import com.examhelper.shua.ui.theme.Latex
+import com.examhelper.shua.ui.theme.Markdown
 import com.examhelper.shua.ui.theme.MonoText
 import com.examhelper.shua.ui.theme.PaperCard
 import com.examhelper.shua.ui.theme.SemanticChip
@@ -387,11 +389,12 @@ fun WrongBookScreen(
                                     is com.examhelper.shua.data.db.KillRecord -> SemanticChip("已斩", ChipTone.Neutral)
                                 }
                             }
-                            Text(
-                                q.stem.take(60) + if (q.stem.length > 60) "…" else "",
-                                style = MaterialTheme.typography.bodyMedium,
+                            // 硬截断会切断 LaTeX 命令，交给排版层按 2 行省略
+                            Latex.LatexText(
+                                text = q.stem,
+                                style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 21.sp),
                                 color = MaterialTheme.colorScheme.onSurface,
-                                lineHeight = 21.sp
+                                maxLines = 2
                             )
                         }
                     }
@@ -407,18 +410,22 @@ fun WrongBookScreen(
             title = { Text(typeLabel(q.type), style = serifTitle(18.sp, FontWeight.Medium)) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(q.stem, style = MaterialTheme.typography.bodyMedium)
+                    Latex.LatexText(
+                        text = q.stem,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
                     q.answer?.let {
-                        Text(
-                            "参考答案：$it",
+                        Latex.LatexText(
+                            text = "参考答案：$it",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Medium
+                            allowDisplay = false
                         )
                     }
                     q.analysis?.let {
-                        Text(
-                            it,
+                        Markdown.MarkdownText(
+                            text = it,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

@@ -124,15 +124,8 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                 PaperCard(Modifier.fillMaxWidth()) {
                     Column {
                         SettingSwitchRow(
-                            title = "做题音效反馈",
-                            subtitle = "答对/答错/切题时播放轻提示音（与震动独立）",
-                            checked = ui.soundEnabled,
-                            onCheckedChange = vm::setSoundEnabled
-                        )
-                        DividerLine()
-                        SettingSwitchRow(
                             title = "震动反馈",
-                            subtitle = "点选项、切题、判分时短促触感（与音效独立）",
+                            subtitle = "点选项、切题、判分时短促触感",
                             checked = ui.hapticEnabled,
                             onCheckedChange = vm::setHapticEnabled
                         )
