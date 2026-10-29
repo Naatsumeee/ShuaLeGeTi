@@ -176,7 +176,10 @@ fun AppRoot(fontScale: Float = 1f) {
                     composable(Routes.WRONGBOOK) {
                         WrongBookScreen(
                             contentPadding = PaddingValues(top = topInset),
-                            onOpenBank = { navController.navigate(Routes.bankDetail(it)) }
+                            onOpenBank = { navController.navigate(Routes.bankDetail(it)) },
+                            onStartStudy = { bankId, mode, filterJson ->
+                                navController.navigate(Routes.study(bankId, mode, filterJson))
+                            }
                         )
                     }
                     composable(Routes.STATS) {

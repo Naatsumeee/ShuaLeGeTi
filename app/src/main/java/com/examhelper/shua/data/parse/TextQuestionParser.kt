@@ -204,6 +204,7 @@ object TextQuestionParser {
                 when {
                     a != null && (a == "对" || a == "错") -> QuestionType.JUDGE
                     q.stem.contains("___") || q.stem.contains("__") -> QuestionType.FILL
+                    isTermStem(q.stem) -> QuestionType.TERM
                     else -> QuestionType.SHORT_ANSWER
                 }
             }
@@ -233,4 +234,16 @@ object TextQuestionParser {
         }
         return a.takeIf { it.isNotBlank() }
     }
+
+    /** 「解释××」「名词解释：××」「简述××的概念/定义/机制」这类纯概念题判为名词解释 */
+    private fun isTermStem(stem: String): Boolean {
+        val s = stem.trim()
+        if (s.length > 60) return false  // 太长的多半是论述题
+        return termPrefixRegex.containsMatchIn(s) ||
+            (s.contains("概念") || s.contains("定义") || s.contains("名词")) &&
+            (s.startsWith("简述") || s.startsWith("什么") || s.startsWith("何谓") || s.startsWith("试述"))
+    }
+
+    private val termPrefixRegex =
+        Regex("^(名词解释|解释名词|解释[:：]|什么是|什么是\"|何谓|试述)")
 }

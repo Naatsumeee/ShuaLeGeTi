@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.examhelper.shua.ShuaApp
 import com.examhelper.shua.data.db.GenerateJob
 import com.examhelper.shua.data.db.Question
+import com.examhelper.shua.data.generate.GenerateScope
 import com.examhelper.shua.data.generate.GenerateWorker
 import com.examhelper.shua.data.repo.BankRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -55,6 +56,25 @@ class GenerateViewModel(
             get() = scoped(questions).count { it.answer.isNullOrBlank() }
         val scopedNoAnalysis: Int
             get() = scoped(questions).count { it.analysis.isNullOrBlank() }
+
+        /**
+         * 「生成缺失」按钮上的数字：按需求口径改为**缺解析**的题数。
+         * 缺答案的题仍会被生成（见 [scopedIncomplete]），只是不体现在这个计数里。
+         */
+        val scopedIncomplete: Int
+            get() = scoped(questions).count { it.analysis.isNullOrBlank() }
+
+        /** 实际送生成的题：缺答案 **或** 缺解析（用于按钮可用性判定） */
+        val scopedTodo: Int
+            get() = scoped(questions).count { it.answer.isNullOrBlank() || it.analysis.isNullOrBlank() }
+
+        /**
+         * 错误范围：已有答案却缺解析的题。
+         * AI 全部跑完后解析覆盖率仍不满，就是这些题被跳过了（断点续传只按「缺答案」判定），
+         * 单独列出来才能补齐。
+         */
+        val scopedBroken: Int
+            get() = scoped(questions).count { !it.answer.isNullOrBlank() && it.analysis.isNullOrBlank() }
         val scopedTotal: Int get() = scoped(questions).size
 
         private fun scoped(list: List<Question>): List<Question> =
@@ -110,8 +130,45 @@ class GenerateViewModel(
             primaryName = providers.firstOrNull { it.isPrimary }?.name,
             sanSheng = settings.sanShengLiuBu && providers.size >= 2,
             concurrency = settings.parseConcurrency.coerceIn(1, 6),
-            chapters = questions.mapNotNull { it.chapter?.takeIf { c -> c.isNotBlank() } }.distinct().sorted()
+            chapters = sortChapters(questions.mapNotNull { it.chapter?.takeIf { c -> c.isNotBlank() } }.distinct())
         )
+    }
+
+    /**
+     * 章节按「自然顺序」排序：直接 sorted() 是字典序，"第10章" 会排在 "第2章" 前面，
+     * 这就是生成范围里章节乱序的原因。这里把字符串切成数字段与非数字段逐段比较。
+     */
+    private fun sortChapters(list: List<String>): List<String> {
+        val nat = java.text.Collator.getInstance(java.util.Locale.CHINA)
+        nat.strength = java.text.Collator.PRIMARY
+        return list.sortedWith { a, b -> naturalCompare(a, b) ?: nat.compare(a, b) }
+    }
+
+    private fun naturalCompare(a: String, b: String): Int? {
+        var i = 0
+        var j = 0
+        while (i < a.length && j < b.length) {
+            val ca = a[i]
+            val cb = b[j]
+            if (ca.isDigit() && cb.isDigit()) {
+                var ei = i
+                while (ei < a.length && a[ei].isDigit()) ei++
+                var ej = j
+                while (ej < b.length && b[ej].isDigit()) ej++
+                val na = a.substring(i, ei).trimStart('0')
+                val nb = b.substring(j, ej).trimStart('0')
+                if (na.length != nb.length) return na.length - nb.length
+                val c = na.compareTo(nb)
+                if (c != 0) return c
+                i = ei
+                j = ej
+            } else {
+                if (ca != cb) return ca.code - cb.code
+                i++
+                j++
+            }
+        }
+        return (a.length - i) - (b.length - j)
     }
 
     /** 勾选/取消章节范围（空 = 全库） */
@@ -127,12 +184,40 @@ class GenerateViewModel(
     }
 
     fun start(forceAll: Boolean) {
+        // 「生成缺失」的语义是「补齐缺失」：缺答案或缺解析都算，
+        // 否则题库自带答案的题永远不会被送去生成，解析覆盖率永远补不满。
+        val scope = if (forceAll) GenerateScope.ALL else GenerateScope.MISSING
         GenerateWorker.enqueue(
             context = ShuaApp.instance,
             bankId = bankId,
             forceAll = forceAll,
             concurrency = _state.value.concurrency,
-            chapters = _state.value.selectedChapters
+            chapters = _state.value.selectedChapters,
+            scope = scope
+        )
+    }
+
+    /** 极简模式：补齐缺答案/缺解析的题，解析限制 30 字以内 */
+    fun startMinimal() {
+        GenerateWorker.enqueue(
+            context = ShuaApp.instance,
+            bankId = bankId,
+            forceAll = false,
+            concurrency = _state.value.concurrency,
+            chapters = _state.value.selectedChapters,
+            scope = GenerateScope.MINIMAL
+        )
+    }
+
+    /** 错误范围：补「有答案但缺解析」的题 */
+    fun startBroken() {
+        GenerateWorker.enqueue(
+            context = ShuaApp.instance,
+            bankId = bankId,
+            forceAll = false,
+            concurrency = _state.value.concurrency,
+            chapters = _state.value.selectedChapters,
+            scope = GenerateScope.BROKEN
         )
     }
 

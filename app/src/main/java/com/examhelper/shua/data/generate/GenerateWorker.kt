@@ -25,6 +25,20 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
+ * 生成范围（顶层 object，便于 ViewModel 直接引用 GenerateScope.XXX）
+ * - ALL     全部重生成（forceAll）
+ * - MISSING 只补缺答案的题（历史默认行为）
+ * - MINIMAL 只补缺答案的题，且解析限制 30 字（省钱模式）
+ * - BROKEN  错误范围：已有答案但缺解析的题（AI 全部生成后仍覆盖不全的补漏）
+ */
+object GenerateScope {
+    const val ALL = "ALL"
+    const val MISSING = "MISSING"
+    const val MINIMAL = "MINIMAL"
+    const val BROKEN = "BROKEN"
+}
+
+/**
  * 后台 AI 生成 Worker：前台服务常驻（与导入同机制），切出/锁屏不中断。
  * 断点续传：每批结果即时写库，重跑自动跳过已有答案的题（forceAll 除外）。
  * 冲突保留：AI 与原题库答案不一致时，原答案存入 originalAnswer 双展示。
@@ -40,6 +54,8 @@ class GenerateWorker(
         const val KEY_CONCURRENCY = "concurrency"
         /** 章节范围（JSON 字符串数组，空 = 全部章节） */
         const val KEY_CHAPTERS = "chapters"
+        /** 生成范围：ALL 全部重生成 / MISSING 仅缺答案 / MINIMAL 仅缺答案+极简解析 / BROKEN 错误范围 */
+        const val KEY_SCOPE = "scope"
         const val CHANNEL_ID = "generate_pipeline"
         private const val NOTIFICATION_ID = 2001
 
@@ -50,7 +66,8 @@ class GenerateWorker(
             bankId: Long,
             forceAll: Boolean,
             concurrency: Int,
-            chapters: List<String> = emptyList()
+            chapters: List<String> = emptyList(),
+            scope: String = if (forceAll) GenerateScope.ALL else GenerateScope.MISSING
         ) {
             val request = OneTimeWorkRequestBuilder<GenerateWorker>()
                 .setInputData(
@@ -58,7 +75,8 @@ class GenerateWorker(
                         KEY_BANK_ID to bankId,
                         KEY_FORCE_ALL to forceAll,
                         KEY_CONCURRENCY to concurrency,
-                        KEY_CHAPTERS to (JsonCodec.encodeStringList(chapters) ?: "")
+                        KEY_CHAPTERS to (JsonCodec.encodeStringList(chapters) ?: ""),
+                        KEY_SCOPE to scope
                     )
                 )
                 .build()
@@ -93,18 +111,38 @@ class GenerateWorker(
             val others = if (sanSheng) providers.filter { it.id != primary.id } else emptyList()
 
             val customPrompt = container.settings.settings.first().customAnswerPrompt
+            // 极简解析模式用独立提示词（用户自定义提示词优先）
+            val scope = inputData.getString(KEY_SCOPE)
+                ?: if (forceAll) GenerateScope.ALL else GenerateScope.MISSING
+            val defaultPrompt =
+                if (scope == GenerateScope.MINIMAL) com.examhelper.shua.data.llm.Prompts.ANSWER_MINIMAL
+                else com.examhelper.shua.data.llm.Prompts.ANSWER_DEFAULT
             val generator = AnswerGenerator(
                 container.llmClient,
-                customPrompt.ifBlank { com.examhelper.shua.data.llm.Prompts.ANSWER_DEFAULT }
+                customPrompt.ifBlank { defaultPrompt }
             )
 
-            // 断点续传：非 forceAll 只处理无答案题目（已生成的天然跳过）
+            // 断点续传 + 生成范围：
+            // ALL    = 范围内全部重生成
+            // MISSING= 补「不完整」的题：缺答案 **或** 缺解析。
+            //          早先只按「缺答案」筛选，题库自带答案的题永远不会被送去生成，
+            //          于是 AI 全部跑完后解析覆盖率仍不满——这才是覆盖率不全的根因。
+            // MINIMAL= 同 MISSING，但提示词把解析压到 30 字
+            // BROKEN = 「错误范围」：已有答案却缺解析的题（AI 跑完仍覆盖不全的补漏）
             val chapters = JsonCodec.decodeStringList(inputData.getString(KEY_CHAPTERS))
-            val scoped = if (chapters.isEmpty()) bankRepo.getQuestions(bankId)
-            else bankRepo.getQuestions(bankId).filter { it.chapter in chapters }
-            val targets = if (forceAll) scoped else scoped.filter { it.answer.isNullOrBlank() }
+            val all = bankRepo.getQuestions(bankId)
+            val scoped = if (chapters.isEmpty()) all else all.filter { it.chapter in chapters }
+            val targets = when (scope) {
+                GenerateScope.ALL -> scoped
+                GenerateScope.BROKEN -> scoped.filter { !it.answer.isNullOrBlank() && it.analysis.isNullOrBlank() }
+                else -> scoped.filter { it.answer.isNullOrBlank() || it.analysis.isNullOrBlank() }
+            }
             if (targets.isEmpty()) {
-                dao.upsert(GenerateJob(bankId = bankId, stage = "DONE", total = 0, message = "没有需要生成的题目"))
+                val msg = when (scope) {
+                    GenerateScope.BROKEN -> "错误范围为空：所有题目都已有答案与解析"
+                    else -> "没有需要生成的题目"
+                }
+                dao.upsert(GenerateJob(bankId = bankId, stage = "DONE", total = 0, message = msg))
                 return Result.success()
             }
 
@@ -182,7 +220,7 @@ class GenerateWorker(
                             cacheHitTokens = usage.hit,
                             cacheMissTokens = usage.miss,
                             outputTokens = usage.out,
-                            message = "第 ${minOf(done / AnswerGenerator.BATCH_SIZE + 1, batches.size)}/${batches.size} 批 · 完成 $done/${targets.size} · 命中 ${usage.hit * 100 / (usage.hit + usage.miss).coerceAtLeast(1)}%",
+                            message = "第 ${minOf(done / AnswerGenerator.BATCH_SIZE + 1, batches.size)}/${batches.size} 批 · 完成 $done/${targets.size} · 命中 ${Cost.hitRate(usage.hit, usage.miss)}%",
                             updatedAt = System.currentTimeMillis()
                         )
                     )
@@ -204,7 +242,8 @@ class GenerateWorker(
             dao.upsert(
                 (dao.get(bankId) ?: GenerateJob(bankId = bankId)).copy(
                     stage = "DONE",
-                    message = "完成：成功 $ok，失败 $fail · 缓存命中 ${usage.hit * 100 / (usage.hit + usage.miss).coerceAtLeast(1)}% · 输出 ${usage.out} tokens"
+                    message = "完成：成功 $ok，失败 $fail · 缓存命中 ${Cost.hitRate(usage.hit, usage.miss)}%" +
+                        " · 参考成本 ${Cost.format(Cost.yuan(usage.hit, usage.miss, usage.out))} 元"
                 )
             )
             notifyDone(ok)

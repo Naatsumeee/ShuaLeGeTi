@@ -10,7 +10,8 @@ enum class QuestionType {
     MULTIPLE,     // 多选
     JUDGE,        // 判断
     FILL,         // 填空
-    SHORT_ANSWER  // 简答
+    SHORT_ANSWER, // 简答
+    TERM          // 名词解释（与简答并列的主观题型，作答与判分方式相同、标签不同）
 }
 
 /** 医学题型子类型标注 */

@@ -68,6 +68,12 @@ private data class DeepSolvePayload(
     val confidence: Int? = null
 )
 
+/** 兼容模型误用批量结构 {"results":[...]} 的情况 */
+@Serializable
+private data class DeepSolveBatchPayload(
+    val results: List<DeepSolvePayload> = emptyList()
+)
+
 class StudyViewModel(
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
@@ -384,10 +390,11 @@ class StudyViewModel(
                 appendLine("现有简析（供参考，可推翻）：${it.take(300)}")
             }
         }
-        val system = appSettings.customAnswerPrompt
-            .takeIf { it.contains("深度") || it.length > 200 }
-            ?.let { it }
-            ?: com.examhelper.shua.data.llm.Prompts.DEEP_SOLVE_DEFAULT
+        // 深度解题必须用「单题 JSON」提示词。
+        // 早先这里错把「批量生成答案」的自定义提示词（长度>200 即采用）拿来复用，
+        // 而它要求模型输出 {"results":[...]}，解析成 DeepSolvePayload 时 analysis 必为 null，
+        // 于是永远报「模型未返回解析内容」——这才是该 bug 的根因。
+        val system = com.examhelper.shua.data.llm.Prompts.DEEP_SOLVE_DEFAULT
         val raw = llmClient.chat(
             provider = provider,
             systemPrompt = system,
@@ -395,8 +402,38 @@ class StudyViewModel(
             jsonMode = true,
             maxTokens = 2000
         )
-        val cleaned = raw.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
-        return json.decodeFromString<DeepSolvePayload>(cleaned)
+        return parseDeepSolve(raw)
+    }
+
+    /**
+     * 容错解析深度解题返回。
+     *
+     * 模型（尤其非 DeepSeek 的兼容端点）常常不严格输出 {"analysis":...}：
+     * 可能包在代码块里、可能输出 {"results":[{...}]}、也可能干脆只吐一段纯文本解析。
+     * 这几种都要能取到解析，否则用户会反复看到「模型未返回解析内容」。
+     */
+    private fun parseDeepSolve(raw: String): DeepSolvePayload {
+        val text = raw.trim()
+        val cleaned = text
+            .removePrefix("```json").removePrefix("```JSON").removePrefix("```")
+            .removeSuffix("```").trim()
+        val start = cleaned.indexOfFirst { it == '{' || it == '[' }
+        val end = maxOf(cleaned.lastIndexOf('}'), cleaned.lastIndexOf(']'))
+        if (start >= 0 && end > start) {
+            val body = cleaned.substring(start, end + 1)
+            runCatching { json.decodeFromString<DeepSolvePayload>(body) }
+                .getOrNull()
+                ?.takeIf { !it.analysis.isNullOrBlank() }
+                ?.let { return it }
+            // 兼容 {"results":[{...}]} 这种批量结构（只取第一条）
+            runCatching {
+                json.decodeFromString<DeepSolveBatchPayload>(body).results.firstOrNull()
+            }.getOrNull()
+                ?.takeIf { !it.analysis.isNullOrBlank() }
+                ?.let { return it }
+        }
+        // 最后兜底：模型直接吐了一段自然语言解析，就整段当解析用，别把答案丢掉
+        return DeepSolvePayload(answer = null, analysis = cleaned.takeIf { it.isNotBlank() }, confidence = null)
     }
 
     // ------------------------------------------------------------------
@@ -530,5 +567,6 @@ class StudyViewModel(
         com.examhelper.shua.data.db.QuestionType.JUDGE -> "判断题"
         com.examhelper.shua.data.db.QuestionType.FILL -> "填空题"
         com.examhelper.shua.data.db.QuestionType.SHORT_ANSWER -> "简答题"
+        com.examhelper.shua.data.db.QuestionType.TERM -> "名词解释题"
     }
 }

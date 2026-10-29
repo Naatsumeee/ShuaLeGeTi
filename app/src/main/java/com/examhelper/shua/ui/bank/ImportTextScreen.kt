@@ -184,4 +184,5 @@ fun typeLabel(type: QuestionType): String = when (type) {
     QuestionType.JUDGE -> "判断"
     QuestionType.FILL -> "填空"
     QuestionType.SHORT_ANSWER -> "简答"
+    QuestionType.TERM -> "名词解释"
 }

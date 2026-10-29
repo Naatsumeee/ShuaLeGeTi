@@ -89,9 +89,6 @@ fun LiquidDock(
     val currentRouteState = rememberUpdatedState(currentRoute)
     val onSelectState = rememberUpdatedState(onSelect)
 
-    var dragPx by remember { mutableFloatStateOf(0f) }
-    var dragging by remember { mutableIntStateOf(-1) }
-
     Box(
         modifier
             .fillMaxWidth()
@@ -149,21 +146,22 @@ fun LiquidDock(
             val pillW = cellW - 8.dp
 
             val pillX = remember { Animatable(0f) }
-            val target = if (dragging >= 0) {
-                dragPx.coerceIn(0f, cellPx * (tabs.size - 1))
-            } else {
-                selectedIndex * cellPx
+            // 只维护「当前吸附到第几格」，拖动过程中不再逐帧刷新连续位移：
+            // 逐帧刷新会让 4 个 tab 每帧重组，跨多格时肉眼可见掉帧。
+            var snapIndex by remember { mutableIntStateOf(-1) }
+            val effectiveIndex = if (snapIndex >= 0) snapIndex else selectedIndex
+            val target = effectiveIndex * cellPx
+
+            LaunchedEffect(target) {
+                // 非线性吸附：带一点回弹的弹簧，跨格时先快后慢地"咬合"到按钮中心
+                pillX.animateTo(
+                    target,
+                    spring(dampingRatio = 0.62f, stiffness = Spring.StiffnessMediumLow)
+                )
             }
 
-            LaunchedEffect(target, dragging >= 0) {
-                // 拖动中跟手要"硬"（无回弹、低阻尼）；松手/点按切页用更柔的弹簧
-                val spec: AnimationSpec<Float> = if (dragging >= 0) {
-                    spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMedium)
-                } else {
-                    spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessLow)
-                }
-                pillX.animateTo(target, spec)
-            }
+            // 手指当前位置（px），拖动时按"滑到哪一格"离散吸附，而不是连续跟手
+            var fingerPx by remember { mutableFloatStateOf(0f) }
 
             // 胶囊滑块（唯一的动画元素）
             Box(
@@ -227,33 +225,39 @@ fun LiquidDock(
                             onDragStart = { offset ->
                                 Haptics.longPress()
                                 val idx = (offset.x / cellPx).toInt().coerceIn(0, tabs.size - 1)
-                                dragging = idx
-                                dragPx = idx * cellPx
-                            },
-                            onDrag = { change, amount ->
-                                change.consume()
-                                val nx = (dragPx + amount.x).coerceIn(0f, cellPx * (tabs.size - 1))
-                                dragPx = nx
-                                val idx = (nx / cellPx).roundToInt().coerceIn(0, tabs.size - 1)
-                                if (idx != dragging) {
-                                    dragging = idx
-                                    Haptics.tick()
-                                }
-                            },
-                            onDragEnd = {
-                                val idx = dragging.coerceIn(0, tabs.size - 1)
-                                dragging = -1
-                                if (idx >= 0 && tabs[idx].route != currentRouteState.value) {
+                                fingerPx = offset.x
+                                snapIndex = idx
+                                // 长按起手就切到该按钮，符合"滑到哪个就切哪个"的直觉
+                                if (tabs[idx].route != currentRouteState.value) {
                                     onSelectState.value(tabs[idx].route)
                                 }
                             },
-                            onDragCancel = { dragging = -1 }
+                            onDrag = { change, amount ->
+                                change.consume()
+                                fingerPx = (fingerPx + amount.x)
+                                    .coerceIn(0f, cellPx * (tabs.size - 1))
+                                // 关键：按手指位置四舍五入到最近的按钮格，胶囊离散吸附；
+                                // 每跨一格才更新一次状态 + 切页 + 轻触感，避免逐帧重组卡顿。
+                                val idx = (fingerPx / cellPx).roundToInt()
+                                    .coerceIn(0, tabs.size - 1)
+                                if (idx != snapIndex) {
+                                    snapIndex = idx
+                                    Haptics.tick()
+                                    // 需求：滑动到哪个按钮，页面就切到哪个
+                                    if (tabs[idx].route != currentRouteState.value) {
+                                        onSelectState.value(tabs[idx].route)
+                                    }
+                                }
+                            },
+                            onDragEnd = { snapIndex = -1 },
+                            onDragCancel = { snapIndex = -1 }
                         )
                     },
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 tabs.forEachIndexed { index, tab ->
-                    val highlighted = index == selectedIndex || index == dragging
+                    // 高亮只依赖离散的 effectiveIndex，拖动跨格时才变化一次
+                    val highlighted = index == effectiveIndex
                     Column(
                         Modifier
                             .width(cellW)

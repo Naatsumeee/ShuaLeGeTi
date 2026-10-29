@@ -2,9 +2,12 @@ package com.examhelper.shua.ui.stats
 
 import android.app.Application
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -23,9 +26,17 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -112,6 +123,7 @@ fun StatsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
     val vm: StatsViewModel = viewModel()
     val ui by vm.ui.collectAsState()
     val heat by vm.heat.collectAsState()
+    var heatWeeks by remember { mutableIntStateOf(8) }
 
     Column(
         Modifier
@@ -148,8 +160,8 @@ fun StatsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                     )
                 }
             }
-            item { SectionLabel("刷题热力图", trailing = "近 16 周") }
-            item { Heatmap(heat) }
+            item { SectionLabel("刷题热力图", trailing = "近 $heatWeeks 周") }
+            item { Heatmap(heat, heatWeeks) { heatWeeks = it } }
             item { SectionLabel("各题库", trailing = "${ui.perBank.size} 个") }
             if (ui.perBank.isEmpty()) {
                 item {
@@ -253,48 +265,101 @@ private fun BankStatRow(name: String, cnt: Int, ok: Int) {
     }
 }
 
-/** 近 16 周刷题热力图（暖纸格子墙） */
+/** 热力图时间范围（周） */
+private val HEAT_RANGES = listOf(8 to "近 8 周", 16 to "近 16 周", 32 to "近 32 周")
+
+/** 刷题热力图（暖纸格子墙）：长按/点按格子看当天日期与题数，可切换时间范围 */
+
 @Composable
-private fun Heatmap(heat: Map<String, Int>) {
+private fun Heatmap(heat: Map<String, Int>, weeks: Int, onWeeksChange: (Int) -> Unit) {
     val extra = shuaColors
+    var picked by remember { mutableStateOf<String?>(null) }
+
     PaperCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                HEAT_RANGES.forEach { (w, label) ->
+                    val selected = weeks == w
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(9.dp))
+                            .background(
+                                if (selected) extra.terracotta.copy(alpha = 0.14f) else Color.Transparent
+                            )
+                            .clickable { onWeeksChange(w); picked = null }
+                            .padding(horizontal = 9.dp, vertical = 5.dp)
+                    ) {
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (selected) extra.terracotta else MaterialTheme.colorScheme.outline
+                        )
+                    }
+                }
+            }
+
+            // 以本周为最后一列，往前推 (weeks-1) 周，保证包含今天
             val startWeek = java.util.Calendar.getInstance()
-            startWeek.add(java.util.Calendar.DAY_OF_YEAR, -(16 * 7 - 1))
             while (startWeek.get(java.util.Calendar.DAY_OF_WEEK) != java.util.Calendar.MONDAY) {
                 startWeek.add(java.util.Calendar.DAY_OF_YEAR, -1)
             }
+            startWeek.add(java.util.Calendar.DAY_OF_YEAR, -((weeks - 1) * 7))
             val primary = extra.terracotta
             val light = primary.copy(alpha = 0.30f)
             val mid = primary.copy(alpha = 0.62f)
             val bg = MaterialTheme.colorScheme.surfaceVariant
-            val cellSize = 12.dp
             val gap = 3.dp
-            val weeks = 17
-            Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(gap)
-            ) {
-                val cal = startWeek.clone() as java.util.Calendar
-                repeat(weeks) {
-                    Column(verticalArrangement = Arrangement.spacedBy(gap)) {
-                        repeat(7) {
-                            val count = heat[StatsViewModel.dayKey(cal.timeInMillis)] ?: 0
-                            Box(
-                                Modifier.size(cellSize).clip(RoundedCornerShape(3.dp)).background(
-                                    when {
-                                        count == 0 -> bg
-                                        count < 10 -> light
-                                        count < 40 -> mid
-                                        else -> primary
-                                    }
+            val totalWeeks = weeks
+            // 图块按可用宽度自适应放大，8 周时铺满整行、32 周时可横向滚动
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val avail = maxWidth
+                val fitted = (avail - gap * (totalWeeks - 1)) / totalWeeks
+                // 8 周时铺满整行（约 36dp），周数越多越小，最小 11dp 后改为横向滚动
+                val cellSize = fitted.coerceIn(11.dp, 36.dp)
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(gap)
+                ) {
+                    val cal = startWeek.clone() as java.util.Calendar
+                    repeat(totalWeeks) {
+                        Column(verticalArrangement = Arrangement.spacedBy(gap)) {
+                            repeat(7) {
+                                val key = StatsViewModel.dayKey(cal.timeInMillis)
+                                val count = heat[key] ?: 0
+                                Box(
+                                    Modifier
+                                        .size(cellSize)
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(
+                                            when {
+                                                count == 0 -> bg
+                                                count < 10 -> light
+                                                count < 40 -> mid
+                                                else -> primary
+                                            }
+                                        )
+                                        // 长按与点按都能查看：长按是需求指定的手势，点按顺带可用
+                                        .pointerInput(key) {
+                                            detectTapGestures(
+                                                onTap = { picked = key },
+                                                onLongPress = { picked = key }
+                                            )
+                                        }
+                                        .semantics { contentDescription = "$key 刷了 $count 题" }
                                 )
-                            )
-                            cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
+                                cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
+                            }
                         }
                     }
                 }
             }
+            // 选中日期详情
+            val shown = picked
+            Text(
+                if (shown == null) "长按任意格子查看当天日期与题数" else "$shown · 刷了 ${heat[shown] ?: 0} 题",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (shown == null) MaterialTheme.colorScheme.outline else extra.terracotta
+            )
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -302,7 +367,7 @@ private fun Heatmap(heat: Map<String, Int>) {
             ) {
                 Text("少", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
                 listOf(bg, light, mid, primary).forEach { c ->
-                    Box(Modifier.size(cellSize).clip(RoundedCornerShape(3.dp)).background(c))
+                    Box(Modifier.size(14.dp).clip(RoundedCornerShape(4.dp)).background(c))
                 }
                 Text("多", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
             }

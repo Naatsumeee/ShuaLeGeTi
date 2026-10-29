@@ -101,6 +101,7 @@ class LlmQuestionParser(
             "judge", "判断", "判断题", "bool", "boolean" -> QuestionType.JUDGE
             "fill", "填空", "填空题", "blank" -> QuestionType.FILL
             "short_answer", "简答", "简答题", "论述", "论述题", "essay", "short" -> QuestionType.SHORT_ANSWER
+            "term", "名词解释", "名词解释题", "解释名词", "名解", "term_explanation" -> QuestionType.TERM
             else -> QuestionType.SINGLE
         }
 

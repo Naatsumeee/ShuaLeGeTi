@@ -172,11 +172,26 @@ fun GenerateScreen(
                                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             if (job.cacheHitTokens + job.cacheMissTokens > 0) {
-                                val total = job.cacheHitTokens + job.cacheMissTokens
+                                val totalTok = job.cacheHitTokens + job.cacheMissTokens + job.outputTokens
+                                val cost = com.examhelper.shua.data.generate.Cost.yuan(
+                                    job.cacheHitTokens, job.cacheMissTokens, job.outputTokens
+                                )
+                                val rate = com.examhelper.shua.data.generate.Cost.hitRate(
+                                    job.cacheHitTokens, job.cacheMissTokens
+                                )
                                 Text(
-                                    "token：命中 ${job.cacheHitTokens}（${job.cacheHitTokens * 100 / total}%）· 未命中 ${job.cacheMissTokens} · 输出 ${job.outputTokens}",
+                                    "总 token ${com.examhelper.shua.data.generate.Cost.tokens(totalTok)}" +
+                                        " / 缓存命中 $rate%" +
+                                        " / 参考成本 ${com.examhelper.shua.data.generate.Cost.format(cost)} 元",
                                     style = monoStyleSafe(),
                                     color = extra.amber
+                                )
+                                Text(
+                                    if (com.examhelper.shua.data.generate.Cost.isOffPeak())
+                                        "按 DeepSeek 官方优惠时段（00:30–08:30）计价"
+                                    else "按 DeepSeek 官方标准时段计价，00:30–08:30 为优惠时段",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.outline
                                 )
                             }
                             job.errorMessage?.let {
@@ -224,10 +239,10 @@ fun GenerateScreen(
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(
                         onClick = { vm.start(false) },
-                        enabled = !state.running && state.scopedNoAnswer > 0 && state.providers > 0,
+                        enabled = !state.running && state.scopedTodo > 0 && state.providers > 0,
                         modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                         shape = RoundedCornerShape(14.dp)
-                    ) { Text("生成缺失 ${state.scopedNoAnswer}", style = MaterialTheme.typography.labelLarge) }
+                    ) { Text("生成缺失 ${state.scopedIncomplete}", style = MaterialTheme.typography.labelLarge) }
                     OutlinedButton(
                         onClick = { vm.start(true) },
                         enabled = !state.running && state.providers > 0,
@@ -235,6 +250,68 @@ fun GenerateScreen(
                         shape = RoundedCornerShape(14.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = extra.terracotta)
                     ) { Text("全部重生成", style = MaterialTheme.typography.labelLarge) }
+                }
+            }
+
+            // 错误范围：AI 全部跑完后仍缺解析的题（有答案无解析），单独补漏
+            item {
+                PaperCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "错误范围",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(Modifier.weight(1f))
+                            SemanticChip("${state.scopedBroken} 题", ChipTone.Amber)
+                        }
+                        Text(
+                            "已有答案但缺解析的题。用于批量补齐某一段解析，或修正早期版本遗留的覆盖空洞。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                        OutlinedButton(
+                            onClick = { vm.startBroken() },
+                            enabled = !state.running && state.scopedBroken > 0 && state.providers > 0,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
+                            shape = RoundedCornerShape(13.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = extra.amber)
+                        ) {
+                            Text(
+                                if (state.scopedBroken > 0) "补齐缺失解析 ${state.scopedBroken}"
+                                else "解析已全覆盖",
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 极简模式：解析压到 30 字，token 成本显著更低，适合只要答案的场景
+            item {
+                PaperCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                        Text(
+                            "仅生成答案和极简解析",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            "只处理缺答案或缺解析的题，解析限制 30 字以内，费用约为标准模式的一半。已生成过的题目自动跳过。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                        OutlinedButton(
+                            onClick = { vm.startMinimal() },
+                            enabled = !state.running && state.scopedTodo > 0 && state.providers > 0,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
+                            shape = RoundedCornerShape(13.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = extra.terracotta)
+                        ) {
+                            Text("极简生成 ${state.scopedIncomplete}", style = MaterialTheme.typography.labelLarge)
+                        }
+                    }
                 }
             }
             item {

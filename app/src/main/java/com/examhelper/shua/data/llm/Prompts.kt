@@ -13,7 +13,7 @@ object Prompts {
         {"questions":[{"type":"single","subtype":"A1","stem":"题干","sharedStem":null,"sharedOptions":[],"options":[{"key":"A","text":"选项内容"}],"answer":"B","analysis":"解析","chapter":"章节名","page":12}]}
 
         规则：
-        1. type 取值：single(单选) multiple(多选) judge(判断) fill(填空) short_answer(简答/论述)
+        1. type 取值：single(单选) multiple(多选) judge(判断) fill(填空) short_answer(简答/论述) term(名词解释)；题干形如「解释××」「名词解释：××」「简述××的概念/定义」的纯概念题归 term，其余主观题归 short_answer
         2. 医学题型子类型 subtype：A1=单句型单选题；A2=病例摘要型单选题；A3=一组子题共用同一段病例材料（共用题干）；B=一组题干共用同一组备选选项（共用备选答案的配伍题）
         3. A3 型：组内每个子题都带相同的 sharedStem（病例材料全文），type 为 single，各自有自己的 options 和 answer
         4. B 型：组内每题都带相同的 sharedOptions（共用选项数组），题目自身 options 为空数组，answer 用共用选项的字母
@@ -40,6 +40,24 @@ object Prompts {
         4. analysis 是简明解析：先给关键依据，必要时补一句排除理由；默认上限 80 字，复杂考点可略超但不啰嗦
         5. 无法作答时 confidence 给 30 以下并在 analysis 简述原因
         6. 数学公式、化学式、上下标一律用 LaTeX 写在 美元符号 里（如 x 的平方写作 x^2、分数写作 frac 形式、水的分子式写作 H_2O），不要把上下标写成 x2、H2O 这样的平文本
+        7. 直接输出 JSON，禁止展示思考过程或任何多余文字
+    """.trimIndent()
+
+    /**
+     * 极简解析版答案提示词：与 ANSWER_DEFAULT 完全同构（保证前缀缓存命中），
+     * 仅把解析长度压到 30 字以内。用于「只补答案 + 极简解析」的低成本场景。
+     */
+    val ANSWER_MINIMAL = """
+        你是严谨的医学学科答题引擎。用户给出编号的题目列表，逐题作答。只输出严格 JSON，不要解释和代码块：
+        {"results":[{"i":1,"answer":"...","analysis":"...","confidence":85}]}
+
+        规则：
+        1. i 为题目编号，与输入一致；按顺序输出所有题
+        2. 选择题 answer 用大写字母，多选用字母连写如 "ABD"；判断题用 "对" 或 "错"；填空/简答给参考答案文本
+        3. confidence 是你对该答案的把握程度 0-100，诚实评估；不确定就给低分
+        4. analysis 是极简解析：**必须 30 字以内**，只写最关键的一句依据（考点/定位），不展开、不列举、不复述题干
+        5. 无法作答时 confidence 给 30 以下并在 analysis 简述原因
+        6. 数学公式、化学式、上下标一律用 LaTeX 写在 美元符号 里（如 x 的平方写作 x^2、水的分子式写作 H_2O）
         7. 直接输出 JSON，禁止展示思考过程或任何多余文字
     """.trimIndent()
 

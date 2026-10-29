@@ -420,7 +420,7 @@ private fun QuestionBody(
             }
         }
 
-        QuestionType.FILL, QuestionType.SHORT_ANSWER -> {
+        QuestionType.FILL, QuestionType.SHORT_ANSWER, QuestionType.TERM -> {
             if (!state.revealed) {
                 OutlinedTextField(
                     value = state.textInput,
@@ -428,7 +428,7 @@ private fun QuestionBody(
                     label = { Text(if (q.type == QuestionType.FILL) "输入你的答案" else "写下你的回答（可选）") },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(14.dp),
-                    minLines = if (q.type == QuestionType.SHORT_ANSWER) 2 else 1
+                    minLines = if (q.type == QuestionType.FILL) 1 else 2
                 )
                 Button(
                     onClick = vm::revealReference,
@@ -599,7 +599,7 @@ private fun AnswerCard(q: Question, state: StudyUiState, vm: StudyViewModel) {
             }
 
             // 主观题自评
-            if ((q.type == QuestionType.FILL || q.type == QuestionType.SHORT_ANSWER) && !state.answered) {
+            if ((q.type == QuestionType.FILL || q.type == QuestionType.SHORT_ANSWER || q.type == QuestionType.TERM) && !state.answered) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(
                         onClick = { vm.selfRate(true) },

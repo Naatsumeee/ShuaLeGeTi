@@ -9,10 +9,15 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -112,13 +117,19 @@ fun AskAiPanel(
         }
     }
 
+    // 键盘 / 手势条只取「两者中更大的那个」，绝不叠加：
+    // 早先这里同时用了 imePadding() + safeBottomPadding()，而 safeDrawing 本身
+    // 已包含 IME 高度，两份键盘高度相加 → 一大块空白把输入框顶出屏幕、
+    // 发送按钮被挤到屏幕外（这正是「输入框被空白遮盖且丢失发送按钮」的根因）。
+    val imeBottom = WindowInsets.ime.asPaddingValues().calculateBottomPadding()
+    val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val bottomInset = maxOf(imeBottom, navBottom, 10.dp)
+
     Column(
         Modifier
             .fillMaxWidth()
-            .imePadding()
-            // 先避开手势条，再看键盘：两者叠加时取较大值，输入框不会被系统横条压住
-            .safeBottomPadding(minBottom = 8.dp)
             .padding(horizontal = 16.dp)
+            .padding(bottom = bottomInset)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("问 AI", style = serifTitle(18.sp, FontWeight.Medium))
@@ -179,7 +190,9 @@ fun AskAiPanel(
         } else {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp),
+                // weight 而非固定高度：键盘弹起、可视高度变小时对话区自己收缩，
+                // 保证下方输入框与发送按钮永远留在屏幕内
+                modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 itemsIndexed(state.chat) { _, turn ->

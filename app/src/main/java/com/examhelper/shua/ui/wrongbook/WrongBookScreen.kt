@@ -20,12 +20,16 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -44,7 +48,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.examhelper.shua.ShuaApp
 import com.examhelper.shua.data.db.FavoriteRecord
 import com.examhelper.shua.data.db.Question
+import com.examhelper.shua.data.db.StudyMode
 import com.examhelper.shua.data.db.WrongRecord
+import com.examhelper.shua.data.model.StudyFilter
 import com.examhelper.shua.ui.bank.typeLabel
 import com.examhelper.shua.ui.theme.ChipTone
 import com.examhelper.shua.ui.theme.CompactTopBar
@@ -137,14 +143,21 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 @Composable
 fun WrongBookScreen(
     onOpenBank: (Long) -> Unit,
-    contentPadding: PaddingValues = PaddingValues(0.dp)
+    contentPadding: PaddingValues = PaddingValues(0.dp),
+    /** 错题重刷 / 随机抽检：复用题库刷题的同款做题页（study 路由 + 筛选指纹） */
+    onStartStudy: (bankId: Long, mode: StudyMode, filterJson: String) -> Unit = { _, _, _ -> }
 ) {
     val vm: LibraryViewModel = viewModel()
     val lists by vm.lists.collectAsState()
     val selectedBank by vm.selectedBank.collectAsState()
     var tab by remember { mutableIntStateOf(0) }
     var detail by remember { mutableStateOf<Question?>(null) }
+    /** 章节筛选（null = 该题库全部章节） */
+    var chapter by remember { mutableStateOf<String?>(null) }
     val extra = shuaColors
+
+    // 切 tab / 切题库时章节选择失效，避免停在上一组不存在的章节上
+    LaunchedEffect(tab, selectedBank) { chapter = null }
 
     Column(
         Modifier
@@ -246,11 +259,92 @@ fun WrongBookScreen(
         val bankFilter: (Question?) -> Boolean = { q ->
             selectedBank == null || q?.bankId == selectedBank
         }
-        val entries = when (tab) {
+        val tabEntries = when (tab) {
             0 -> lists.wrong.filter { bankFilter(it.second) }
             1 -> lists.mastered.filter { bankFilter(it.second) }
             2 -> lists.favorites.filter { bankFilter(it.second) }
             else -> lists.kills.filter { bankFilter(it.second) }
+        }
+
+        // 章节分类：错题按章节归拢，可单选章节做「重刷 / 抽检」
+        val chapters = remember(tabEntries) {
+            tabEntries.mapNotNull { it.second?.chapter?.takeIf { c -> c.isNotBlank() } }.distinct().sorted()
+        }
+        val entries = if (chapter == null) tabEntries else tabEntries.filter { it.second?.chapter == chapter }
+
+        // 重刷 / 抽检入口：需要先选定题库（否则不知道在哪个库里重刷）
+        if (tabEntries.isNotEmpty() && selectedBank != null) {
+            val scopeBank = selectedBank!!
+            val scopeChapters = listOfNotNull(chapter)
+            val rebrushFilter = StudyFilter(chapters = scopeChapters, status = "WRONG").fingerprint()
+            val sampleFilter = StudyFilter(chapters = scopeChapters, status = "WRONG").fingerprint()
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = { onStartStudy(scopeBank, StudyMode.SEQUENTIAL, rebrushFilter) },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(13.dp)
+                ) { Text("全部重刷", style = MaterialTheme.typography.labelLarge) }
+                OutlinedButton(
+                    onClick = { onStartStudy(scopeBank, StudyMode.RANDOM, sampleFilter) },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(13.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = extra.terracotta)
+                ) { Text("随机抽检", style = MaterialTheme.typography.labelLarge) }
+            }
+            Text(
+                if (chapter == null) "范围：整个题库的错题" else "范围：章节「${chapter!!.take(14)}」的错题",
+                Modifier.padding(horizontal = 18.dp, vertical = 2.dp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline
+            )
+        }
+
+        if (chapters.isNotEmpty()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = chapter == null,
+                    onClick = { chapter = null },
+                    label = { Text("全部章节", style = MaterialTheme.typography.labelMedium) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    ),
+                    border = FilterChipDefaults.filterChipBorder(
+                        enabled = true,
+                        selected = chapter == null,
+                        borderColor = extra.creamLine,
+                        selectedBorderColor = extra.terracotta.copy(alpha = 0.4f)
+                    )
+                )
+                chapters.forEach { c ->
+                    FilterChip(
+                        selected = chapter == c,
+                        onClick = { chapter = if (chapter == c) null else c },
+                        label = {
+                            Text(c.take(12), maxLines = 1, style = MaterialTheme.typography.labelMedium)
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = true,
+                            selected = chapter == c,
+                            borderColor = extra.creamLine,
+                            selectedBorderColor = extra.terracotta.copy(alpha = 0.4f)
+                        )
+                    )
+                }
+            }
         }
         if (entries.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {

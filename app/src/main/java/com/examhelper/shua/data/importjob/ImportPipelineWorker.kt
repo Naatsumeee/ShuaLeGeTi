@@ -119,6 +119,19 @@ class ImportPipelineWorker(
                     com.examhelper.shua.data.ocr.MlKitOcrEngine()
                 }
                 val text = DocumentIngestor(applicationContext, ocr).ingest(Uri.parse(uriStr)) { p ->
+                    // OCR / 逐页读取阶段也要把进度写回数据库：
+                    // 早先只更新前台通知，用户切回应用内看到的进度条一直停在 0
+                    // （stage=INGEST 时 totalUnits 恒为 0），这就是「界面内看不到导入进度」的根因。
+                    runCatching {
+                        updateJob(jobId) {
+                            it.copy(
+                                stage = "INGEST",
+                                message = p.message,
+                                totalUnits = p.total,
+                                doneUnits = p.current
+                            )
+                        }
+                    }
                     runCatching {
                         setForeground(foregroundInfo(p.message, p.current, p.total))
                     }

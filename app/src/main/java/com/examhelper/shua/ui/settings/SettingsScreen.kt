@@ -441,9 +441,11 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
         ProviderEditDialog(
             initial = LlmProvider(
                 name = "",
-                baseUrl = "https://api.deepseek.com/v1",
+                // DeepSeek 官方端点：不带 /v1 的短形式，客户端拼 /chat/completions 即为官方地址
+                baseUrl = "https://api.deepseek.com",
                 apiKey = "",
-                model = "deepseek-chat"
+                // deepseek-chat 已下线，当前可用的是 deepseek-flash / deepseek-v4-pro
+                model = "deepseek-flash"
             ),
             onDismiss = { showAdd = false },
             onSave = {

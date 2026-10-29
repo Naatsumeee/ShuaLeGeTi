@@ -34,6 +34,18 @@ class UsageAcc(
         cacheHitTokens = hit.toInt(),
         cacheMissTokens = miss.toInt()
     )
+
+    companion object {
+        /**
+         * 从单次 usage 构造累加器（务必走 add，而不是直接读原生字段）。
+         *
+         * 中转/兼容端点常把命中数放在 OpenAI 的 prompt_tokens_details.cached_tokens，
+         * 而 DeepSeek 原生 prompt_cache_hit_tokens 缺失；直接读原生字段会得到
+         * hit=0、miss=0、prompt=0，命中率于是永远显示 0%。这是该 bug 的根因。
+         */
+        fun of(u: com.examhelper.shua.data.llm.ChatUsage): UsageAcc =
+            UsageAcc().apply { add(u) }
+    }
 }
 
 /** 单个模型对一题的裁决 */
@@ -123,11 +135,7 @@ class AnswerGenerator(
     ): Pair<List<AggregatedVerdict>, com.examhelper.shua.data.llm.ChatUsage> {
         val primaryOutcome = askBatch(primary, questions)
         val primaryVerdicts = primaryOutcome.verdicts
-        val totalUsage = UsageAcc(
-            primaryOutcome.usage.cacheHitTokens.toLong(),
-            primaryOutcome.usage.cacheMissTokens.toLong(),
-            primaryOutcome.usage.completionTokens.toLong()
-        )
+        val totalUsage = UsageAcc.of(primaryOutcome.usage)
         if (others.isEmpty()) {
             return questions.indices.map { i ->
                 AggregatedVerdict(
@@ -209,6 +217,7 @@ class AnswerGenerator(
             QuestionType.JUDGE -> "判断题"
             QuestionType.FILL -> "填空题"
             QuestionType.SHORT_ANSWER -> "简答题"
+            QuestionType.TERM -> "名词解释题"
         }
 
         fun answersMatch(a: String?, b: String?): Boolean {

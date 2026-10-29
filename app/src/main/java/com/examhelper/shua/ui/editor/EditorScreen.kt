@@ -336,11 +336,13 @@ private fun ModeSwitch(text: String, selected: Boolean, enabled: Boolean = true,
             .clip(RoundedCornerShape(11.dp))
             .background(if (selected) extra.terracotta else MaterialTheme.colorScheme.surfaceVariant)
             .then(if (enabled) Modifier.clickableSafe(onClick) else Modifier)
-            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
         Text(
             text,
             style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            softWrap = false,
             color = when {
                 !enabled -> MaterialTheme.colorScheme.outline
                 selected -> MaterialTheme.colorScheme.onPrimary
@@ -393,7 +395,7 @@ private fun QuestionEditDialog(
                     listOf(
                         QuestionType.SINGLE to "单选", QuestionType.MULTIPLE to "多选",
                         QuestionType.JUDGE to "判断", QuestionType.FILL to "填空",
-                        QuestionType.SHORT_ANSWER to "简答"
+                        QuestionType.SHORT_ANSWER to "简答", QuestionType.TERM to "名词解释"
                     ).forEach { (t, label) ->
                         ModeSwitch(label, type == t) { type = t }
                     }
@@ -477,12 +479,13 @@ private fun QuestionEditDialog(
     )
 }
 
-/** 简易自动换行容器：替代 FlowRow（避免实验 API 依赖），保证 <380px 不裁切 */
+/** 真正的流式折行：小屏放不下就换行，绝不把文字压成竖排或被右缘裁切 */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun FlowRowCompat(content: @Composable () -> Unit) {
-    Column {
-        Box(Modifier.fillMaxWidth()) {
-            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) { content() }
-        }
-    }
+    androidx.compose.foundation.layout.FlowRow(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp)
+    ) { content() }
 }

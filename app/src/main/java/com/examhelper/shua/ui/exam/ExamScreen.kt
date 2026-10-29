@@ -201,13 +201,13 @@ fun ExamScreen(
                                     )
                                 }
 
-                            QuestionType.FILL, QuestionType.SHORT_ANSWER -> OutlinedTextField(
+                            QuestionType.FILL, QuestionType.SHORT_ANSWER, QuestionType.TERM -> OutlinedTextField(
                                 value = state.textInputs[q.id] ?: "",
                                 onValueChange = vm::updateText,
                                 label = { Text("作答（交卷后对照参考答案）") },
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(14.dp),
-                                minLines = if (q.type == QuestionType.SHORT_ANSWER) 3 else 1
+                                minLines = if (q.type == QuestionType.FILL) 1 else 3
                             )
                         }
                     }

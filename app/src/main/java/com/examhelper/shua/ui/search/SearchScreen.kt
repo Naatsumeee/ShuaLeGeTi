@@ -16,6 +16,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
@@ -33,6 +35,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -52,7 +55,8 @@ import com.examhelper.shua.ui.theme.safeBottomPadding
 import com.examhelper.shua.ui.theme.safeTopPadding
 import com.examhelper.shua.ui.theme.serifTitle
 import com.examhelper.shua.ui.theme.shuaColors
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -62,6 +66,8 @@ class SearchViewModel : ViewModel() {
         val keyword: String = "",
         val results: List<QuestionDao.SearchRow> = emptyList(),
         val searching: Boolean = false,
+        /** 至少真正搜过一次，才允许显示「没有匹配结果」——否则刚输入两个字就报无结果，看起来像功能坏了 */
+        val searched: Boolean = false,
         val detail: Question? = null
     )
 
@@ -70,18 +76,30 @@ class SearchViewModel : ViewModel() {
 
     private val bankRepo = ShuaApp.instance.container.bankRepo
 
+    /** 输入即搜的防抖 job，避免每敲一个字都查一次库 */
+    private var debounceJob: Job? = null
+
     fun updateKeyword(v: String) {
-        _state.value = _state.value.copy(keyword = v)
+        _state.value = _state.value.copy(keyword = v, searched = false, results = emptyList())
+        debounceJob?.cancel()
+        if (v.trim().length < 2) return
+        debounceJob = viewModelScope.launch {
+            delay(280)
+            runSearch(v)
+        }
     }
 
     fun search() {
-        val kw = _state.value.keyword.trim()
+        debounceJob?.cancel()
+        viewModelScope.launch { runSearch(_state.value.keyword) }
+    }
+
+    private suspend fun runSearch(raw: String) {
+        val kw = raw.trim()
         if (kw.length < 2 || _state.value.searching) return
-        viewModelScope.launch(Dispatchers.IO) {
-            _state.value = _state.value.copy(searching = true)
-            val rows = runCatching { bankRepo.searchAll(kw) }.getOrDefault(emptyList())
-            _state.value = _state.value.copy(searching = false, results = rows)
-        }
+        _state.value = _state.value.copy(searching = true)
+        val rows = runCatching { bankRepo.searchAll(kw) }.getOrDefault(emptyList())
+        _state.value = _state.value.copy(searching = false, results = rows, searched = true)
     }
 
     fun openDetail(id: Long) {
@@ -112,10 +130,12 @@ fun SearchScreen(onBack: () -> Unit) {
             OutlinedTextField(
                 value = state.keyword,
                 onValueChange = vm::updateKeyword,
-                placeholder = { Text("搜索题干 / 选项 / 解析（≥2 字）", style = MaterialTheme.typography.bodySmall) },
+                placeholder = { Text("搜索题干 / 选项 / 解析（≥2 字，边输边搜）", style = MaterialTheme.typography.bodySmall) },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 shape = RoundedCornerShape(14.dp),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { vm.search() }),
                 trailingIcon = {
                     IconButton(onClick = vm::search) {
                         Icon(Icons.Filled.Search, contentDescription = "搜索", tint = extra.terracotta)
@@ -127,7 +147,7 @@ fun SearchScreen(onBack: () -> Unit) {
                 state.searching -> Box(Modifier.fillMaxWidth().padding(top = 24.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp, color = extra.terracotta)
                 }
-                state.results.isEmpty() && state.keyword.length >= 2 -> Box(
+                state.results.isEmpty() && state.searched && state.keyword.length >= 2 -> Box(
                     Modifier.fillMaxWidth().padding(top = 36.dp),
                     contentAlignment = Alignment.Center
                 ) {

@@ -46,10 +46,12 @@ interface QuestionDao {
     @Query("SELECT COUNT(*) FROM questions WHERE bankId = :bankId")
     suspend fun countByBank(bankId: Long): Int
 
-    @Query("SELECT COUNT(*) FROM questions WHERE bankId = :bankId AND (answer IS NULL OR answer = '')")
+    // 缺失判定必须与 UI 的 isNullOrBlank() 口径一致：纯空白串也算缺失。
+    // 之前只判断 = ''，AI 返回空白串时统计不报缺失，覆盖率却算成不满。
+    @Query("SELECT COUNT(*) FROM questions WHERE bankId = :bankId AND (answer IS NULL OR TRIM(answer) = '')")
     suspend fun countNoAnswer(bankId: Long): Int
 
-    @Query("SELECT COUNT(*) FROM questions WHERE bankId = :bankId AND (analysis IS NULL OR analysis = '')")
+    @Query("SELECT COUNT(*) FROM questions WHERE bankId = :bankId AND (analysis IS NULL OR TRIM(analysis) = '')")
     suspend fun countNoAnalysis(bankId: Long): Int
 
     @Query("SELECT COUNT(*) FROM questions WHERE bankId = :bankId AND aiGenerated = 1")

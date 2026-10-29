@@ -20,9 +20,31 @@ data class NoteItem(val kind: Kind, val text: String) {
 
 val RELEASE_NOTES: List<ReleaseNote> = listOf(
     ReleaseNote(
-        version = "1.0.4",
+        version = "1.0.5",
         date = "2026-10-29",
         current = true,
+        items = listOf(
+            NoteItem(NoteItem.Kind.NEW, "成本显示：生成答案的 Token 用量改为「总 token / 缓存命中 / 参考成本（元）」，按 DeepSeek 官方峰谷分时定价计算"),
+            NoteItem(NoteItem.Kind.NEW, "错题本章节重刷：错题按章节归拢，可单选或多选章节做「全部重刷 / 随机抽检」，做题页与题库刷题完全一致"),
+            NoteItem(NoteItem.Kind.NEW, "热力图增强：格子加大、默认近 8 周，可切换 8 / 16 / 32 周，长按任意格子查看当天日期与所刷题数"),
+            NoteItem(NoteItem.Kind.NEW, "名词解释独立题型：解析时把「解释××」这类纯概念题与简答题分开，筛选、编辑、统计各自独立"),
+            NoteItem(NoteItem.Kind.NEW, "生成范围新增「错误范围」：已有答案但缺解析的题单独成组，可批量补齐"),
+            NoteItem(NoteItem.Kind.NEW, "「仅生成答案和极简解析」：解析压到 30 字以内，费用约为标准模式的一半"),
+            NoteItem(NoteItem.Kind.NEW, "生成范围可按章节排序筛选，大题库只重跑某几章"),
+            NoteItem(NoteItem.Kind.IMPROVE, "生成缺失统计改为「缺解析」口径，不再与缺答案混在一起"),
+            NoteItem(NoteItem.Kind.IMPROVE, "导入 OCR 过程在应用内也显示进度条与已解析题数，不必只盯通知栏"),
+            NoteItem(NoteItem.Kind.IMPROVE, "底栏按住横滑：改为滑到哪一格就切到哪一页，胶囊非线性弹簧吸附，跨多格不再卡顿"),
+            NoteItem(NoteItem.Kind.FIX, "深度解题拿不到解析内容的问题"),
+            NoteItem(NoteItem.Kind.FIX, "缓存命中率恒显示 0% 的统计问题"),
+            NoteItem(NoteItem.Kind.FIX, "问 AI 输入框被输入法弹起的空白遮挡、发送按钮丢失"),
+            NoteItem(NoteItem.Kind.FIX, "全库搜索搜不到结果"),
+            NoteItem(NoteItem.Kind.FIX, "AI 生成完成后解析覆盖率统计不全")
+        )
+    ),
+    ReleaseNote(
+        version = "1.0.4",
+        date = "2026-10-29",
+        current = false,
         items = listOf(
             NoteItem(NoteItem.Kind.NEW, "问 AI 追问：深度解题完成后自动弹出对话输入框，可以接着问「为什么不选 C」「这题考的什么」这类追问，模型带着整道题和之前的对话回答"),
             NoteItem(NoteItem.Kind.NEW, "做题页常驻「问 AI」按钮：顶栏与解析区各有一个入口，不必先深度解题也能直接提问"),
