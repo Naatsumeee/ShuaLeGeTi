@@ -37,7 +37,11 @@ Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）�
   - **安全区硬规范**：每页根容器必须 `.safeTopPadding().safeBottomPadding()`（`Glass.kt` 里的 Modifier 扩展）。Android 15 edge-to-edge 下自绘 Surface 不会自动避让状态栏/手势条，漏写就会被安卓状态栏或导航条盖住。
   - 一级导航是**底部悬浮玻璃胶囊 Dock**（4 tab），距底 `max(14dp, 手势条安全区)`；tabs 页面的 `contentPadding` 由 `AppRoot` 传入 `top = 状态栏高度`。
   - 暗黑模式由用户在设置页决定（`SettingsStore.darkMode`：FOLLOW/LIGHT/DARK），**不再跟随系统**；`MainActivity` 读设置后传给 `ShuaTheme(darkTheme = ...)`。
-  - **切题是跟手左右连续卡片**（v1.0.8，`StudyScreen.kt` 的 `PeekSlot`/`PeekPage` + 拖拽偏移量）：拖动时当前卡跟手平移、左右邻卡露出边缘，松手按阈值/速度吸附到上一题或下一题；**邻卡必须传 `dim = true` 且不参与交互**，否则会在动画开始时先闪出下一题正文。
+  - **切题是跟手左右连续卡片**（v1.0.8，`StudyScreen.kt` 的 `PeekSlot`/`PeekPage` + 拖拽偏移量）：拖动时当前卡跟手平移、左右邻卡露出边缘，松手按阈值/速度吸附到上一题或下一题。三条硬约定：
+    1. **邻卡排版必须与真卡逐像素同构** —— `PeekPage` 直接复用 `QuestionBody(q, peekState(...), vm, compact, interactive = false)`，内边距/字号/行距/选项行高全部共用；**绝不能再手写"降级预览"**（v1.0.8 之前就是这么写的：选项 9dp 内边距、题干最多 6 行、纯文本两行，滑入落地时整页文字间距"由小到大跳一下"）。
+    2. **邻卡 interactive = false**：`OptionRow(enabled = interactive && !state.answered)`、输入框 `readOnly`、`AnswerCard` 只在 `state.revealed && interactive` 时画；否则会误改当前题状态、或在背诵模式下提前泄题。
+    3. **当前卡的投影是随位移自 0 升到 2.5dp 的暖色淡影**（`graphicsLayer { shadowElevation = 2.5f * prog * density; ambientShadowColor = shadowTint; spotShadowColor = shadowTint }`），不是旧的 `shadow(20.dp)` 硬黑边——用户明确反馈 20dp 一离手就"糊上一圈黑边"太突兀。
+    4. 动画只播一次：`onDragStopped` 里 `animateTo(±w, tween(150))` 滑出 → 同一帧把 `snapCur` 换成目标题 + `frozen = true` + `drag = 0`，**不要再让 LaunchedEffect(pageKey) 从 ∓w 弹回 0**（那是"动画播两遍+中间闪一下"的根因）。
 - **本轮完成页**（`FinishedView`）：「返回」是主按钮、「刷本轮错题（N）」进独立子会话（`brushRoundWrong`，用 `roundFilterKey()` 的独立进度指纹，刷完点「完成」只清子进度不 reload）。
 - 做题/测试页刻意压成一屏：`CompactTopBar` 48dp + 题干/选项紧凑卡 + 底部固定控制条，避免反复滚动。
 
