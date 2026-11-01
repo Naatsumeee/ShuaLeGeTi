@@ -1,6 +1,6 @@
 # AGENTS.md — 刷了个题 (ShuaGeLeTi) 项目记忆
 
-> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：v1.0.7（2026-10-30）。
+> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：v1.0.8（2026-11-02）。
 
 ## 项目一句话
 
@@ -37,7 +37,9 @@ Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）�
   - **安全区硬规范**：每页根容器必须 `.safeTopPadding().safeBottomPadding()`（`Glass.kt` 里的 Modifier 扩展）。Android 15 edge-to-edge 下自绘 Surface 不会自动避让状态栏/手势条，漏写就会被安卓状态栏或导航条盖住。
   - 一级导航是**底部悬浮玻璃胶囊 Dock**（4 tab），距底 `max(14dp, 手势条安全区)`；tabs 页面的 `contentPadding` 由 `AppRoot` 传入 `top = 状态栏高度`。
   - 暗黑模式由用户在设置页决定（`SettingsStore.darkMode`：FOLLOW/LIGHT/DARK），**不再跟随系统**；`MainActivity` 读设置后传给 `ShuaTheme(darkTheme = ...)`。
-  - 做题/测试页刻意压成一屏：`CompactTopBar` 48dp + 题干/选项紧凑卡 + 底部固定控制条，避免反复滚动。
+  - **切题是跟手左右连续卡片**（v1.0.8，`StudyScreen.kt` 的 `PeekSlot`/`PeekPage` + 拖拽偏移量）：拖动时当前卡跟手平移、左右邻卡露出边缘，松手按阈值/速度吸附到上一题或下一题；**邻卡必须传 `dim = true` 且不参与交互**，否则会在动画开始时先闪出下一题正文。
+- **本轮完成页**（`FinishedView`）：「返回」是主按钮、「刷本轮错题（N）」进独立子会话（`brushRoundWrong`，用 `roundFilterKey()` 的独立进度指纹，刷完点「完成」只清子进度不 reload）。
+- 做题/测试页刻意压成一屏：`CompactTopBar` 48dp + 题干/选项紧凑卡 + 底部固定控制条，避免反复滚动。
 
 ## 问 AI（`ui/study/AskAiPanel.kt` + `StudyViewModel`）
 
@@ -46,6 +48,7 @@ Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）�
 - 默认走 `providerDao.getPrimary()`，没有主部时退化为第一个启用中的模型；两者都没有 → "尚未配置 AI 模型，请到设置页添加"。
 - 对话状态只在内存（`StudyUiState.chat`），**切题即清空**（`reload` 重建 state）；请求途中切题用 `askedForId` 守卫，回答不会落到新题上。
 - 深度解题成功后**不再自动弹面板**（v1.0.7 起）：解析刚生成要先读，追问入口常驻在解析下方 `DeepSolveRow`。`applyDeepSolve` 返回的 `updated` 必须回写 `questions` 与 `session.question`，否则页面仍显示旧解析；回填前用 `stillHere = session?.question?.id == q.id` 守卫，避免请求途中切题被旧结果覆盖。
+- **流式逐字输出**（v1.0.8）：`LlmClient.chatStream(...)` 走 SSE（`data:`/`data: [DONE]`，解析在 `data/llm/SseParser.kt`），深度解题与问 AI 都边生成边刷新到 UI（`StudyUiState.deepStreaming` / `chat` 的最后一轮），流断了会自动重试一次；非流式 `chatWithMessages` 仍保留给批量生成等场景。
 - 深度解题失败会**带退避重试 3 次**（0 / 900 / 2200 ms），只对配置/鉴权/参数类错误立即放弃（`isRetryable`）；`max_tokens = 4096`（`DEEP_SOLVE_MAX_TOKENS`），`ChatResult.truncated`（finishReason=="length"）且正文为空时判失败重试，**绝不把半截解析写库**。
 
 ## 公式与 Markdown 渲染（`ui/theme/Latex.kt` + `ui/theme/Markdown.kt`，v1.0.6）
@@ -113,6 +116,7 @@ rm -f tok askpass.sh cred.txt                      # 用完立刻删
 ## 历史里程碑
 
 M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI 生成+置信度 → M4 模式补全 → M5 三省六部 → M6 错题本/统计/收藏/导出 → 后台解析+提速 → A1/A2/A3/B 型题+筛选+斩题+测试模式+热力图+搜索 → 纸感主题 → 导出增强（AI 内容开关+章节汇总+完整往返）→ 生成后台化+断点续传+费用透明 → 字体/配色/错题本重设计 → RapidOCR 上线 → 16KB 页对齐修复（NDK 重编）→ **v1.0.0** → 视觉层 v2 重做（暖纸+液态玻璃+底部悬浮 Dock+设置页音效/暗黑/数据管理）→ v1.0.1~v1.0.3（顶栏统一、底栏重写、Serif 加粗、暗绿正确色、震动与音效拆分、左右滑切题、AI 深度解题、LaTeX 自研渲染、回到上次进度、更新日志）→ v1.0.4（问 AI 追问面板+常驻入口）→ v1.0.5（8 bug 修复 + 成本显示/错题本章节重刷/热力图增强/名词解释独立题型）→ **v1.0.6**（LaTeX 渲染器全量重写 + Markdown 渲染器，公式与 Markdown 全站混排）→ **v1.0.7**（Markdown 题库导入+复制格式化提示词、RapidOCR 升 PP-OCRv5、分块解析防断裂+跨段答案回填、成本按官方峰谷分时、深度解题重试与 $$ 公式修复、问 AI 键盘遮挡修复、切题平移动画、热力图气泡跟手）。
+→ **v1.0.8**（深度解题/问 AI 改 SSE 流式逐字输出、切题重做为跟手左右连续卡片、本轮完成页重做+刷本轮错题、导入提示词改为产出可直接导入的 JSON、DeepSeek 官方余额接口、速刷默认 2s、震动短促三档真区分、做完的进度即清、AI 免责小字）。
 
 ## 待办池（按价值排序）
 
