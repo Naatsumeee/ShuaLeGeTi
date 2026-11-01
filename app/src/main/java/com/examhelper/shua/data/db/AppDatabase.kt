@@ -36,7 +36,7 @@ class Converters {
         ImportJob::class,
         GenerateJob::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -127,6 +127,15 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v5 → v6：导入解析也要统计 token 用量（成本不应只覆盖 AI 生成那一半） */
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE import_jobs ADD COLUMN cacheHitTokens INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE import_jobs ADD COLUMN cacheMissTokens INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE import_jobs ADD COLUMN outputTokens INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -137,7 +146,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "shua.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                     .fallbackToDestructiveMigration()
                     .build()
                     .also { instance = it }

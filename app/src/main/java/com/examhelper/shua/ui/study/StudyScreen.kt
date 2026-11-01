@@ -2,33 +2,40 @@
 
 package com.examhelper.shua.ui.study
 
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -49,23 +56,30 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -148,8 +162,12 @@ fun StudyScreen(
                 state.session?.finished == true -> FinishedView(
                     mode = state.mode,
                     total = state.session?.total ?: 0,
+                    wrongCount = state.roundWrongCount,
+                    wrongOnly = state.roundWrongOnly,
                     onBack = onBack,
-                    onRestart = if (state.mode == StudyMode.RANDOM) vm::resetRandom else vm::restart
+                    onRestart = if (state.mode == StudyMode.RANDOM) vm::resetRandom else vm::restart,
+                    onBrushWrong = vm::brushRoundWrong,
+                    onExitWrong = { vm.dismissRoundWrong(); onBack() }
                 )
 
                 else -> {
@@ -189,63 +207,106 @@ fun StudyScreen(
                         }
                     }
 
-                    // ---- 题干 + 选项：可滚动主体（左右滑动切题 + 左右平移过渡）----
-                    // 切题给一个横向位移动画：新题从手势方向滑入、旧题反向滑出，
-                    // 让「左右划动切换前后题目」这个手势有对应的空间直觉。
+                    // ---- 题干 + 选项：左右连续卡片（跟手 + 遮罩）----
+                    // 三张卡片常驻成一条「卡片带」：上一题 / 当前 / 下一题。
+                    // 拖动时整条带子跟手平移，相邻题从两侧露出，当前卡片带阴影压在
+                    // 上面形成遮罩边缘；松手超过阈值才真正切题，否则弹回原位。
+                    // 关键点：邻卡内容直接取自 session.prevQuestion / nextQuestion，
+                    // 所以动画结束的瞬间内容已经是目标题目，不会出现"先闪一下旧题"。
+                    val pageWidth = remember { mutableIntStateOf(0) }
+                    val w = pageWidth.intValue.toFloat().coerceAtLeast(1f)
+                    var drag by remember { mutableFloatStateOf(0f) }
+                    // 提交切题后，等 VM 把新题装载好（pageKey 变化）再把带子从对侧弹回 0：
+                    // 直接"先切状态再补动画"会出现一帧旧题闪回，因为 reload() 是异步的。
+                    var pending by remember { mutableIntStateOf(0) } // 1=向后翻 -1=向前翻
                     val pageKey = if (state.mode == StudyMode.RANDOM) {
                         session?.doneCount ?: 0
                     } else {
                         session?.indexInQueue ?: 0
                     }
+                    LaunchedEffect(pageKey) {
+                        if (pending != 0) {
+                            val from = if (pending > 0) w else -w
+                            drag = from
+                            Animatable(drag).animateTo(
+                                0f, tween(180, easing = FastOutLinearInEasing)
+                            ) { drag = value }
+                            pending = 0
+                        }
+                    }
+                    val canPrev = session?.prevQuestion != null && state.mode != StudyMode.RANDOM
+                    val canNext = session?.nextQuestion != null
+
                     Box(
                         Modifier
                             .weight(1f)
-                            .pointerInput(pageKey, state.mode) {
-                                // 左右划切题：横向位移超过阈值即翻页；已作答的题恢复作答状态
-                                var total = 0f
-                                detectHorizontalDragGestures(
-                                    onDragStart = { total = 0f },
-                                    onHorizontalDrag = { _, dx -> total += dx },
-                                    onDragEnd = {
-                                        if (kotlin.math.abs(total) > 96.dp.toPx()) {
-                                            if (total < 0) vm.next() else vm.prev()
+                            .onSizeChanged { pageWidth.intValue = it.width }
+                            .clipToBounds()
+                            .draggable(
+                                orientation = Orientation.Horizontal,
+                                state = rememberDraggableState { delta ->
+                                    // 没有邻题的那一侧只给一点点阻尼位移，暗示"到头了"
+                                    drag = (drag + delta).coerceIn(
+                                        if (canPrev) -w else -w * 0.16f,
+                                        if (canNext) w else w * 0.16f
+                                    )
+                                },
+                                onDragStopped = { velocity ->
+                                    val goNext = canNext && (
+                                        drag < -w * 0.22f ||
+                                            (velocity < -700f && drag < -w * 0.05f)
+                                        )
+                                    val goPrev = canPrev && (
+                                        drag > w * 0.22f ||
+                                            (velocity > 700f && drag > w * 0.05f)
+                                        )
+                                    when {
+                                        goNext -> {
+                                            Animatable(drag).animateTo(
+                                                -w, tween(140, easing = FastOutLinearInEasing)
+                                            ) { drag = value }
+                                            pending = 1
+                                            vm.next()
                                         }
+                                        goPrev -> {
+                                            Animatable(drag).animateTo(
+                                                w, tween(140, easing = FastOutLinearInEasing)
+                                            ) { drag = value }
+                                            pending = -1
+                                            vm.prev()
+                                        }
+                                        else -> Animatable(drag).animateTo(
+                                            0f, spring(stiffness = Spring.StiffnessMediumLow)
+                                        ) { drag = value }
                                     }
-                                )
-                            }
+                                }
+                            )
                     ) {
-                        AnimatedContent(
-                            targetState = pageKey,
-                            transitionSpec = {
-                                val forward = targetState >= initialState
-                                val spec = tween<IntOffset>(durationMillis = 280, easing = FastOutSlowInEasing)
-                                val fade = tween<Float>(durationMillis = 170)
-                                // 新旧两页必须等宽反向平移（±w 整屏），不能只让旧的挪 1/4 屏就淡出：
-                                // 那样两页会在屏幕上叠在一起，题干的字互相穿透成重影。
-                                if (forward) {
-                                    (slideInHorizontally(spec) { w -> w } + fadeIn(fade)) togetherWith
-                                        (slideOutHorizontally(spec) { w -> -w } + fadeOut(fade))
-                                } else {
-                                    (slideInHorizontally(spec) { w -> -w } + fadeIn(fade)) togetherWith
-                                        (slideOutHorizontally(spec) { w -> w } + fadeOut(fade))
-                                }
-                            },
-                            label = "questionPage",
-                            modifier = Modifier.fillMaxSize()
-                        ) { _ ->
-                            Column(
-                                Modifier
-                                    .fillMaxSize()
-                                    .verticalScroll(rememberScrollState())
-                                    .padding(horizontal = 14.dp)
-                                    .padding(top = 2.dp, bottom = 6.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                if (q == null) {
-                                    Text("题目加载中…")
-                                } else {
-                                    QuestionBody(q = q, state = state, vm = vm, compact = compact)
-                                }
+                        if (canPrev) {
+                            PeekSlot(x = drag - w) { session?.prevQuestion?.let { PeekPage(it) } }
+                        }
+                        if (canNext) {
+                            PeekSlot(x = drag + w) { session?.nextQuestion?.let { PeekPage(it) } }
+                        }
+                        // 当前题：不透明底色 + 阴影，拖动时压在邻卡之上形成遮罩
+                        Column(
+                            Modifier
+                                .fillMaxSize()
+                                .offset { IntOffset(drag.toInt(), 0) }
+                                .shadow(
+                                    if (kotlin.math.abs(drag) > 1f) 20.dp else 0.dp,
+                                    RoundedCornerShape(16.dp)
+                                )
+                                .background(MaterialTheme.colorScheme.background)
+                                .verticalScroll(rememberScrollState())
+                                .padding(horizontal = 14.dp)
+                                .padding(top = 2.dp, bottom = 6.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (q == null) {
+                                Text("题目加载中…")
+                            } else {
+                                QuestionBody(q = q, state = state, vm = vm, compact = compact)
                             }
                         }
                     }
@@ -330,9 +391,69 @@ fun StudyScreen(
     }
 }
 
+/**
+ * 邻卡槽位：整屏宽，按 [x] 横向偏移。内容做了轻量降级（只画题干与选项字母），
+ * 一是省掉邻卡的重排/公式解析开销，二是让"还没翻到的那张"在视觉上退后一层。
+ */
 @Composable
-private fun ProgressThin(progress: () -> Float, modifier: Modifier = Modifier) {
+private fun PeekSlot(x: Float, content: @Composable () -> Unit) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .offset { IntOffset(x.toInt(), 0) }
+            .padding(horizontal = 14.dp)
+            .padding(top = 2.dp, bottom = 6.dp)
+    ) { content() }
+}
+
+/** 邻卡预览：题干（最多 6 行）+ 选项字母，够用户判断"下一题是什么"即可 */
+@Composable
+private fun PeekPage(q: Question) {
     val extra = shuaColors
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        PaperCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), elevation = 1.dp) {
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+                SemanticChip(typeLabel(q.type), ChipTone.Brand)
+                Spacer(Modifier.height(7.dp))
+                Latex.LatexText(
+                    text = q.stem,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 6
+                )
+            }
+        }
+        val options = remember(q.id) { JsonCodec.decodeOptions(q.optionsJson) }
+        options.forEach { opt ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(13.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(1.dp, extra.creamLine, RoundedCornerShape(13.dp))
+                    .padding(horizontal = 11.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    opt.key,
+                    style = monoStyle(12.sp, FontWeight.Medium),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    opt.text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProgressThin(progress: () -> Float, modifier: Modifier = Modifier) {    val extra = shuaColors
     Box(
         modifier
             .height(4.dp)
@@ -516,6 +637,7 @@ private fun AnswerCard(q: Question, state: StudyUiState, vm: StudyViewModel) {
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface
                     )
+                    AiDisclaimer()
                 }
                 DeepSolveRow(state = state, q = q, vm = vm)
             }
@@ -531,7 +653,11 @@ private fun AnswerCard(q: Question, state: StudyUiState, vm: StudyViewModel) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
             val contentPreview = answerContentPreview(q)
             // 参考答案优先：题库/OCR 原答案是权威，AI 答案只在附注里出现
-            q.originalAnswer?.let { orig ->
+            // 注意：q.answer 此时已是「题库答案」，AI 的异议答案在 q.aiAnswer；
+            // q.originalAnswer 只是题库答案的备份副本（历史上被误当成 AI 答案显示，导致
+            // 出现「AI 答案 B 与题库答案 B 不一致」这种自相矛盾的文案）。
+            q.originalAnswer?.let { bankAns ->
+                val aiAns = q.aiAnswer?.takeIf { it.isNotBlank() }
                 Box(
                     Modifier
                         .fillMaxWidth()
@@ -541,7 +667,8 @@ private fun AnswerCard(q: Question, state: StudyUiState, vm: StudyViewModel) {
                 ) {
                     Column {
                         Text(
-                            "AI 答案 $orig 与题库答案 ${q.answer} 不一致",
+                            if (aiAns != null) "AI 答案 $aiAns 与题库答案 $bankAns 不一致"
+                            else "题库答案 $bankAns 与本次核对结果不一致",
                             style = MaterialTheme.typography.labelLarge,
                             color = extra.sage
                         )
@@ -611,6 +738,7 @@ private fun AnswerCard(q: Question, state: StudyUiState, vm: StudyViewModel) {
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface
                 )
+                AiDisclaimer()
             }
 
             // 深度解题 + 追问：两个 AI 入口（无参考答案的分支里也复用同一个组件）
@@ -673,6 +801,56 @@ private fun AnswerCard(q: Question, state: StudyUiState, vm: StudyViewModel) {
 private fun DeepSolveRow(state: StudyUiState, q: Question, vm: StudyViewModel) {
     val extra = shuaColors
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        // 流式输出区：模型逐字吐出的内容实时显示在这里。
+        // 之前是「转圈等整包」，思考 1-3 分钟期间界面毫无变化，用户以为卡死；
+        // 现在思考过程与正文都可见，等待感立刻降下来。
+        if (state.deepSolving && (state.deepReasoning.isNotBlank() || state.deepStream.isNotBlank())) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                if (state.deepReasoning.isNotBlank()) {
+                    var showReasoning by remember(state.deepStream.isBlank()) {
+                        mutableStateOf(state.deepStream.isBlank())
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (showReasoning) "思考过程" else "思考过程（已折叠）",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "点击${if (showReasoning) "收起" else "展开"}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = extra.terracotta,
+                            modifier = Modifier.clickable { showReasoning = !showReasoning }
+                        )
+                    }
+                    if (showReasoning) {
+                        Markdown.MarkdownText(
+                            text = state.deepReasoning,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                if (state.deepStream.isNotBlank()) {
+                    Markdown.MarkdownText(
+                        text = state.deepStream,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                if (state.deepStream.isBlank()) {
+                    TypingDots()
+                }
+            }
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (state.deepSolving) {
                 CircularProgressIndicator(
@@ -744,6 +922,34 @@ private fun DeepSolveRow(state: StudyUiState, q: Question, vm: StudyViewModel) {
                 "深度解题完成 · 点「追问 AI」可以接着问考点、易错点或相似题",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/** 正文还没开始到达时给三个呼吸的圆点，暗示「在输出」而不是「卡住了」 */
+@Composable
+private fun TypingDots() {
+    val extra = shuaColors
+    val transition = rememberInfiniteTransition(label = "typing")
+    val phase by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 3f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1050, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "typingPhase"
+    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        repeat(3) { i ->
+            val active = phase.toInt() % 3 == i
+            Box(
+                Modifier
+                    .padding(horizontal = 2.dp)
+                    .size(if (active) 7.dp else 5.dp)
+                    .clip(CircleShape)
+                    .background(extra.terracotta.copy(alpha = if (active) 0.85f else 0.35f))
             )
         }
     }
@@ -919,15 +1125,37 @@ private fun BottomControls(
     }
 }
 
+/** 解析下方的小字免责声明（用户要求：内容为 AI 生成，可能会出错） */
 @Composable
-private fun FinishedView(mode: StudyMode, total: Int, onBack: () -> Unit, onRestart: () -> Unit) {
+private fun AiDisclaimer() {
+    Text(
+        "内容为 AI 生成，可能会出错",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f)
+    )
+}
+
+@Composable
+private fun FinishedView(
+    mode: StudyMode,
+    total: Int,
+    wrongCount: Int,
+    wrongOnly: Boolean,
+    onBack: () -> Unit,
+    onRestart: () -> Unit,
+    onBrushWrong: () -> Unit,
+    onExitWrong: () -> Unit
+) {
     val extra = shuaColors
-    Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+    Box(
+        Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 12.dp),
+        contentAlignment = Alignment.Center
+    ) {
         GlassSurface(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), elevation = 14.dp) {
             Column(
-                Modifier.padding(24.dp),
+                Modifier.padding(horizontal = 22.dp, vertical = 24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Box(
                     Modifier.size(52.dp).clip(CircleShape).background(extra.terracottaSoft),
@@ -941,17 +1169,52 @@ private fun FinishedView(mode: StudyMode, total: Int, onBack: () -> Unit, onRest
                     )
                 }
                 Text(
-                    if (mode == StudyMode.RANDOM) "本轮随机巩固完成" else "本模式题目已刷完",
-                    style = serifTitle(20.sp, FontWeight.Medium)
+                    if (wrongOnly) "错题也刷完啦" else "这轮题目已经完成啦",
+                    style = serifTitle(21.sp, FontWeight.Medium),
+                    textAlign = TextAlign.Center
                 )
-                Text("共 $total 题", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    if (wrongOnly) "本轮错题 $total 题" + if (wrongCount > 0) " · 又错了 $wrongCount 题" else " · 全部拿下"
+                    else "共 $total 题" + if (wrongCount > 0) " · 答错 $wrongCount 题" else " · 全对",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(Modifier.height(4.dp))
+                // 主按钮：返回（用户要求着重的是"返回"，不是"从头再来"）
                 Button(
-                    onClick = onRestart,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
-                    shape = RoundedCornerShape(13.dp)
-                ) { Text(if (mode == StudyMode.RANDOM) "重新随机巩固" else "从头再来") }
-                TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
-                    Text("返回", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    onClick = if (wrongOnly) onExitWrong else onBack,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 46.dp),
+                    shape = RoundedCornerShape(13.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    )
+                ) {
+                    Text(if (wrongOnly) "完成" else "返回", style = MaterialTheme.typography.labelLarge)
+                }
+                if (!wrongOnly && wrongCount > 0) {
+                    OutlinedButton(
+                        onClick = onBrushWrong,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 46.dp),
+                        shape = RoundedCornerShape(13.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = extra.terracottaDeep),
+                        border = BorderStroke(1.dp, extra.terracotta.copy(alpha = 0.55f))
+                    ) {
+                        Text(
+                            "刷本轮错题（$wrongCount）",
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
+                }
+                if (!wrongOnly) {
+                    TextButton(onClick = onRestart, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            if (mode == StudyMode.RANDOM) "重新随机巩固" else "从头再来",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
                 }
             }
         }

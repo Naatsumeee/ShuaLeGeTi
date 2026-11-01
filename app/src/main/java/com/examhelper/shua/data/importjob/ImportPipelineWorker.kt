@@ -20,6 +20,7 @@ import com.examhelper.shua.data.db.ImportJob
 import com.examhelper.shua.data.ingest.DocumentIngestor
 import com.examhelper.shua.data.model.JsonCodec
 import com.examhelper.shua.data.model.ParsedLine
+import com.examhelper.shua.data.parse.ChunkPlanner
 import com.examhelper.shua.data.parse.LlmQuestionParser
 import com.examhelper.shua.data.parse.TextQuestionParser
 import kotlinx.coroutines.async
@@ -179,7 +180,8 @@ class ImportPipelineWorker(
             }.getOrNull()
                 ?: return fail(jobId, "未找到可用的大模型配置，请先到设置中添加并启用")
 
-            val chunks = LlmQuestionParser.chunkText(text, LlmQuestionParser.CHUNK_SIZE)
+            val chunkList = ChunkPlanner.plan(text, LlmQuestionParser.CHUNK_SIZE)
+            val chunks = chunkList.map { it.text }
             val doneChunks = if (parsed.exists()) {
                 JsonCodec.readParsedLines(parsed).map { it.chunkIndex }.toSet()
             } else {
@@ -211,18 +213,21 @@ class ImportPipelineWorker(
                     async {
                         semaphore.withPermit {
                             if (isStopped) null
-                            else runCatching { idx to parser.parseChunkText(provider, chunks[idx]) }.getOrNull()
+                            else idx to parseChunkWithRetry(parser, provider, chunks[idx])
                         }
                     }
                 }
                 deferred.forEach { d ->
                     val outcome = d.await() ?: return@forEach
                     val (idx, dtoList) = outcome
+                    val section = chunkList.getOrNull(idx)?.section
                     val lines = dtoList.mapIndexed { i, dto ->
                         JsonCodec.json.encodeToString(
                             ParsedLine(
                                 chunkIndex = idx, indexInChunk = i,
-                                chapter = dto.chapter, type = LlmQuestionParser.mapType(dto.type).name,
+                                // 章节名以本块的原文标题为准，防止模型把「第 X 章」前缀吞掉
+                                chapter = ChunkPlanner.resolveChapter(section, dto.chapter),
+                                type = LlmQuestionParser.mapType(dto.type).name,
                                 subtype = dto.subtype, stem = dto.stem,
                                 sharedStem = dto.sharedStem, sharedOptions = dto.sharedOptions,
                                 options = dto.options, answer = dto.answer, analysis = dto.analysis,
@@ -238,9 +243,13 @@ class ImportPipelineWorker(
                         failCount++
                     }
                     updateJob(jobId) {
+                        val u = parser.snapshotUsage()
                         it.copy(
                             doneUnits = okCount,
                             parsedCount = parsedSoFar,
+                            cacheHitTokens = u.normalizedCacheHit().toLong(),
+                            cacheMissTokens = u.cacheMissTokens.toLong(),
+                            outputTokens = u.completionTokens.toLong(),
                             message = "AI 解析 ${provider.name}：完成 $okCount/${chunks.size} 段" +
                                 if (failCount > 0) "（失败 $failCount 段）" else ""
                         )
@@ -273,8 +282,12 @@ class ImportPipelineWorker(
                 return fail(jobId, "AI 解析全部失败：${provider.name} 连接异常或返回不可解析")
             }
             updateJob(jobId) {
+                val u = parser.snapshotUsage()
                 it.copy(
                     stage = "DONE", parsedCount = totalParsed,
+                    cacheHitTokens = u.normalizedCacheHit().toLong(),
+                    cacheMissTokens = u.cacheMissTokens.toLong(),
+                    outputTokens = u.completionTokens.toLong(),
                     message = "解析完成：$totalParsed 题" + if (failCount > 0) "（$failCount 段失败，可在预览后重新解析补齐）" else ""
                 )
             }
@@ -291,6 +304,36 @@ class ImportPipelineWorker(
     private suspend fun fail(jobId: String, message: String): Result {
         updateJob(jobId) { it.copy(stage = "FAILED", errorMessage = message) }
         return Result.failure()
+    }
+
+    /**
+     * 单块解析重试。
+     *
+     * 后台是并发跑多个分块的：网关偶发 5xx / 连接重置 / 读超时都会让某一块返回空，
+     * 早先一次失败这块的题目就永久丢了（重跑也得等整批结束再手动续传）。
+     * 这里对**空结果和异常**都做退避重试，只对配置/鉴权类错误立即放弃。
+     */
+    private suspend fun parseChunkWithRetry(
+        parser: LlmQuestionParser,
+        provider: com.examhelper.shua.data.db.LlmProvider,
+        chunk: String
+    ): List<LlmQuestionParser.QuestionDto> {
+        val waits = longArrayOf(0L, 1200L, 3000L)
+        var last: List<LlmQuestionParser.QuestionDto> = emptyList()
+        for (wait in waits) {
+            if (isStopped) return last
+            if (wait > 0) kotlinx.coroutines.delay(wait)
+            val r = runCatching { parser.parseChunkText(provider, chunk) }
+            val list = r.getOrNull()
+            if (!list.isNullOrEmpty()) return list
+            val msg = r.exceptionOrNull()?.message.orEmpty()
+            if (msg.contains("HTTP 401") || msg.contains("HTTP 403") ||
+                msg.contains("HTTP 400") || msg.contains("Insufficient Balance") ||
+                msg.contains("Unauthorized") || msg.contains("Authentication")
+            ) return last
+            last = list.orEmpty()
+        }
+        return last
     }
 
     private suspend fun updateJob(jobId: String, mutate: (ImportJob) -> ImportJob) {

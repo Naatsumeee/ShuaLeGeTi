@@ -38,6 +38,8 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
         val pendingUri: Uri? = null,
         val error: String? = null,
         val providersReady: Boolean = false,
+        /** 本次解析所用模型的 model 名（成本按它挑价目挡位：flash / v4-pro 差一个数量级） */
+        val providerModel: String? = null,
         val concurrency: Int = 4,
         /** 本次导入使用的 OCR 引擎 */
         val ocrEngine: String = com.examhelper.shua.data.settings.OcrEngine.ML_KIT,
@@ -89,11 +91,17 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                 job = job,
                 preview = preview,
                 bankName = job.bankName,
-                sourceName = job.sourceName
+                sourceName = job.sourceName,
+                providerModel = resolveProviderModel()
             )
             observeJob(jobId)
         }
     }
+
+    /** 当前可用于解析的模型名（成本展示按它挑价目） */
+    private suspend fun resolveProviderModel(): String? = runCatching {
+        (providerDao.getPrimary() ?: providerDao.observeAll().first().firstOrNull { it.enabled })?.model
+    }.getOrNull()
 
     /** 选好文件后：等待用户选择解析方式 */
     fun filePicked(uri: Uri, name: String) {
@@ -261,8 +269,16 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
             runCatching {
                 val text = getApplication<Application>().contentResolver.openInputStream(uri)
                     ?.bufferedReader()?.readText() ?: error("无法读取文件")
-                com.examhelper.shua.data.model.JsonCodec.json
-                    .decodeFromString<com.examhelper.shua.data.model.ShuaBankFile>(text)
+                try {
+                    com.examhelper.shua.data.model.JsonCodec.json
+                        .decodeFromString<com.examhelper.shua.data.model.ShuaBankFile>(text)
+                } catch (e: Exception) {
+                    // 不是本 App 导出的严格格式 → 走宽容解析，兼容 AI 直接生成的 JSON
+                    com.examhelper.shua.data.model.BankJsonImport.parse(
+                        text,
+                        fallbackName = queryDisplayName(uri)?.substringBeforeLast('.').orEmpty()
+                    )
+                }
             }.fold(
                 onSuccess = { file ->
                     bankRepo.importBankFile(file)
@@ -278,4 +294,12 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
     fun clearError() {
         _state.value = _state.value.copy(error = null)
     }
+
+    private fun queryDisplayName(uri: Uri): String? = runCatching {
+        getApplication<Application>().contentResolver.query(uri, null, null, null, null)
+            ?.use { c ->
+                val idx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (idx >= 0 && c.moveToFirst()) c.getString(idx) else null
+            }
+    }.getOrNull()
 }

@@ -111,6 +111,10 @@ interface ProgressDao {
 
     @Query("DELETE FROM study_progress WHERE bankId = :bankId")
     suspend fun deleteByBank(bankId: Long)
+
+    /** 只清某一个模式的进度（这轮刷完即清，范围页不该再挂着一个不存在的「第 N/N 题」） */
+    @Query("DELETE FROM study_progress WHERE bankId = :bankId AND mode = :mode")
+    suspend fun deleteOne(bankId: Long, mode: StudyMode)
 }
 
 @Dao

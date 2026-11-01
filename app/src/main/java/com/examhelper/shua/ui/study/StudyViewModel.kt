@@ -42,16 +42,26 @@ data class StudyUiState(
     val deepSolving: Boolean = false,
     /** 深度解题失败原因 */
     val deepError: String? = null,
+    /** 深度解题流式正文（逐字增长，完成后并入解析并清空） */
+    val deepStream: String = "",
+    /** 深度解题流式思维链（推理型模型先吐思考过程） */
+    val deepReasoning: String = "",
     /** 追问面板是否展开 */
     val askOpen: Boolean = false,
     /** 当前题目的追问对话（切题即清空） */
     val chat: List<ChatTurn> = emptyList(),
     /** 追问请求进行中 */
     val asking: Boolean = false,
+    /** 追问流式正文（逐字增长，完成后并入 chat） */
+    val askStream: String = "",
     /** 追问失败原因 */
     val askError: String? = null,
     /** 追问所用模型名（面板上明示走的是哪个模型，空 = 未配置） */
-    val askModelName: String? = null
+    val askModelName: String? = null,
+    /** 本轮做错的题数（完成页「刷本轮错题」按钮用） */
+    val roundWrongCount: Int = 0,
+    /** 当前是否已在「刷本轮错题」的子会话里 */
+    val roundWrongOnly: Boolean = false
 )
 
 /** 一条追问对话 */
@@ -109,6 +119,15 @@ class StudyViewModel(
     private var countdownJob: Job? = null
     private var questionShownAt: Long = 0L
 
+    /** 本轮做错的题号集合（完成页「刷本轮错题」用；开始新一轮即清空） */
+    private var roundWrongIds: MutableSet<Long> = mutableSetOf()
+
+    /** 非空 = 当前在「刷本轮错题」子会话里，题目只取这些 id */
+    private var roundWrongFilter: Set<Long>? = null
+
+    /** 主轮总题数（错题子会话结束后要回到主轮完成页，得知道它是几题） */
+    private var mainRoundTotal: Int = 0
+
     init {
         viewModelScope.launch {
             appSettings = settingsStore.settings.first()
@@ -118,8 +137,20 @@ class StudyViewModel(
 
     private suspend fun reload() {
         val bank = bankRepo.getBank(bankId)
-        questions = studyRepo.filteredQuestions(bankId, filter)
-        val session = studyRepo.currentSession(bankId, mode, questions, filterJson)
+        val base = studyRepo.filteredQuestions(bankId, filter)
+        // 「刷本轮错题」子会话：题目只取本轮错的那几道，进度指纹也换成独立的，
+        // 这样它自己是一轮新的进度，不会污染/续上原来的整轮进度。
+        val wrongOnly = roundWrongFilter
+        questions = if (wrongOnly == null) base else base.filter { it.id in wrongOnly }
+        if (wrongOnly == null && mainRoundTotal == 0) mainRoundTotal = questions.size
+        val sessionFilter = if (wrongOnly == null) filterJson else roundFilterKey()
+        val session = studyRepo.currentSession(bankId, mode, questions, sessionFilter)
+        // 这轮已经刷完（游标推到队尾）→ 立刻清掉这条进度。
+        // 否则范围页会一直挂着「第 30 / 30 题 · 继续」，点进去还是个空页。
+        // 也顺带清掉进程被杀后残留的这种"已完成"进度。
+        if (session.finished && questions.isNotEmpty()) {
+            runCatching { studyRepo.clearRound(bankId, mode) }
+        }
         questionShownAt = System.currentTimeMillis()
         // 记住已作答结果：划回做过的题不再要求重答
         val q = session.question
@@ -146,6 +177,8 @@ class StudyViewModel(
             favorite = session.question?.let { studyRepo.isFavorite(it.id) } ?: false,
             killed = session.question?.let { studyRepo.isKilled(it.id) } ?: false,
             deepSolved = q?.deepSolved ?: false,
+            roundWrongCount = roundWrongIds.size,
+            roundWrongOnly = roundWrongFilter != null,
             filterSummary = filter?.takeIf { !it.isDefault }?.let { f ->
                 buildList {
                     if (f.chapters.isNotEmpty()) add("${f.chapters.size}章")
@@ -201,6 +234,8 @@ class StudyViewModel(
         )
         // 震动反馈：答对/答错微振动（设置里可关）
         if (correct == true) Haptics.ok() else Haptics.ng()
+        // 记进「本轮错题」：完成页据此提供「刷本轮错题」入口
+        if (correct == false) roundWrongIds.add(q.id)
         if (hasAnswer) {
             viewModelScope.launch {
                 studyRepo.submitAnswer(
@@ -239,6 +274,7 @@ class StudyViewModel(
             )
             runCatching { studyRepo.touchProgress(bankId, mode) }
             _state.value = _state.value.copy(answered = true, correct = correct)
+            if (!correct) roundWrongIds.add(q.id)
             if (correct) Haptics.ok() else Haptics.ng()
             if (mode == StudyMode.SPEED) beginCountdown(appSettings.speedModeSeconds)
         }
@@ -288,10 +324,47 @@ class StudyViewModel(
 
     fun restart() {
         countdownJob?.cancel()
+        roundWrongFilter = null
+        roundWrongIds = mutableSetOf()
         viewModelScope.launch {
             studyRepo.seek(bankId, mode, 0)
             reload()
         }
+    }
+
+    /**
+     * 只刷本轮做错的题。
+     *
+     * 用独立进度指纹开一条子会话（而不是复用原进度）：
+     * ① 原进度在本轮结束时已被 clearRound 删掉，硬塞回去会让「上次进度」列表复活；
+     * ② 错题子会话自己刷完就该自然消失，不该留痕。
+     */
+    fun brushRoundWrong() {
+        val ids = roundWrongIds.toSet()
+        if (ids.isEmpty()) return
+        countdownJob?.cancel()
+        Haptics.tap()
+        roundWrongFilter = ids
+        roundWrongIds = mutableSetOf()
+        viewModelScope.launch {
+            studyRepo.resetRoundWrong(bankId, mode, roundFilterKey())
+            reload()
+        }
+    }
+
+    /**
+     * 错题子会话也刷完、用户点「完成」离开：只清掉这条子进度，不 reload。
+     * reload 会让主轮进度被 ensureProgress 重建成第 1 题，页面闪一下再被导航销毁。
+     */
+    fun dismissRoundWrong() {
+        countdownJob?.cancel()
+        roundWrongFilter = null
+        viewModelScope.launch { runCatching { studyRepo.clearRound(bankId, mode) } }
+    }
+
+    private fun roundFilterKey(): String {
+        val ids = roundWrongFilter.orEmpty().sorted().joinToString(",")
+        return """{"roundWrong":[$ids]}"""
     }
 
     fun toggleFavorite() {
@@ -336,7 +409,7 @@ class StudyViewModel(
         val s = _state.value
         val q = s.session?.question ?: return
         if (s.deepSolving) return
-        _state.value = s.copy(deepSolving = true, deepError = null)
+        _state.value = s.copy(deepSolving = true, deepError = null, deepStream = "", deepReasoning = "")
         Haptics.tap()
         viewModelScope.launch {
             val result = requestDeepSolveWithRetry(q)
@@ -346,10 +419,13 @@ class StudyViewModel(
                     if (analysis == null) {
                         _state.value = _state.value.copy(
                             deepSolving = false,
-                            deepError = "模型未返回解析内容，请重试"
+                            deepError = "模型未返回解析内容，请重试",
+                            deepStream = "",
+                            deepReasoning = ""
                         )
                     } else {
-                        val updated = studyRepo.applyDeepSolve(q, analysis)
+                        // 深度解题给出的答案回写为最终答案（与最初解析不一致时以它为准）
+                        val updated = studyRepo.applyDeepSolve(q, analysis, payload.answer)
                         // 同步内存里的这道题，否则页面仍显示旧解析（deepSolve 后要立刻读到新内容）
                         questions = questions.map { if (it.id == updated.id) updated else it }
                         // 只有还停在原来那道题时才回填，否则请求期间的切题会被旧结果覆盖
@@ -358,6 +434,8 @@ class StudyViewModel(
                             deepSolving = false,
                             deepSolved = if (stillHere) true else _state.value.deepSolved,
                             deepError = null,
+                            deepStream = "",
+                            deepReasoning = "",
                             // 深度解题完成后**不要**自动弹出追问面板：解析刚生成，用户要先读。
                             // 追问入口常驻在解析下方（DeepSolveRow），想接着问点一下即可。
                             session = if (stillHere) {
@@ -372,7 +450,10 @@ class StudyViewModel(
                 onFailure = { e ->
                     _state.value = _state.value.copy(
                         deepSolving = false,
-                        deepError = e.message?.take(120) ?: "深度解题失败"
+                        deepError = e.message?.take(120) ?: "深度解题失败",
+                        // 失败时保留已收到的片段，用户能看到模型到底吐了什么，便于判断是否该重试
+                        deepStream = _state.value.deepStream,
+                        deepReasoning = _state.value.deepReasoning
                     )
                 }
             )
@@ -393,6 +474,8 @@ class StudyViewModel(
         val delays = longArrayOf(0L, 900L, 2200L)
         for ((attempt, wait) in delays.withIndex()) {
             if (wait > 0) kotlinx.coroutines.delay(wait)
+            // 每次重试都清空上一轮的流式片段，否则界面会把两次尝试的文字接在一起
+            _state.value = _state.value.copy(deepStream = "", deepReasoning = "")
             val r = runCatching { requestDeepSolve(q) }
             val payload = r.getOrNull()
             if (payload != null && !payload.analysis.isNullOrBlank()) return r
@@ -444,16 +527,40 @@ class StudyViewModel(
         // 而它要求模型输出 {"results":[...]}，解析成 DeepSolvePayload 时 analysis 必为 null，
         // 于是永远报「模型未返回解析内容」——那曾是该 bug 的根因。
         val system = com.examhelper.shua.data.llm.Prompts.DEEP_SOLVE_DEFAULT
-        // max_tokens 给足：推理型模型（deepseek-v4-pro 等）会先花一部分预算写思维链，
-        // 早先给 2600 时常出现「正文还没开始就被截断」→ content 为空/半截，
-        // 表现就是「有时能生成、有时不能」。4096 是兼顾成本与完整性的折中。
-        val result = llmClient.chatWithUsage(
+        // 流式输出：推理型模型会先吐一段思维链（reasoning_content），正文随后逐字到达。
+        // 之前是「等整包返回」，模型思考 1-3 分钟期间界面只有一个转圈，用户以为卡死；
+        // 现在思考和正文都实时上屏，等待感显著下降，也不再需要靠「猜」判断是否在跑。
+        //
+        // 状态更新用 40ms 节流：SSE 每帧都写一次 StateFlow 会触发大量重组，
+        // 在低端机上反而更卡；40ms≈25fps 的观感已经足够「逐字」。
+        val streamBuf = StringBuilder()
+        val reasoningBuf = StringBuilder()
+        var lastPush = 0L
+        fun push(force: Boolean = false) {
+            val now = System.currentTimeMillis()
+            if (!force && now - lastPush < 40L) return
+            lastPush = now
+            _state.value = _state.value.copy(
+                deepStream = streamBuf.toString(),
+                deepReasoning = reasoningBuf.toString()
+            )
+        }
+        val result = llmClient.chatStream(
             provider = provider,
             systemPrompt = system,
             userPrompt = prompt,
             jsonMode = false,
-            maxTokens = DEEP_SOLVE_MAX_TOKENS
+            maxTokens = DEEP_SOLVE_MAX_TOKENS,
+            onReasoning = { delta ->
+                reasoningBuf.append(delta)
+                push()
+            },
+            onDelta = { delta ->
+                streamBuf.append(delta)
+                push()
+            }
         )
+        push(force = true)
         val payload = parseDeepSolve(result.content)
         // 被 max_tokens 截断时解析必然是残缺的，直接判失败让上层重试，
         // 绝不能把半截解析写库覆盖原解析（那比报错更糟，用户会以为解析就该这么短）。
@@ -564,18 +671,33 @@ class StudyViewModel(
         if (s.asking) return
 
         val history = s.chat + ChatTurn("user", text)
-        _state.value = s.copy(chat = history, asking = true, askError = null, askOpen = true)
+        _state.value = s.copy(chat = history, asking = true, askError = null, askOpen = true, askStream = "")
         Haptics.tap()
         // 记下提问时的题目 id：请求途中切题的话，回答不能落到新题目头上
         val askedForId = q.id
         viewModelScope.launch {
-            runCatching { requestAsk(q, history) }.fold(
+            val buf = StringBuilder()
+            var lastPush = 0L
+            fun push(force: Boolean = false) {
+                val now = System.currentTimeMillis()
+                if (!force && now - lastPush < 40L) return
+                lastPush = now
+                if (_state.value.session?.question?.id != askedForId) return
+                _state.value = _state.value.copy(askStream = buf.toString())
+            }
+            runCatching {
+                requestAsk(q, history) { delta ->
+                    buf.append(delta)
+                    push()
+                }
+            }.fold(
                 onSuccess = { reply ->
                     if (_state.value.session?.question?.id != askedForId) return@fold
                     _state.value = _state.value.copy(
                         chat = _state.value.chat + ChatTurn("assistant", reply),
                         asking = false,
-                        askError = null
+                        askError = null,
+                        askStream = ""
                     )
                 },
                 onFailure = { e ->
@@ -583,7 +705,8 @@ class StudyViewModel(
                     // 失败时把这条提问留在列表里（用户能改改再问），并给出原因
                     _state.value = _state.value.copy(
                         asking = false,
-                        askError = e.message?.take(140) ?: "追问失败，请重试"
+                        askError = e.message?.take(140) ?: "追问失败，请重试",
+                        askStream = ""
                     )
                 }
             )
@@ -596,8 +719,12 @@ class StudyViewModel(
         _state.value = _state.value.copy(chat = emptyList(), askError = null)
     }
 
-    /** 当前题目 + 对话轮次 → 消息列表 */
-    private suspend fun requestAsk(q: Question, history: List<ChatTurn>): String {
+    /** 当前题目 + 对话轮次 → 消息列表（流式：边收边通过 [onDelta] 上屏） */
+    private suspend fun requestAsk(
+        q: Question,
+        history: List<ChatTurn>,
+        onDelta: (String) -> Unit = {}
+    ): String {
         val provider = resolveProvider()
         val system = com.examhelper.shua.data.llm.Prompts.ASK_DEFAULT
         val questionContext = buildString {
@@ -627,11 +754,12 @@ class StudyViewModel(
                 add(com.examhelper.shua.data.llm.ChatMessage(role, turn.text))
             }
         }
-        return llmClient.chatWithMessages(
+        return llmClient.chatStreamMessages(
             provider = provider,
             messages = messages,
             jsonMode = false,
-            maxTokens = 1500
+            maxTokens = 1500,
+            onDelta = onDelta
         ).content.trim()
     }
 

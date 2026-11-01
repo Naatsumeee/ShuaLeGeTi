@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.examhelper.shua.ShuaApp
 import com.examhelper.shua.data.db.LlmProvider
+import com.examhelper.shua.data.llm.BalanceClient
 import com.examhelper.shua.data.llm.LlmClient
 import com.examhelper.shua.data.repo.LocalDataRepository
 import com.examhelper.shua.data.settings.OcrEngine
@@ -26,6 +27,7 @@ class SettingsViewModel(
     private val db = container.database
     private val settingsStore: SettingsStore = container.settings
     private val llmClient: LlmClient = container.llmClient
+    private val balanceClient: BalanceClient = container.balanceClient
     private val localDataRepo: LocalDataRepository = container.localDataRepo
 
     val providers: StateFlow<List<LlmProvider>> =
@@ -33,7 +35,7 @@ class SettingsViewModel(
 
     data class UiState(
         val ocrEngine: String = OcrEngine.ML_KIT,
-        val speedSeconds: Int = 3,
+        val speedSeconds: Int = 2,
         val sanShengLiuBu: Boolean = false,
         val parseConcurrency: Int = 4,
         val fontScale: Float = 1.0f,
@@ -167,6 +169,61 @@ class SettingsViewModel(
                 testing = false,
                 ok = r.isSuccess,
                 message = r.fold({ "连通正常: $it" }, { it.message?.take(120) })
+            )
+        }
+    }
+
+    // ---- 账户余额（DeepSeek 官方接口） ----
+
+    data class BalanceState(
+        val loading: Boolean = false,
+        val text: String? = null,
+        val ok: Boolean? = null
+    )
+
+    private val _balance = MutableStateFlow(BalanceState())
+    val balance: StateFlow<BalanceState> = _balance
+
+    /**
+     * 查询账户余额。只对 DeepSeek 官方端点有效 —— 中转站没有 /user/balance 路由。
+     * 优先用主部模型，没有主部就用第一个启用的模型。
+     */
+    fun refreshBalance() {
+        val list = providers.value
+        val provider = list.firstOrNull { it.isPrimary && it.enabled }
+            ?: list.firstOrNull { it.enabled }
+        if (provider == null) {
+            _balance.value = BalanceState(text = "还没有启用任何模型", ok = false)
+            return
+        }
+        if (!balanceClient.supports(provider)) {
+            _balance.value = BalanceState(
+                text = "当前模型「${provider.name.ifBlank { provider.model }}」用的是第三方端点，官方不提供余额查询；成本行按本地 token 统计估算",
+                ok = null
+            )
+            return
+        }
+        _balance.value = BalanceState(loading = true)
+        viewModelScope.launch {
+            balanceClient.fetch(provider).fold(
+                onSuccess = { b ->
+                    val info = b.primary
+                    _balance.value = if (info == null) {
+                        BalanceState(text = "余额接口返回空数据", ok = false)
+                    } else {
+                        BalanceState(
+                            text = "余额 ${info.totalBalance} ${info.currency}" +
+                                "（充值 ${info.toppedUpBalance} + 赠送 ${info.grantedBalance}）",
+                            ok = b.isAvailable
+                        )
+                    }
+                },
+                onFailure = {
+                    _balance.value = BalanceState(
+                        text = "查询失败：${it.message?.take(90)}",
+                        ok = false
+                    )
+                }
             )
         }
     }

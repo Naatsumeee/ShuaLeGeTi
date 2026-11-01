@@ -10,22 +10,28 @@ import com.examhelper.shua.ShuaApp
 /**
  * 震动反馈（与音效完全独立的两套开关）。
  *
- * 强度分三档，映射到 [VibrationEffect] 的 amplitude：
- * - 轻（1）= 36/255，几乎无声的"触感确认"，适合选项点击
- * - 中（2）= 90/255，默认
- * - 强（3）= 160/255，明显
+ * 设计目标是**短促有力**：一次触感 8–20ms，起振即收，像机械按键的段落感。
+ * 早期版本 TAP=12ms、NG=38ms 偏拖，NG 的 38ms 在多数线性马达上会明显"嗡"一下
+ * 带余震感。
  *
- * 注意：`setSoundEnabled` 与 [setEnabled] 互不影响——用户可以把音效关掉只留震动。
+ * 强度三档同时映射到 **amplitude 与 duration**：
+ * - 有振幅控制的设备（绝大多数 X 轴线性马达）用 amplitude 区分，时长保持最短；
+ * - 没有振幅控制的设备（老转子马达、部分低端机 / 模拟器）amplitude 会被系统忽略，
+ *   此时靠 **时长** 区分——否则三档手感完全一样，这正是"强度调节好像没触发"
+ *   的真实原因。
  */
 object Haptics {
 
-    /** 预设动作；时长单位为毫秒 */
-    enum class Beat(val ms: Long, val factor: Float) {
-        TAP(12L, 0.75f),   // 选项点击
-        TICK(16L, 0.9f),   // 切换下一题
-        OK(22L, 1.0f),     // 答对
-        NG(38L, 1.1f),     // 答错
-        LONG(30L, 1.0f)    // 长按
+    /**
+     * 预设动作；[ms] 是有振幅控制时的时长，[msSoft] 是无振幅控制时的基准时长
+     * （后者必须拉开差距，否则三档一样）。
+     */
+    enum class Beat(val ms: Long, val msSoft: Long, val factor: Float) {
+        TAP(8L, 10L, 0.72f),    // 选项点击：最轻的一下
+        TICK(10L, 14L, 0.88f),  // 切换下一题
+        OK(14L, 20L, 1.0f),     // 答对
+        NG(20L, 30L, 1.15f),    // 答错：稍重，但不再拖 38ms
+        LONG(16L, 24L, 1.0f)    // 长按
     }
 
     @Volatile
@@ -60,21 +66,31 @@ object Haptics {
                 ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
             } ?: return
             if (!vibrator.hasVibrator()) return
-            val amp = amplitudeOf(strength) * beat.factor
-            val a = amp.roundToIntInclusive()
+
             if (vibrator.hasAmplitudeControl()) {
-                vibrator.vibrate(VibrationEffect.createOneShot(beat.ms, a))
+                // 先取消上一条，避免快速连点时排队成"拖尾"
+                runCatching { vibrator.cancel() }
+                val amp = (amplitudeOf(strength) * beat.factor).toInt().coerceIn(1, 255)
+                // 时长兜一层最小 5ms：太短部分机型会直接忽略这一次震动
+                vibrator.vibrate(VibrationEffect.createOneShot(beat.ms.coerceAtLeast(5L), amp))
             } else {
-                vibrator.vibrate(VibrationEffect.createOneShot(beat.ms, VibrationEffect.DEFAULT_AMPLITUDE))
+                runCatching { vibrator.cancel() }
+                val ms = when (strength) {
+                    1 -> beat.msSoft
+                    3 -> (beat.msSoft * 1.8f).toLong()
+                    else -> (beat.msSoft * 1.25f).toLong()
+                }
+                vibrator.vibrate(
+                    VibrationEffect.createOneShot(ms.coerceAtLeast(5L), VibrationEffect.DEFAULT_AMPLITUDE)
+                )
             }
         }
     }
 
+    /** 有振幅控制时的基准强度：轻 70 / 中 140 / 强 235（255 为上限，留一点余量） */
     private fun amplitudeOf(level: Int): Float = when (level) {
-        1 -> 40f
-        3 -> 165f
-        else -> 92f
+        1 -> 70f
+        3 -> 235f
+        else -> 140f
     }
-
-    private fun Float.roundToIntInclusive(): Int = toInt().coerceIn(1, 255)
 }

@@ -2,6 +2,7 @@ package com.examhelper.shua
 
 import android.app.Application
 import com.examhelper.shua.data.db.AppDatabase
+import com.examhelper.shua.data.llm.BalanceClient
 import com.examhelper.shua.data.llm.LlmClient
 import com.examhelper.shua.data.repo.BankRepository
 import com.examhelper.shua.data.repo.LocalDataRepository
@@ -12,6 +13,7 @@ class AppContainer(app: Application) {
     val database: AppDatabase = AppDatabase.get(app)
     val settings: SettingsStore = SettingsStore(app)
     val llmClient: LlmClient = LlmClient()
+    val balanceClient: BalanceClient = BalanceClient()
     val bankRepo: BankRepository = BankRepository(database)
     val studyRepo: StudyRepository = StudyRepository(database)
     val localDataRepo: LocalDataRepository = LocalDataRepository(database)

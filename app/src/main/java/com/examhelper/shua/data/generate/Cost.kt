@@ -108,7 +108,9 @@ object Cost {
         model: String? = null,
         millis: Long = System.currentTimeMillis()
     ): Double? {
-        val p = priceFor(model ?: "deepseek-flash") ?: return null
+        // 认不出模型 → 返回 null，绝不按 flash 兜底：那会给出一个「看着有数、其实
+        // 完全不对应实际扣费」的金额，比不显示更误导人。
+        val p = priceFor(model) ?: return null
         val factor = if (isPeak(millis)) 1.0 else 0.5
         return (hitTokens * p.hit + missTokens * p.miss + outputTokens * p.out) * factor / 1_000_000.0
     }

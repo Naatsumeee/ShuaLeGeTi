@@ -80,6 +80,7 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
     val providers by vm.providers.collectAsState()
     val ui by vm.ui.collectAsState()
     val test by vm.test.collectAsState()
+    val bal by vm.balance.collectAsState()
     val message by vm.message.collectAsState()
     var editing by remember { mutableStateOf<LlmProvider?>(null) }
     var showAdd by remember { mutableStateOf(false) }
@@ -292,6 +293,48 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                             Spacer(Modifier.width(6.dp))
                             Text("再添加一个模型")
                         }
+                    }
+                }
+            }
+
+            // ================= 账户余额（DeepSeek 官方） =================
+            item {
+                PaperCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "账户余额",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (bal.loading) {
+                                Text(
+                                    "查询中…",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else {
+                                Text(
+                                    "查询",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable { vm.refreshBalance() }
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+                        Text(
+                            bal.text ?: "点「查询」读取 DeepSeek 官方余额（仅 api.deepseek.com 支持）。生成任务结束后可对照这里的扣费，校验本地成本估算。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = when (bal.ok) {
+                                true -> extra.terracotta
+                                false -> extra.sage
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                        )
                     }
                 }
             }

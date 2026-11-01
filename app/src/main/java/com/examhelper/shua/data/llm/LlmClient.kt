@@ -32,11 +32,78 @@ data class ChatCompletionRequest(
     val temperature: Double? = null,
     @SerialName("response_format") val responseFormat: ResponseFormat? = null,
     @SerialName("max_tokens") val maxTokens: Int? = null,
-    val stream: Boolean = false
+    val stream: Boolean = false,
+    /** 流式请求顺带要用量统计；不支持的端点会忽略它 */
+    @SerialName("stream_options") val streamOptions: StreamOptions? = null
 ) {
     @Serializable
     data class ResponseFormat(val type: String = "json_object")
 }
+
+/** SSE 一帧解析出来的东西 */
+internal data class SseFrame(
+    val content: String? = null,
+    val reasoning: String? = null,
+    val finishReason: String? = null,
+    val usage: ChatUsage? = null,
+    val error: String? = null,
+    val done: Boolean = false
+)
+
+/**
+ * SSE 行解析（与网络分离，便于单测）。
+ *
+ * 各家实现的差异都在这里吸收：
+ * - 心跳注释行 `: keep-alive`、空行 → 忽略；
+ * - `data: [DONE]` → done；
+ * - 部分中转把 `data:` 后面不加空格，或用 `event:` 行 → 都能过；
+ * - usage 只在最后一帧出现（且 DSH 要求的 include_usage 不一定被支持）。
+ */
+internal object SseParser {
+    fun parse(line: String, json: Json): SseFrame? {
+        val trimmed = line.trim()
+        if (trimmed.isEmpty() || trimmed.startsWith(":")) return null
+        if (!trimmed.startsWith("data:")) return null
+        val payload = trimmed.removePrefix("data:").trim()
+        if (payload.isEmpty()) return null
+        if (payload == "[DONE]") return SseFrame(done = true)
+        val chunk = runCatching { json.decodeFromString<StreamChunk>(payload) }.getOrNull()
+            ?: return null
+        chunk.error?.let { return SseFrame(error = it.message ?: "API 错误") }
+        val choice = chunk.choices.firstOrNull()
+        val delta = choice?.delta
+        return SseFrame(
+            content = delta?.content?.takeIf { it.isNotEmpty() },
+            reasoning = delta?.reasoningContent?.takeIf { it.isNotEmpty() },
+            finishReason = choice?.finishReason,
+            usage = chunk.usage?.takeIf { it.promptTokens > 0 || it.completionTokens > 0 }
+        )
+    }
+}
+
+@Serializable
+data class StreamOptions(@SerialName("include_usage") val includeUsage: Boolean = true)
+
+/** SSE 增量帧里的 delta：正文与思维链可能分别下发 */
+@Serializable
+internal data class StreamDelta(
+    val content: String? = null,
+    @SerialName("reasoning_content") val reasoningContent: String? = null
+)
+
+@Serializable
+internal data class StreamChoice(
+    val index: Int = 0,
+    val delta: StreamDelta? = null,
+    @SerialName("finish_reason") val finishReason: String? = null
+)
+
+@Serializable
+internal data class StreamChunk(
+    val choices: List<StreamChoice> = emptyList(),
+    val usage: ChatUsage? = null,
+    val error: ChatCompletionResponse.ApiError? = null
+)
 
 /** 计费用量（DeepSeek 原生字段 + OpenAI 兼容 prompt_tokens_details 回退） */
 @Serializable
@@ -150,6 +217,152 @@ class LlmClient(
                 else throw it
             }
             .getOrThrow()
+    }
+
+    /**
+     * 流式对话（SSE）：每收到一小段正文就通过 [onDelta] 抛给调用方，界面因此能逐字显示。
+     *
+     * 兼容性优先：
+     * - 端点支持 `stream: true` → 按 `data:` 行逐帧解析；
+     * - 端点忽略 stream、直接回整包 JSON（不少中转如此）→ 自动退化为一次性回调，结果一致；
+     * - 思维链（`reasoning_content`）单独走 [onReasoning]，与正文分开渲染。
+     */
+    suspend fun chatStream(
+        provider: LlmProvider,
+        systemPrompt: String,
+        userPrompt: String,
+        jsonMode: Boolean = false,
+        temperature: Double? = provider.temperature.toDouble(),
+        maxTokens: Int? = null,
+        onReasoning: (String) -> Unit = {},
+        onDelta: (String) -> Unit = {}
+    ): ChatResult = chatStreamMessages(
+        provider = provider,
+        messages = listOf(
+            ChatMessage("system", systemPrompt),
+            ChatMessage("user", userPrompt)
+        ),
+        jsonMode = jsonMode,
+        temperature = temperature,
+        maxTokens = maxTokens,
+        onReasoning = onReasoning,
+        onDelta = onDelta
+    )
+
+    suspend fun chatStreamMessages(
+        provider: LlmProvider,
+        messages: List<ChatMessage>,
+        jsonMode: Boolean = false,
+        temperature: Double? = provider.temperature.toDouble(),
+        maxTokens: Int? = null,
+        onReasoning: (String) -> Unit = {},
+        onDelta: (String) -> Unit = {}
+    ): ChatResult = withContext(Dispatchers.IO) {
+        // 已经吐出过正文就不要重试了：重试会把同一段话再说一遍，
+        // 界面上表现为「回答重复了两遍」，比直接报错更让人困惑。
+        var emitted = false
+        val trackDelta: (String) -> Unit = { d -> emitted = true; onDelta(d) }
+        runCatching {
+            streamOnce(provider, messages, jsonMode, temperature, maxTokens, onReasoning, trackDelta)
+        }.recoverCatching {
+            // 部分兼容端点不认 response_format / max_tokens / stream_options，
+            // 去掉这些可选字段再试一次（仍保留 stream，流式是本次的核心诉求）
+            if (it is LlmException && !emitted) {
+                streamOnce(provider, messages, false, temperature, null, onReasoning, trackDelta)
+            } else {
+                throw it
+            }
+        }.getOrThrow()
+    }
+
+    private fun streamOnce(
+        provider: LlmProvider,
+        messages: List<ChatMessage>,
+        jsonMode: Boolean,
+        temperature: Double?,
+        maxTokens: Int?,
+        onReasoning: (String) -> Unit,
+        onDelta: (String) -> Unit
+    ): ChatResult {
+        val body = ChatCompletionRequest(
+            model = provider.model,
+            messages = messages,
+            temperature = temperature,
+            responseFormat = if (jsonMode) ChatCompletionRequest.ResponseFormat() else null,
+            maxTokens = maxTokens,
+            stream = true,
+            streamOptions = StreamOptions()
+        )
+        val url = provider.baseUrl.trimEnd('/') + "/chat/completions"
+        val request = Request.Builder()
+            .url(url)
+            .header("Authorization", "Bearer ${provider.apiKey}")
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+            .post(json.encodeToString(body).toRequestBody(jsonMediaType))
+            .build()
+
+        return client.newCall(request).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                throw LlmException("HTTP ${resp.code}: ${resp.body?.string().orEmpty().take(300)}")
+            }
+            val source = resp.body?.source() ?: throw LlmException("响应为空")
+            val first = source.readUtf8Line()
+                ?: throw LlmException("模型未返回内容")
+
+            // 非 SSE：端点不支持流式，整包 JSON 一次到达 → 一次性回调，语义与流式一致
+            if (!first.trimStart().startsWith("data:")) {
+                val whole = first + "\n" + source.readString(Charsets.UTF_8)
+                val parsed = runCatching { json.decodeFromString<ChatCompletionResponse>(whole) }
+                    .getOrElse { throw LlmException("响应解析失败: ${whole.take(200)}", it) }
+                parsed.error?.let { throw LlmException(it.message ?: "API 错误") }
+                val choice = parsed.choices.firstOrNull() ?: throw LlmException("模型未返回内容")
+                val content = choice.message?.content.orEmpty()
+                choice.message?.reasoningContent?.takeIf { it.isNotBlank() }?.let(onReasoning)
+                if (content.isBlank()) {
+                    throw LlmException("模型未返回内容")
+                }
+                onDelta(content)
+                return@use ChatResult(content, parsed.usage ?: ChatUsage(), choice.finishReason)
+            }
+
+            val content = StringBuilder()
+            val reasoning = StringBuilder()
+            var finishReason: String? = null
+            var usage = ChatUsage()
+            var done = false
+
+            fun handleLine(line: String) {
+                val frame = SseParser.parse(line, json) ?: return
+                frame.error?.let { throw LlmException(it) }
+                frame.usage?.let { usage = it }
+                frame.finishReason?.let { finishReason = it }
+                frame.reasoning?.let {
+                    reasoning.append(it)
+                    onReasoning(it)
+                }
+                frame.content?.let {
+                    content.append(it)
+                    onDelta(it)
+                }
+                if (frame.done) done = true
+            }
+
+            handleLine(first)
+            while (!done) {
+                val line = source.readUtf8Line() ?: break
+                handleLine(line)
+            }
+
+            if (content.isBlank()) {
+                throw LlmException(
+                    if (reasoning.isNotBlank())
+                        "模型只输出了思考过程未给出正文（可能被 max_tokens 截断），请重试"
+                    else "模型未返回内容"
+                )
+            }
+            ChatResult(content.toString(), usage, finishReason)
+        }
     }
 
     private fun chatOnce(

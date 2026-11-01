@@ -20,9 +20,27 @@ data class NoteItem(val kind: Kind, val text: String) {
 
 val RELEASE_NOTES: List<ReleaseNote> = listOf(
     ReleaseNote(
+        version = "1.0.8",
+        date = "2026-11-02",
+        current = true,
+        items = listOf(
+            NoteItem(NoteItem.Kind.NEW, "本轮做完全新完成页：文案改为「这轮题目已经完成啦」，主按钮变成醒目的「返回」；答错的话多一个「刷本轮错题（N）」入口，一键只刷本轮做错的那几道"),
+            NoteItem(NoteItem.Kind.NEW, "深度解题与「问 AI」改为逐字流式输出：答案和推理过程边生成边显示，不再让用户对着转圈干等"),
+            NoteItem(NoteItem.Kind.NEW, "切题做成左右连续卡片：拖动时当前卡片跟手平移，两侧还能看到相邻题卡的边缘，滑一小段就能翻页，不会先闪出下一题的正文"),
+            NoteItem(NoteItem.Kind.NEW, "导入页的「复制格式化提示词给 AI」改为让 AI 直接产出可导入的 JSON：拿到 .json 文件用「导入 .json」一步入库，不必再写成 Markdown 导回来重解析一遍"),
+            NoteItem(NoteItem.Kind.IMPROVE, "速刷模式默认等待时间从 3 秒改为 2 秒（设置页仍可 1~10 秒自行调）"),
+            NoteItem(NoteItem.Kind.IMPROVE, "震动反馈更短促有力：点选项、切题、判分都是一下干净利落的触感，三档强度现在真正有区别（不支持幅度控制的设备也做了区分）"),
+            NoteItem(NoteItem.Kind.IMPROVE, "所有题目解析下方加一行小字提示「内容为 AI 生成，可能会出错」"),
+            NoteItem(NoteItem.Kind.IMPROVE, "成本统计接入 DeepSeek 官方余额接口：设置页可直接查到账户余额，不再只靠 token 反推"),
+            NoteItem(NoteItem.Kind.FIX, "修复范围刷题刷完后「第 30 / 30 题」这类做完的进度还挂在选择页上、点进去却是空页的问题：一轮做完即清"),
+            NoteItem(NoteItem.Kind.FIX, "修复答案与题库原件冲突时的提示文案自相矛盾（出现「AI 答案 B 与题库答案 B 不一致」），现在明确以题库参考答案为准"),
+            NoteItem(NoteItem.Kind.FIX, "修复 AI 解析整段失败重试后仍拿不到结果的问题，深度解题给出的答案会回写为最终答案，旧答案留作对照"),
+        )
+    ),
+    ReleaseNote(
         version = "1.0.7",
         date = "2026-10-30",
-        current = true,
+        current = false,
         items = listOf(
             NoteItem(NoteItem.Kind.NEW, "支持直接导入 Markdown 题库（.md / .markdown）：识别 # 章节标题、1. 题号、- A. 选项、【答案】【解析】、公式与表格，无需先转成 PDF 或 docx"),
             NoteItem(NoteItem.Kind.NEW, "导入页新增「复制格式化提示词给 AI」：一键复制整理规范，粘给任意 AI 让它把杂乱题目整理成标准 Markdown，再存成 .md 导回即可"),

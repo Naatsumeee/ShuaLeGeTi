@@ -161,11 +161,15 @@ fun ImportScreen(
                         cameraLauncher.launch(uri)
                     }
                     SecondaryAction("导入 .json", Modifier.weight(1f)) {
-                        jsonPicker.launch(arrayOf("application/json"))
+                        // 各家文件管理器给 .json 报的 MIME 不统一（常见 text/plain、
+                        // application/octet-stream），只筛 application/json 会让文件变灰选不中
+                        jsonPicker.launch(
+                            arrayOf("application/json", "text/plain", "application/octet-stream")
+                        )
                     }
                 }
                 // 没有电脑时不至于卡死：把格式规范复制给任意大模型，让它把 OCR 出来的
-                // 乱文本整理成 Markdown，再回来用「选择文件」导入 .md
+                // 乱文本直接整理成可导入的 JSON，存成 .json 用「导入 .json」一步进来
                 SecondaryAction(
                     if (promptCopied) "已复制到剪贴板 ✓" else "复制格式化提示词给 AI",
                     Modifier.fillMaxWidth()
@@ -173,14 +177,14 @@ fun ImportScreen(
                     val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
                         as android.content.ClipboardManager
                     cm.setPrimaryClip(
-                        android.content.ClipData.newPlainText("题库格式化提示词", Prompts.MARKDOWN_CONVERT)
+                        android.content.ClipData.newPlainText("题库格式化提示词", Prompts.JSON_CONVERT)
                     )
                     promptCopied = true
                 }
                 if (promptCopied) {
                     Text(
-                        "已复制。粘给任意 AI（ChatGPT / DeepSeek / Kimi 都行），让它按格式整理题目，" +
-                            "把结果存成 .md 再用「选择文件」导入。",
+                        "已复制。粘给任意 AI（ChatGPT / DeepSeek / Kimi 都行），让它把题目整理成 JSON，" +
+                            "把结果存成 .json 再用下面的「导入 .json」一步导进来。",
                         style = MaterialTheme.typography.labelSmall,
                         color = extra.terracottaDeep
                     )
@@ -311,6 +315,28 @@ fun ImportScreen(
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                            }
+                            // 解析也在花 token：不显示就等于把这次导入的一半开销藏起来了
+                            if (job != null && job.cacheHitTokens + job.cacheMissTokens + job.outputTokens > 0) {
+                                val cost = com.examhelper.shua.data.generate.Cost.yuan(
+                                    job.cacheHitTokens, job.cacheMissTokens, job.outputTokens,
+                                    state.providerModel
+                                )
+                                Text(
+                                    "解析用量 ${com.examhelper.shua.data.generate.Cost.tokens(job.cacheHitTokens + job.cacheMissTokens + job.outputTokens)}" +
+                                        " / 缓存命中 ${com.examhelper.shua.data.generate.Cost.hitRate(job.cacheHitTokens, job.cacheMissTokens)}%" +
+                                        (cost?.let { " / 参考成本 ${com.examhelper.shua.data.generate.Cost.format(it)} 元" }
+                                            ?: " / 未知模型不计价"),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = extra.amber
+                                )
+                                if (job.cacheHitTokens == 0L && job.cacheMissTokens > 10_000) {
+                                    Text(
+                                        "若已复用同一提示词前缀仍显示 0，多为中转端未透传缓存字段，实际计费可能低于此参考值。",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.outline
+                                    )
+                                }
                             }
                             Text(
                                 "后台运行中，可以切出应用或锁屏，回来继续。",

@@ -19,7 +19,11 @@ data class StudySession(
     val indexInQueue: Int,   // 当前第几题（1-based 展示用）
     val total: Int,
     val doneCount: Int,      // 已完成数
-    val finished: Boolean
+    val finished: Boolean,
+    /** 上一题（用于左右连续滑动的左邻卡片；没有则 null） */
+    val prevQuestion: Question? = null,
+    /** 下一题（右邻卡片） */
+    val nextQuestion: Question? = null
 )
 
 class StudyRepository(
@@ -78,7 +82,9 @@ class StudyRepository(
                     indexInQueue = cursor + 1,
                     total = order.size,
                     doneCount = cursor,
-                    finished = cursor >= order.size
+                    finished = cursor >= order.size,
+                    prevQuestion = order.getOrNull(cursor - 1)?.let(byId::get),
+                    nextQuestion = order.getOrNull(cursor + 1)?.let(byId::get)
                 )
             }
             else -> {
@@ -89,7 +95,9 @@ class StudyRepository(
                     indexInQueue = index + 1,
                     total = questions.size,
                     doneCount = index,
-                    finished = index >= questions.size
+                    finished = index >= questions.size,
+                    prevQuestion = questions.getOrNull(index - 1),
+                    nextQuestion = questions.getOrNull(index + 1)
                 )
             }
         }
@@ -184,6 +192,17 @@ class StudyRepository(
         )
     }
 
+    /**
+     * 本轮结束：直接删掉这条进度记录。
+     *
+     * 为什么不是「置 0 重来」——置 0 会让范围页立刻又出现一条
+     * 「第 1 / 30 题 · 继续」，用户以为还留着上一轮；删掉才是真的干净。
+     * 筛选条件指纹随之消失，下次进来按当前筛选重建，行为可预期。
+     */
+    suspend fun clearRound(bankId: Long, mode: StudyMode) {
+        progressDao.deleteOne(bankId, mode)
+    }
+
     /** 随机巩固重置（重新乱序） */
     suspend fun resetRandom(bankId: Long, questionIds: List<Long>) {        progressDao.upsert(
             StudyProgress(
@@ -210,6 +229,18 @@ class StudyRepository(
     suspend fun resetProgress(bankId: Long, mode: StudyMode) {
         progressDao.upsert(
             StudyProgress(bankId = bankId, mode = mode, currentIndex = 0, randomCursor = 0)
+        )
+    }
+
+    /**
+     * 开一条「刷本轮错题」子进度：游标归零、指纹指向错题集合。
+     *
+     * 指纹换掉是必须的——否则 ensureProgress 会认为筛选条件没变，直接复用
+     * 原整轮进度（游标已在队尾），点进去就是个空完成页。
+     */
+    suspend fun resetRoundWrong(bankId: Long, mode: StudyMode, filterKey: String) {
+        progressDao.upsert(
+            StudyProgress(bankId = bankId, mode = mode, filterJson = filterKey, currentIndex = 0, randomCursor = 0)
         )
     }
 
@@ -243,6 +274,10 @@ class StudyRepository(
             }
             val pos = if (row.mode == StudyMode.RANDOM) row.randomCursor + 1 else row.currentIndex + 1
             if (pos <= 1) return@mapNotNull null
+            // 已经刷到队尾（pos > total）说明这轮做完了：这条进度不该再以
+            // 「第 30 / 30 题 · 继续」的形式挂在范围页上。做完即清，
+            // 下次进来就是新的一轮，而不是接着一个不存在的第 31 题。
+            if (total > 0 && pos > total) return@mapNotNull null
             val chapter = questions.getOrNull(pos - 1)?.chapter?.takeIf { it.isNotBlank() }
             SavedProgress(
                 mode = row.mode,
@@ -271,9 +306,45 @@ class StudyRepository(
     /** 该题最近一次作答（用于「划回已做题不重复作答」） */
     suspend fun latestAttempt(questionId: Long) = recordDao.latestAttempt(questionId)
 
-    /** 深度解题：把详细解析写回题目，并标记 deepSolved */
-    suspend fun applyDeepSolve(question: Question, analysis: String): Question {
-        val updated = question.copy(analysis = analysis, deepSolved = true)
+    /**
+     * 深度解题：把详细解析写回题目，并标记 deepSolved。
+     *
+     * 除了替换解析，**还要把 AI 给出的答案回写为最终答案**（用户明确要求）：
+     * 深度解题往往能纠正批量生成阶段的错判，若最终答案与最初解析给出的答案不一致，
+     * 应以深度解题的结论为准，并把旧答案留在 originalAnswer 里供对照，
+     * 避免出现「解析说选 A、参考答案却还写着 B」这种自相矛盾的展示。
+     */
+    suspend fun applyDeepSolve(
+        question: Question,
+        analysis: String,
+        deepAnswer: String? = null
+    ): Question {
+        val newAnswer = deepAnswer?.trim()?.takeIf { it.isNotEmpty() }
+        // 题库原答案（权威旁证）：优先取已存的 originalAnswer（生成阶段与 AI 冲突时留下的），
+        // 其次取「已核对过与题库一致」的当前答案。二者都没有说明题库本来就没答案。
+        val bankAnswer = question.originalAnswer?.takeIf { it.isNotBlank() }
+            ?: question.answer?.takeIf { it.isNotBlank() && question.answerVerified }
+        val sameAsBank = newAnswer != null && bankAnswer != null &&
+            com.examhelper.shua.data.generate.AnswerGenerator.answersMatch(bankAnswer, newAnswer)
+        val conflict = newAnswer != null && bankAnswer != null && !sameAsBank
+        val updated = question.copy(
+            analysis = analysis,
+            deepSolved = true,
+            // 深度解题的结论作为最终答案（用户明确要求：与最初解析不一致时以它为准）
+            answer = newAnswer ?: question.answer,
+            aiAnswer = newAnswer ?: question.aiAnswer,
+            // 与题库原答案冲突时保留题库答案作对照；一致则清掉过期的冲突标记
+            originalAnswer = when {
+                conflict -> bankAnswer
+                sameAsBank -> null
+                else -> question.originalAnswer
+            },
+            answerVerified = when {
+                conflict -> false
+                sameAsBank -> true
+                else -> question.answerVerified
+            }
+        )
         bankRepo.updateQuestion(updated)
         return updated
     }

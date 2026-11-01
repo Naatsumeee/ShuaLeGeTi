@@ -19,7 +19,7 @@ object OcrEngine {
 
 data class AppSettings(
     val ocrEngine: String = OcrEngine.ML_KIT,
-    val speedModeSeconds: Int = 3,
+    val speedModeSeconds: Int = 2,
     val sanShengLiuBu: Boolean = false, // 三省六部模式开关
     val parseConcurrency: Int = 4,      // AI 解析分块并发数
     val fontScale: Float = 1.0f,        // 全局字体缩放
@@ -53,7 +53,7 @@ class SettingsStore(private val context: Context) {
     val settings: Flow<AppSettings> = context.dataStore.data.map { p ->
         AppSettings(
             ocrEngine = p[Keys.OCR_ENGINE] ?: OcrEngine.ML_KIT,
-            speedModeSeconds = (p[Keys.SPEED_SECONDS] ?: 3).coerceIn(1, 10),
+            speedModeSeconds = (p[Keys.SPEED_SECONDS] ?: 2).coerceIn(1, 10),
             sanShengLiuBu = p[Keys.SAN_SHENG] ?: false,
             parseConcurrency = (p[Keys.PARSE_CONCURRENCY] ?: 4).coerceIn(1, 8),
             fontScale = (p[Keys.FONT_SCALE] ?: 1.0f).coerceIn(0.8f, 1.5f),

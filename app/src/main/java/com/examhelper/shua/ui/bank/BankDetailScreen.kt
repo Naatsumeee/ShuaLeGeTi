@@ -152,7 +152,7 @@ fun BankDetailScreen(
                         Column {
                             ModeRow("标准做题", "作答即判对错，看解析再下一题", StudyMode.SEQUENTIAL, onStartStudy)
                             Divider()
-                            ModeRow("速刷模式", "作答后直出答案，3 秒自动跳题", StudyMode.SPEED, onStartStudy)
+                            ModeRow("速刷模式", "作答后直出答案，2 秒自动跳题", StudyMode.SPEED, onStartStudy)
                             Divider()
                             ModeRow("背题模式", "直接展开答案与解析，快速过题", StudyMode.RECITE, onStartStudy)
                             Divider()

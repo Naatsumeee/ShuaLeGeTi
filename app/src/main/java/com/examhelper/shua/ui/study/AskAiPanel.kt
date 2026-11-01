@@ -104,8 +104,8 @@ fun AskAiPanel(
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
-    // 新消息进来滚到底部，跟聊天软件一致
-    LaunchedEffect(state.chat.size, state.asking) {
+    // 新消息进来滚到底部，跟聊天软件一致；流式输出期间也要持续跟随
+    LaunchedEffect(state.chat.size, state.asking, state.askStream.length) {
         val last = state.chat.size + if (state.asking) 1 else 0
         if (last > 0) listState.animateScrollToItem((last - 1).coerceAtLeast(0))
     }
@@ -206,18 +206,24 @@ fun AskAiPanel(
                 }
                 if (state.asking) {
                     item {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(13.dp),
-                                strokeWidth = 2.dp,
-                                color = extra.terracotta
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                "模型思考中…",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = extra.terracotta
-                            )
+                        // 流式输出：正文到达后就地渲染成气泡，逐字增长；
+                        // 还没收到第一段正文时显示「思考中」+ 呼吸圆点，避免看起来卡死
+                        if (state.askStream.isNotBlank()) {
+                            ChatBubble(ChatTurn("assistant", state.askStream))
+                        } else {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(13.dp),
+                                    strokeWidth = 2.dp,
+                                    color = extra.terracotta
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    "模型思考中…",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = extra.terracotta
+                                )
+                            }
                         }
                     }
                 }

@@ -203,6 +203,13 @@ data class ImportJob(
     /** 已解析题目 JSONL 落盘路径（增量追加） */
     val parsedPath: String? = null,
     val parsedCount: Int = 0,
+    /**
+     * 累计 token 用量。AI 解析本身也在花钱 —— 只统计生成那一段，
+     * 用户看到的「成本」就只覆盖了一半开销，这也是「和实际对不上」的来源之一。
+     */
+    val cacheHitTokens: Long = 0,
+    val cacheMissTokens: Long = 0,
+    val outputTokens: Long = 0,
     val errorMessage: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
