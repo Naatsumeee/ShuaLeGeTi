@@ -130,6 +130,20 @@ object Cost {
         }
     }
 
+    /**
+     * 官方账本口径的本轮消耗 = 任务前余额 - 任务后余额。
+     *
+     * 这是唯一能和 DeepSeek 实际扣费对上的数字：本地按 token 单价算的 [yuan] 会因为
+     * 中转端点不透传缓存字段、并发分批计入顺序等原因偏离真实账单。
+     * 任一余额缺失（端点不支持/查询失败）返回 null；余额倒挂（充值、赠送到期）
+     * 会被 coerceAtLeast 压成 0，宁可显示 0.00 也不显示负数。
+     */
+    fun spentByBalance(before: Double?, after: Double?): Double? =
+        if (before == null || after == null) null else (before - after).coerceAtLeast(0.0)
+
+    /** 余额显示：始终两位小数（账户余额是精确到分的钱，不需要有效数字压缩） */
+    fun money(value: Double): String = String.format("%.2f", value)
+
     /** 金额格式化：小于 0.01 元时给两位有效数字，避免一律显示 0.00 */
     fun format(yuan: Double): String = when {
         yuan <= 0.0 -> "0.00"

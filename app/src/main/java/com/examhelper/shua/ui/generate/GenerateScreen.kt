@@ -205,6 +205,32 @@ fun GenerateScreen(
                                     )
                                 }
                             }
+                            // ---- 官方余额对账：任务前后各读一次余额，差额就是真实扣费 ----
+                            val spent = com.examhelper.shua.data.generate.Cost.spentByBalance(
+                                job.balanceBefore, job.balanceAfter
+                            )
+                            if (job.balanceAfter != null || job.balanceBefore != null) {
+                                val cur = job.balanceCurrency ?: "CNY"
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    spent?.let {
+                                        SemanticChip(
+                                            "实扣 ${com.examhelper.shua.data.generate.Cost.format(it)} $cur",
+                                            ChipTone.Brand
+                                        )
+                                    }
+                                    job.balanceAfter?.let {
+                                        SemanticChip(
+                                            "剩余 ${com.examhelper.shua.data.generate.Cost.money(it)} $cur",
+                                            ChipTone.Verdant
+                                        )
+                                    }
+                                }
+                                Text(
+                                    "「实扣」= DeepSeek 官方余额差，与账单一致；「参考成本」是按 token 单价估算，两者有差属正常。",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.outline
+                                )
+                            }
                             job.errorMessage?.let {
                                 Text(it, color = extra.sage, style = MaterialTheme.typography.bodySmall)
                             }

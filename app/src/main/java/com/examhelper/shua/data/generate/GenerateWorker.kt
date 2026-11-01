@@ -15,6 +15,7 @@ import androidx.work.workDataOf
 import com.examhelper.shua.R
 import com.examhelper.shua.ShuaApp
 import com.examhelper.shua.data.db.GenerateJob
+import com.examhelper.shua.data.llm.BalanceLedger
 import com.examhelper.shua.data.model.JsonCodec
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
@@ -154,6 +155,20 @@ class GenerateWorker(
                 )
             )
 
+            // 官方余额快照：开工前读一次，收工后再读一次，差额就是本轮真实扣费。
+            // 只对 DeepSeek 官方端点有效；中转站/失败一律 null，不影响任务本身。
+            val balanceBefore = runCatching {
+                BalanceLedger.read(container.balanceClient, primary)
+            }.getOrNull()
+            if (balanceBefore != null) {
+                dao.upsert(
+                    (dao.get(bankId) ?: GenerateJob(bankId = bankId)).copy(
+                        balanceBefore = balanceBefore.amount,
+                        balanceCurrency = balanceBefore.currency
+                    )
+                )
+            }
+
             val batches = targets.chunked(AnswerGenerator.BATCH_SIZE)
             val usage = UsageAcc()
             var done = 0
@@ -240,11 +255,23 @@ class GenerateWorker(
             }
 
             val costYuan = Cost.yuan(usage.hit, usage.miss, usage.out, primary.model)
+            val balanceAfter = runCatching {
+                BalanceLedger.readSettled(container.balanceClient, primary)
+            }.getOrNull()
+            val spent = Cost.spentByBalance(balanceBefore?.amount, balanceAfter?.amount)
             dao.upsert(
                 (dao.get(bankId) ?: GenerateJob(bankId = bankId)).copy(
                     stage = "DONE",
+                    cacheHitTokens = usage.hit,
+                    cacheMissTokens = usage.miss,
+                    outputTokens = usage.out,
+                    balanceBefore = balanceBefore?.amount,
+                    balanceAfter = balanceAfter?.amount,
+                    balanceCurrency = balanceAfter?.currency ?: balanceBefore?.currency,
                     message = "完成：成功 $ok，失败 $fail · 缓存命中 ${Cost.hitRate(usage.hit, usage.miss)}%" +
-                        costYuan?.let { " · 参考成本 ${Cost.format(it)} 元" }.orEmpty()
+                        costYuan?.let { " · 参考成本 ${Cost.format(it)} 元" }.orEmpty() +
+                        spent?.let { " · 实扣 ${Cost.format(it)} 元" }.orEmpty() +
+                        balanceAfter?.let { " · 余额 ${Cost.money(it.amount)} ${it.currency}" }.orEmpty()
                 )
             )
             notifyDone(ok)

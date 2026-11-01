@@ -36,7 +36,7 @@ class Converters {
         ImportJob::class,
         GenerateJob::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -136,6 +136,21 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v6 → v7：任务前后余额快照。
+         * 官方 `/user/balance` 的差值才是能对账的真实花费，本地 token 单价只是「参考成本」。
+         */
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE import_jobs ADD COLUMN balanceBefore REAL DEFAULT NULL")
+                db.execSQL("ALTER TABLE import_jobs ADD COLUMN balanceAfter REAL DEFAULT NULL")
+                db.execSQL("ALTER TABLE import_jobs ADD COLUMN balanceCurrency TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE generate_jobs ADD COLUMN balanceBefore REAL DEFAULT NULL")
+                db.execSQL("ALTER TABLE generate_jobs ADD COLUMN balanceAfter REAL DEFAULT NULL")
+                db.execSQL("ALTER TABLE generate_jobs ADD COLUMN balanceCurrency TEXT DEFAULT NULL")
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -146,7 +161,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "shua.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                     .fallbackToDestructiveMigration()
                     .build()
                     .also { instance = it }

@@ -167,6 +167,14 @@ data class GenerateJob(
     val cacheHitTokens: Long = 0,
     val cacheMissTokens: Long = 0,
     val outputTokens: Long = 0,
+    /**
+     * 任务前后各查一次 DeepSeek 官方 `/user/balance`，两者之差 = 本轮真实扣费。
+     * 本地按 token 单价算的是「参考成本」，中转端点、并发计入、缓存字段丢失都会让它偏离；
+     * 余额差是官方账本上的数字（null = 端点不支持查余额 / 查询失败，不影响任务本身）。
+     */
+    val balanceBefore: Double? = null,
+    val balanceAfter: Double? = null,
+    val balanceCurrency: String? = null,
     val errorMessage: String? = null,
     val updatedAt: Long = System.currentTimeMillis()
 )
@@ -210,6 +218,14 @@ data class ImportJob(
     val cacheHitTokens: Long = 0,
     val cacheMissTokens: Long = 0,
     val outputTokens: Long = 0,
+    /**
+     * 任务前后各查一次 DeepSeek 官方余额，差额就是本轮真实扣费。
+     * 本地按 token 单价算的「参考成本」在中转端点/并发计入不准时会有偏差，
+     * 余额差是唯一权威数字（null = 该端点不支持查余额 / 查询失败）。
+     */
+    val balanceBefore: Double? = null,
+    val balanceAfter: Double? = null,
+    val balanceCurrency: String? = null,
     val errorMessage: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()

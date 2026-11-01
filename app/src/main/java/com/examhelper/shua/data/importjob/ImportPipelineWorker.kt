@@ -17,6 +17,7 @@ import androidx.work.workDataOf
 import com.examhelper.shua.R
 import com.examhelper.shua.ShuaApp
 import com.examhelper.shua.data.db.ImportJob
+import com.examhelper.shua.data.generate.Cost
 import com.examhelper.shua.data.ingest.DocumentIngestor
 import com.examhelper.shua.data.model.JsonCodec
 import com.examhelper.shua.data.model.ParsedLine
@@ -189,11 +190,24 @@ class ImportPipelineWorker(
             }
             val pending = chunks.indices.filter { it !in doneChunks }
 
+            // 官方余额快照：开工前读一次。断点续传时沿用上一轮记录的开跑余额，
+            // 这样「本轮消耗」算的是整次导入，而不是最后这一段。
+            val existingJob = runCatching { jobDao().getById(jobId) }.getOrNull()
+            val balanceBefore = existingJob?.balanceBefore?.let {
+                com.examhelper.shua.data.llm.BalanceLedger.Snapshot(
+                    it, existingJob.balanceCurrency ?: "CNY"
+                )
+            } ?: runCatching {
+                com.examhelper.shua.data.llm.BalanceLedger.read(container.balanceClient, provider)
+            }.getOrNull()
+
             updateJob(jobId) {
                 it.copy(
                     stage = "PARSE", message = "AI 解析（${provider.name}）",
                     totalUnits = chunks.size, doneUnits = doneChunks.size,
-                    rawTextPath = raw.absolutePath, parsedPath = parsed.absolutePath
+                    rawTextPath = raw.absolutePath, parsedPath = parsed.absolutePath,
+                    balanceBefore = balanceBefore?.amount,
+                    balanceCurrency = balanceBefore?.currency
                 )
             }
             runCatching { setForeground(foregroundInfo("AI 解析中 ${doneChunks.size}/${chunks.size}", doneChunks.size, chunks.size)) }
@@ -281,6 +295,15 @@ class ImportPipelineWorker(
             if (okCount == 0 && chunks.isNotEmpty()) {
                 return fail(jobId, "AI 解析全部失败：${provider.name} 连接异常或返回不可解析")
             }
+            val balanceAfter = runCatching {
+                com.examhelper.shua.data.llm.BalanceLedger.readSettled(container.balanceClient, provider)
+            }.getOrNull()
+            val spent = Cost.spentByBalance(balanceBefore?.amount, balanceAfter?.amount)
+            val costYuan = runCatching {
+                val u = parser.snapshotUsage()
+                Cost.yuan(u.normalizedCacheHit().toLong(), u.cacheMissTokens.toLong(),
+                    u.completionTokens.toLong(), provider.model)
+            }.getOrNull()
             updateJob(jobId) {
                 val u = parser.snapshotUsage()
                 it.copy(
@@ -288,7 +311,13 @@ class ImportPipelineWorker(
                     cacheHitTokens = u.normalizedCacheHit().toLong(),
                     cacheMissTokens = u.cacheMissTokens.toLong(),
                     outputTokens = u.completionTokens.toLong(),
-                    message = "解析完成：$totalParsed 题" + if (failCount > 0) "（$failCount 段失败，可在预览后重新解析补齐）" else ""
+                    balanceBefore = balanceBefore?.amount,
+                    balanceAfter = balanceAfter?.amount,
+                    balanceCurrency = balanceAfter?.currency ?: balanceBefore?.currency,
+                    message = "解析完成：$totalParsed 题" + if (failCount > 0) "（$failCount 段失败，可在预览后重新解析补齐）" else "" +
+                        costYuan?.let { " · 参考成本 ${Cost.format(it)} 元" }.orEmpty() +
+                        spent?.let { " · 实扣 ${Cost.format(it)} 元" }.orEmpty() +
+                        balanceAfter?.let { " · 余额 ${Cost.money(it.amount)} ${it.currency}" }.orEmpty()
                 )
             }
             notifyDone(jobId, bankName, totalParsed)

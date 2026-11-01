@@ -67,6 +67,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -76,6 +77,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -172,7 +175,30 @@ fun StudyScreen(
 
                 else -> {
                     val session = state.session
-                    val q = session?.question
+                    // 翻页动画期间把整条「卡片带」冻结在拖动开始那一刻的内容快照上：
+                    // reload() 是异步的，若中途换内容，滑出中的卡片会突然变成新题（闪烁）。
+                    var frozen by remember { mutableStateOf(false) }
+                    var snapCur by remember { mutableStateOf<Question?>(null) }
+                    var snapPrev by remember { mutableStateOf<Question?>(null) }
+                    var snapNext by remember { mutableStateOf<Question?>(null) }
+                    val q = if (frozen) snapCur else session?.question
+                    val livePrev = if (frozen) snapPrev else session?.prevQuestion
+                    val liveNext = if (frozen) snapNext else session?.nextQuestion
+                    // 冻结期间 state 还是上一题的作答态（选中/判分/解析），直接拿去画新题
+                    // 会闪一下"新题带着旧答案"。这里给快照题一份干净的作答态。
+                    val bodyState = if (frozen) state.copy(
+                        answered = false,
+                        correct = null,
+                        selected = emptySet(),
+                        textInput = "",
+                        revealed = state.mode == StudyMode.RECITE,
+                        deepSolved = q?.deepSolved ?: false,
+                        deepSolving = false,
+                        deepError = null,
+                        chat = emptyList(),
+                        asking = false,
+                        askError = null
+                    ) else state
 
                     // ---- 细进度条 + 题号 ----
                     Row(
@@ -216,26 +242,39 @@ fun StudyScreen(
                     val pageWidth = remember { mutableIntStateOf(0) }
                     val w = pageWidth.intValue.toFloat().coerceAtLeast(1f)
                     var drag by remember { mutableFloatStateOf(0f) }
-                    // 提交切题后，等 VM 把新题装载好（pageKey 变化）再把带子从对侧弹回 0：
-                    // 直接"先切状态再补动画"会出现一帧旧题闪回，因为 reload() 是异步的。
-                    var pending by remember { mutableIntStateOf(0) } // 1=向后翻 -1=向前翻
+                    // 翻页「交接」：滑出动画走完的瞬间把带子拍成快照、并把 drag 归零。
+                    // 因为快照里目标题已经站在 0 位，这一步在屏幕上一帧都不变；
+                    // 等 VM reload() 把新题装载好再撤掉快照，真实内容正好与快照重合。
+                    // 旧实现是等 pageKey 变化后从对侧再弹回 0，于是：动画播两遍 + 中间闪一下。
+                    // 位移达标但松手很慢（滑到一半停住再松）时，用"按住时长"兜底判定
+                    var dragFromX by remember { mutableFloatStateOf(0f) }
+                    var dragStartAt by remember { mutableLongStateOf(0L) }
+                    var lastMoveAt by remember { mutableLongStateOf(0L) }
+
                     val pageKey = if (state.mode == StudyMode.RANDOM) {
                         session?.doneCount ?: 0
                     } else {
                         session?.indexInQueue ?: 0
                     }
                     LaunchedEffect(pageKey) {
-                        if (pending != 0) {
-                            val from = if (pending > 0) w else -w
-                            drag = from
-                            Animatable(drag).animateTo(
-                                0f, tween(180, easing = FastOutLinearInEasing)
-                            ) { drag = value }
-                            pending = 0
+                        if (frozen) {
+                            // 新题已在位：撤掉快照即可，不能再补一段动画
+                            frozen = false
+                            drag = 0f
                         }
                     }
-                    val canPrev = session?.prevQuestion != null && state.mode != StudyMode.RANDOM
-                    val canNext = session?.nextQuestion != null
+                    // 兜底：万一 pageKey 没变（切题失败 / 卡在队尾），别把用户锁死在快照里
+                    LaunchedEffect(frozen) {
+                        if (frozen) {
+                            kotlinx.coroutines.delay(900)
+                            if (frozen) {
+                                frozen = false
+                                drag = 0f
+                            }
+                        }
+                    }
+                    val canPrev = livePrev != null && state.mode != StudyMode.RANDOM
+                    val canNext = liveNext != null
 
                     Box(
                         Modifier
@@ -245,34 +284,74 @@ fun StudyScreen(
                             .draggable(
                                 orientation = Orientation.Horizontal,
                                 state = rememberDraggableState { delta ->
-                                    // 没有邻题的那一侧只给一点点阻尼位移，暗示"到头了"
+                                    if (frozen) return@rememberDraggableState
+                                    if (dragStartAt == 0L) {
+                                        dragFromX = drag
+                                        dragStartAt = System.currentTimeMillis()
+                                    }
+                                    lastMoveAt = System.currentTimeMillis()
+                                    // 没有邻题的那一侧只给一点点阻尼位移，暗示"到头了"；
+                                    // 有邻题时上限就是一屏——最远正好滑到下一题，不会翻过头。
                                     drag = (drag + delta).coerceIn(
                                         if (canPrev) -w else -w * 0.16f,
                                         if (canNext) w else w * 0.16f
                                     )
                                 },
+                                onDragStarted = {
+                                    if (!frozen) {
+                                        // 记住本次手势的起点位移（上一次回弹动画没走完时它不一定是 0）
+                                        dragFromX = drag
+                                        dragStartAt = System.currentTimeMillis()
+                                        lastMoveAt = dragStartAt
+                                    }
+                                },
                                 onDragStopped = { velocity ->
-                                    val goNext = canNext && (
-                                        drag < -w * 0.22f ||
-                                            (velocity < -700f && drag < -w * 0.05f)
+                                    val held = (System.currentTimeMillis() - lastMoveAt).coerceAtLeast(0L)
+                                    val fromX = dragFromX
+                                    val moved = kotlin.math.abs(drag - fromX)
+                                    // 三种提交方式，任一条满足即翻页（用户反馈「要滑好远才动」）：
+                                    // 1) 拖过 12% 屏宽 —— 轻推一小段就够；
+                                    // 2) 甩动（速度够快）且已离开原位 3%；
+                                    // 3) 滑出一段后按住不放再松手（held ≥ 80ms）—— 慢条斯理地拖也算数。
+                                    val lingerCommit = held >= 80 && moved >= w * 0.06f
+                                    val goNext = canNext && !frozen && (
+                                        drag < -w * 0.12f ||
+                                            (velocity < -520f && drag < -w * 0.03f) ||
+                                            (lingerCommit && drag < 0f)
                                         )
-                                    val goPrev = canPrev && (
-                                        drag > w * 0.22f ||
-                                            (velocity > 700f && drag > w * 0.05f)
+                                    val goPrev = canPrev && !frozen && (
+                                        drag > w * 0.12f ||
+                                            (velocity > 520f && drag > w * 0.03f) ||
+                                            (lingerCommit && drag > 0f)
                                         )
+                                    dragStartAt = 0L
                                     when {
                                         goNext -> {
+                                            // 先拍快照再滑出：滑到 -w 时目标题正好补位到 0，
+                                            // 于是"滑出完成"与"内容交接"是同一个画面
+                                            val cur = session?.question
+                                            val nxt = liveNext
                                             Animatable(drag).animateTo(
-                                                -w, tween(140, easing = FastOutLinearInEasing)
+                                                -w, tween(150, easing = FastOutLinearInEasing)
                                             ) { drag = value }
-                                            pending = 1
+                                            snapCur = nxt
+                                            snapPrev = cur
+                                            snapNext = null
+                                            frozen = true
+                                            drag = 0f
                                             vm.next()
                                         }
                                         goPrev -> {
+                                            val cur = session?.question
+                                            val prv = livePrev
                                             Animatable(drag).animateTo(
-                                                w, tween(140, easing = FastOutLinearInEasing)
+                                                w, tween(150, easing = FastOutLinearInEasing)
                                             ) { drag = value }
-                                            pending = -1
+                                            snapCur = prv
+                                            snapPrev = null
+                                            snapNext = cur
+                                            frozen = true
+                                            drag = 0f
                                             vm.prev()
                                         }
                                         else -> Animatable(drag).animateTo(
@@ -283,20 +362,37 @@ fun StudyScreen(
                             )
                     ) {
                         if (canPrev) {
-                            PeekSlot(x = drag - w) { session?.prevQuestion?.let { PeekPage(it) } }
+                            PeekSlot(x = drag - w) {
+                                livePrev?.let { PeekPage(it, state.mode, vm, compact) }
+                            }
                         }
                         if (canNext) {
-                            PeekSlot(x = drag + w) { session?.nextQuestion?.let { PeekPage(it) } }
+                            PeekSlot(x = drag + w) {
+                                liveNext?.let { PeekPage(it, state.mode, vm, compact) }
+                            }
                         }
-                        // 当前题：不透明底色 + 阴影，拖动时压在邻卡之上形成遮罩
+                        // 当前题：不透明底色 + 随位移柔和升起的阴影，拖动时压在邻卡之上形成遮罩。
+                        // 旧实现是 abs(drag) > 1f 时直接给 20dp，一离开原位就"啪"地糊上一块黑边；
+                        // 现在阴影由 0 平滑长到 4dp（≈ 1 张纸抬起的厚度），并改用 graphicsLayer
+                        // 一次性完成平移与阴影，避免每帧重组整棵卡片子树。
+                        val cardShape = remember { RoundedCornerShape(16.dp) }
+                        // 暖褐色投影，比纯黑柔和；暗黑模式下用纯黑以免发灰
+                        val shadowTint = if (MaterialTheme.colorScheme.background.luminance() > 0.5f)
+                            Color(0x38281F17) else Color(0x66000000)
                         Column(
                             Modifier
                                 .fillMaxSize()
-                                .offset { IntOffset(drag.toInt(), 0) }
-                                .shadow(
-                                    if (kotlin.math.abs(drag) > 1f) 20.dp else 0.dp,
-                                    RoundedCornerShape(16.dp)
-                                )
+                                .graphicsLayer {
+                                    translationX = drag
+                                    val prog = (kotlin.math.abs(drag) / w).coerceIn(0f, 1f)
+                                    // 极轻的一层阴影：只够让卡片"离开纸面"，不抢内容。
+                                    // 旧实现是 20dp 纯黑，一离开原位就糊上一圈黑边，非常突兀。
+                                    shadowElevation = 2.5f * prog * density
+                                    shape = cardShape
+                                    clip = false
+                                    ambientShadowColor = shadowTint
+                                    spotShadowColor = shadowTint
+                                }
                                 .background(MaterialTheme.colorScheme.background)
                                 .verticalScroll(rememberScrollState())
                                 .padding(horizontal = 14.dp)
@@ -306,7 +402,7 @@ fun StudyScreen(
                             if (q == null) {
                                 Text("题目加载中…")
                             } else {
-                                QuestionBody(q = q, state = state, vm = vm, compact = compact)
+                                QuestionBody(q = q, state = bodyState, vm = vm, compact = compact)
                             }
                         }
                     }
@@ -392,8 +488,9 @@ fun StudyScreen(
 }
 
 /**
- * 邻卡槽位：整屏宽，按 [x] 横向偏移。内容做了轻量降级（只画题干与选项字母），
- * 一是省掉邻卡的重排/公式解析开销，二是让"还没翻到的那张"在视觉上退后一层。
+ * 邻卡槽位：整屏宽，按 [x] 横向偏移。
+ * 内边距必须与当前题卡片逐项一致（h14 / top2 / bottom6 + spacedBy 8），
+ * 否则滑入时内容会"缩一下再长开"。
  */
 @Composable
 private fun PeekSlot(x: Float, content: @Composable () -> Unit) {
@@ -401,54 +498,41 @@ private fun PeekSlot(x: Float, content: @Composable () -> Unit) {
         Modifier
             .fillMaxSize()
             .offset { IntOffset(x.toInt(), 0) }
-            .padding(horizontal = 14.dp)
-            .padding(top = 2.dp, bottom = 6.dp)
     ) { content() }
 }
 
-/** 邻卡预览：题干（最多 6 行）+ 选项字母，够用户判断"下一题是什么"即可 */
+/** 邻卡用的"未作答"干净态：只借 QuestionBody 的排版，任何作答痕迹都不带过去 */
+private fun peekState(mode: StudyMode, q: Question?): StudyUiState = StudyUiState(
+    loading = false,
+    mode = mode,
+    revealed = false,
+    deepSolved = q?.deepSolved ?: false
+)
+
+/**
+ * 邻卡：与真卡同构 —— 直接用 [QuestionBody] 渲染（interactive = false 关掉交互）。
+ * 早先这里是手写的"降级版"（自定内边距 9dp、题干最多 6 行、选项只有两行纯文本），
+ * 翻页落地时换成真卡，行高与间距 "由小到大" 跳一下，正是用户反馈的闪动来源。
+ */
 @Composable
-private fun PeekPage(q: Question) {
-    val extra = shuaColors
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        PaperCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), elevation = 1.dp) {
-            Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
-                SemanticChip(typeLabel(q.type), ChipTone.Brand)
-                Spacer(Modifier.height(7.dp))
-                Latex.LatexText(
-                    text = q.stem,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 6
-                )
-            }
-        }
-        val options = remember(q.id) { JsonCodec.decodeOptions(q.optionsJson) }
-        options.forEach { opt ->
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(13.dp))
-                    .background(MaterialTheme.colorScheme.surface)
-                    .border(1.dp, extra.creamLine, RoundedCornerShape(13.dp))
-                    .padding(horizontal = 11.dp, vertical = 9.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    opt.key,
-                    style = monoStyle(12.sp, FontWeight.Medium),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    opt.text,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
+private fun PeekPage(
+    q: Question,
+    mode: StudyMode,
+    vm: StudyViewModel,
+    compact: Boolean
+) {
+    val clean = remember(q.id, q.deepSolved, mode) { peekState(mode, q) }
+    // 修饰符顺序与真卡严格一致：先 verticalScroll 再 padding（内边距属于滚动内容），
+    // 这样两张卡的可用宽度、首行基线与行距完全相同，滑入落地时不会"缩一下再长开"。
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 14.dp)
+            .padding(top = 2.dp, bottom = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        QuestionBody(q = q, state = clean, vm = vm, compact = compact, interactive = false)
     }
 }
 
@@ -493,7 +577,9 @@ private fun QuestionBody(
     q: Question,
     state: StudyUiState,
     vm: StudyViewModel,
-    compact: Boolean
+    compact: Boolean,
+    // 邻卡预览时置 false：只借它的排版，不允许任何点击改到当前题的状态
+    interactive: Boolean = true
 ) {
     val options = JsonCodec.decodeOptions(q.optionsJson)
     val extra = shuaColors
@@ -572,11 +658,11 @@ private fun QuestionBody(
                     revealed = state.revealed,
                     isAnswer = isAnswer,
                     isWrongPick = isWrongPick,
-                    enabled = !state.answered,
+                    enabled = interactive && !state.answered,
                     onClick = { vm.onOptionTap(opt.key) }
                 )
             }
-            if (q.type == QuestionType.MULTIPLE && !state.answered && state.selected.isNotEmpty()) {
+            if (interactive && q.type == QuestionType.MULTIPLE && !state.answered && state.selected.isNotEmpty()) {
                 Button(
                     onClick = vm::confirmMultiple,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 42.dp),
@@ -589,24 +675,39 @@ private fun QuestionBody(
 
         QuestionType.FILL, QuestionType.SHORT_ANSWER, QuestionType.TERM -> {
             if (!state.revealed) {
+                // 邻卡也要把输入框画出来（只占位、不可聚焦），否则滑入落地时
+                // 输入框凭空长出来，整页内容会被顶下去一截。
                 OutlinedTextField(
                     value = state.textInput,
-                    onValueChange = vm::updateTextInput,
+                    onValueChange = if (interactive) vm::updateTextInput else ({ _: String -> }),
+                    readOnly = !interactive,
                     label = { Text(if (q.type == QuestionType.FILL) "输入你的答案" else "写下你的回答（可选）") },
+                    // readOnly 的输入框本身就点不出键盘、也不接受输入，
+                    // 邻卡借它占位不会影响当前题
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(14.dp),
                     minLines = if (q.type == QuestionType.FILL) 1 else 2
                 )
                 Button(
-                    onClick = vm::revealReference,
+                    onClick = if (interactive) vm::revealReference else ({}),
+                    enabled = interactive,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 42.dp),
                     shape = RoundedCornerShape(12.dp)
-                ) { Text("对照参考答案") }
+                ) {
+                    Text(
+                        "对照参考答案",
+                        // 邻卡上这颗按钮只是占位，别让它看起来可以点
+                        color = if (interactive) MaterialTheme.colorScheme.onPrimary
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }
 
-    if (state.revealed) {
+    // 邻卡（interactive = false）不画答案卡：一是背诵模式下不该让人提前偷看下一题答案，
+    // 二是答案卡里有大量按钮，画出来却不能点更糟。
+    if (state.revealed && interactive) {
         AnswerCard(q = q, state = state, vm = vm)
     }
 }

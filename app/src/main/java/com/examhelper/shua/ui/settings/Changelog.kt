@@ -26,7 +26,12 @@ val RELEASE_NOTES: List<ReleaseNote> = listOf(
         items = listOf(
             NoteItem(NoteItem.Kind.NEW, "本轮做完全新完成页：文案改为「这轮题目已经完成啦」，主按钮变成醒目的「返回」；答错的话多一个「刷本轮错题（N）」入口，一键只刷本轮做错的那几道"),
             NoteItem(NoteItem.Kind.NEW, "深度解题与「问 AI」改为逐字流式输出：答案和推理过程边生成边显示，不再让用户对着转圈干等"),
-            NoteItem(NoteItem.Kind.NEW, "切题做成左右连续卡片：拖动时当前卡片跟手平移，两侧还能看到相邻题卡的边缘，滑一小段就能翻页，不会先闪出下一题的正文"),
+            NoteItem(NoteItem.Kind.NEW, "切题做成左右连续卡片：拖动时当前卡片跟手平移，两侧还能看到相邻题卡的边缘，滑一小段就能翻页"),
+            NoteItem(NoteItem.Kind.NEW, "AI 任务花钱看得见了：「导入解析」和「AI 生成」都在开工前后各查一次 DeepSeek 官方余额，直接显示本轮实际扣了多少钱、账户还剩多少钱（与官方账单一致，不再是拿 token 单价估出来的数）"),
+            NoteItem(NoteItem.Kind.FIX, "修复左右滑动切题时「动画播两遍 + 中间闪一下」：现在滑出动画走完的那一帧，新题就已经在原位，不再从对侧弹回来补一遍动画"),
+            NoteItem(NoteItem.Kind.FIX, "修复滑动切题手感：手指拖多远卡片就走多远（最远正好滑到下一题，不会翻过头），轻轻滑一小段再短暂按住松手也能跳题，不必甩得飞快"),
+            NoteItem(NoteItem.Kind.IMPROVE, "切题时卡片投影大幅减淡：由原来一离手就糊上 20dp 的硬边黑影，改为随位移从 0 平滑升起的一层浅浅暖色投影，滑完几乎看不出来"),
+            NoteItem(NoteItem.Kind.FIX, "修复切题动画中与落地后「题干、选项行距和字号突然变一下」的跳动：相邻题卡不再用简化的预览排版，而是与正式题卡完全同构，滑入落地时一个像素都不动"),
             NoteItem(NoteItem.Kind.NEW, "导入页的「复制格式化提示词给 AI」改为让 AI 直接产出可导入的 JSON：拿到 .json 文件用「导入 .json」一步入库，不必再写成 Markdown 导回来重解析一遍"),
             NoteItem(NoteItem.Kind.IMPROVE, "速刷模式默认等待时间从 3 秒改为 2 秒（设置页仍可 1~10 秒自行调）"),
             NoteItem(NoteItem.Kind.IMPROVE, "震动反馈更短促有力：点选项、切题、判分都是一下干净利落的触感，三档强度现在真正有区别（不支持幅度控制的设备也做了区分）"),

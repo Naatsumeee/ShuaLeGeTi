@@ -116,4 +116,20 @@ class CostTest {
         assertEquals("1.5 K", Cost.tokens(1500))
         assertEquals("999", Cost.tokens(999))
     }
+
+    /**
+     * 余额差口径：这是能和 DeepSeek 账单对上的唯一数字，所以边界要钉死 ——
+     * 缺任一端不显示（而不是当成 0 元），充值导致余额反涨时不显示负数。
+     */
+    @Test
+    fun spentByBalanceUsesOfficialLedger() {
+        assertEquals(1.23, Cost.spentByBalance(100.00, 98.77)!!, 1e-9)
+        assertNull("端点不支持余额查询时不该编一个 0", Cost.spentByBalance(null, 98.77))
+        assertNull(Cost.spentByBalance(100.00, null))
+        assertNull(Cost.spentByBalance(null, null))
+        assertEquals("任务期间充值导致余额上涨 → 记 0 而非负数", 0.0, Cost.spentByBalance(10.0, 20.0)!!, 1e-9)
+        // 余额是精确到分的钱，不能用 format 的有效数字压缩
+        assertEquals("100.00", Cost.money(100.0))
+        assertEquals("0.03", Cost.money(0.031))
+    }
 }
