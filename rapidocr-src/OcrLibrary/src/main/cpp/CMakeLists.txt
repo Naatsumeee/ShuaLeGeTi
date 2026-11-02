@@ -39,8 +39,12 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=hidden -fvisibility-inlines
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-rtti -fno-exceptions")
 
 include_directories(include)
+# 显式列源文件，不用 file(GLOB)：GLOB 只在 CMake 配置阶段求值，
+# 新增 .cpp 后如果配置缓存没失效，新文件会被静默漏编（表现为链接期 undefined symbol）。
 file(GLOB OCR_SRC src/*.cpp)
 set(OCR_COMPILE_CODE ${OCR_SRC})
+list(APPEND OCR_COMPILE_CODE ${CMAKE_CURRENT_SOURCE_DIR}/src/LayoutNet.cpp)
+list(REMOVE_DUPLICATES OCR_COMPILE_CODE)
 
 add_library(RapidOcr SHARED ${OCR_COMPILE_CODE})
 

@@ -2,17 +2,21 @@
 #include "BitmapUtils.h"
 #include "OcrLite.h"
 #include "OcrUtils.h"
+#include "LayoutNet.h"
 
 static OcrLite *ocrLite;
+static LayoutNet *layoutNet;
 
 JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
     ocrLite = new OcrLite();
+    layoutNet = new LayoutNet();
     return JNI_VERSION_1_4;
 }
 
 JNIEXPORT void JNI_OnUnload(JavaVM *vm, void *reserved) {
     LOGI("Goodbye OcrLite!");
     delete ocrLite;
+    delete layoutNet;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -26,6 +30,51 @@ Java_com_benjaminwan_ocrlibrary_OcrEngine_init(JNIEnv *env, jobject thiz, jobjec
     ocrLite->init(env, assetManager, numThread, modelDetName, modelClsName, modelRecName, modelKeysName);
     //ocrLite->initLogger(false);
     return JNI_TRUE;
+}
+
+/**
+ * 版面分析模型单独初始化：它是可选能力，模型缺失时返回 false，
+ * 调用方降级到「不做版面分析」，不能因为一个可选模型把 OCR 整个拖垮。
+ */
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_benjaminwan_ocrlibrary_LayoutEngine_init(JNIEnv *env, jobject thiz, jobject assetManager,
+                                                  jint numThread, jstring modelName) {
+    std::string name = jstringTostring(env, modelName);
+    AAssetManager *mgr = AAssetManager_fromJava(env, assetManager);
+    if (mgr == NULL) {
+        LOGE(" %s", "AAssetManager==NULL");
+        return JNI_FALSE;
+    }
+    layoutNet->setNumThread(numThread);
+    bool ok = layoutNet->initModel(mgr, name);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+/** 返回 float[6] 数组的数组：[labelId, score, x1, y1, x2, y2]，坐标为原图尺度。 */
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_benjaminwan_ocrlibrary_LayoutEngine_nativeDetect(JNIEnv *env, jobject thiz, jobject input,
+                                                          jfloat scoreThresh) {
+    jclass floatArrayClass = env->FindClass("[F");
+    if (floatArrayClass == NULL) return NULL;
+
+    std::vector<LayoutBox> boxes;
+    cv::Mat imgRGBA, imgBGR;
+    bitmapToMat(env, input, imgRGBA);
+    cv::cvtColor(imgRGBA, imgBGR, cv::COLOR_RGBA2BGR);
+    boxes = layoutNet->detect(imgBGR, scoreThresh);
+
+    jobjectArray result = env->NewObjectArray((jsize) boxes.size(), floatArrayClass, NULL);
+    for (jsize i = 0; i < (jsize) boxes.size(); ++i) {
+        jfloat values[6] = {(jfloat) boxes[i].labelId, boxes[i].score,
+                            boxes[i].rect.x, boxes[i].rect.y,
+                            boxes[i].rect.x + boxes[i].rect.width,
+                            boxes[i].rect.y + boxes[i].rect.height};
+        jfloatArray row = env->NewFloatArray(6);
+        env->SetFloatArrayRegion(row, 0, 6, values);
+        env->SetObjectArrayElement(result, i, row);
+        env->DeleteLocalRef(row);
+    }
+    return result;
 }
 
 cv::Mat makePadding(cv::Mat &src, const int padding) {

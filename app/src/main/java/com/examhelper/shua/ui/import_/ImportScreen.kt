@@ -75,6 +75,9 @@ fun ImportScreen(
     val extra = shuaColors
     // 复制提示词是「做完了但界面无变化」的操作，必须有可见反馈
     var promptCopied by remember { mutableStateOf(false) }
+    // 电脑端整理题库的路线说明默认收起：它是「少数人才需要」的长文本，
+    // 常驻展开会把首屏的选择文件按钮挤出屏幕。
+    var showPcGuide by remember { mutableStateOf(false) }
     LaunchedEffect(promptCopied) {
         if (promptCopied) {
             kotlinx.coroutines.delay(4000)
@@ -188,6 +191,46 @@ fun ImportScreen(
                         style = MaterialTheme.typography.labelSmall,
                         color = extra.terracottaDeep
                     )
+                }
+                // 电脑上有扫描件时的路线：手机拍照 OCR 的精度远不如在 PC 上跑一遍。
+                // 默认收起——常驻展开会把上面的按钮挤出首屏。
+                GlassSurface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), elevation = 6.dp) {
+                    Column(Modifier.padding(13.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth().clickableTab { showPcGuide = !showPcGuide },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            SemanticChip("电脑端", ChipTone.Verdant)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "扫描件先用电脑整理，再交给 AI",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                if (showPcGuide) "收起" else "展开",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = extra.terracottaDeep
+                            )
+                        }
+                        if (showPcGuide) {
+                            Spacer(Modifier.height(10.dp))
+                            Text(
+                                "① 主路线：Umi-OCR（免费开源、解压即用、全程离线）\n" +
+                                    "「文档识别」页丢进 PDF/EPUB，直接出文字；「批量OCR」页丢进图片，可导出 " +
+                                    "txt / md / csv（表格存 csv 最稳）。识别前在文本后处理里选「多栏-按自然段换行」，" +
+                                    "双栏试卷的阅读顺序才对；页眉水印用「忽略区域」框掉。导出后把文本贴给任意 AI，" +
+                                    "配上面那段提示词让它产出 JSON。\n\n" +
+                                    "② 复杂页再加一道：小米 Xiaomi-OCR-0（0.8B 视觉模型）\n" +
+                                    "大表格、复杂公式、图文混排这一档它的还原度明显更高，但吃显存、纯 CPU " +
+                                    "每页也要 1.5~4 分钟，你这台 i5-8300U + 8GB 内存只适合挑几页重点跑，别当日常工具。\n\n" +
+                                    "③ 不建议：MinerU 一类需要 16GB 以上内存才跑得顺的整册流水线。",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                 }
                 GlassSurface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), elevation = 8.dp) {
                     Row(Modifier.padding(13.dp), verticalAlignment = Alignment.Top) {

@@ -26,7 +26,7 @@ Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）�
 
 - Kotlin + Jetpack Compose（BOM 2024.12.01）+ Material3；MVVM（ViewModel 用 @JvmOverloads/SavedStateHandle 构造，无 DI 框架，`ShuaApp.instance.container` 手工容器）
 - Room v4（`data/db/`：Entities/Daos/AppDatabase，含 1→2→3→4 迁移，**禁用破坏性重建需谨慎**：fallbackToDestructiveMigration 仍在，新增字段必须写正式迁移）
-- 双 OCR 引擎（`data/ocr/`）：ML Kit 中文 bundled（默认）+ RapidOCR（PP-OCRv5 ONNX）；OCR 后做**双栏阅读顺序重排**（`MlKitOcrEngine.rebuildReadingOrder`，扫描试卷是左右双栏）
+- 双 OCR 引擎（`data/ocr/`）：ML Kit 中文 bundled（默认）+ RapidOCR（PP-OCRv5 ONNX）；OCR 后做**双栏阅读顺序重排**（`MlKitOcrEngine.rebuildReadingOrder`，扫描试卷是左右双栏）；RapidOCR 额外跑**版面分析**（见「版面分析」节）
 - RapidOCR 为**源码模块** `rapidocr-src/OcrLibrary`（Apache-2.0，已入库 ~93MB）：NDK r27 + `ANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON` + onnxruntime **1.20**（16KB 页对齐，Maven 的 AAR 抽取）+ opencv-mobile 3.4.15（`src/sdk/`）。**16KB 页对齐是硬要求**（用户手机是 16KB 设备），换依赖时必须验证 PT_LOAD p_align=16384
 - 后台任务 = WorkManager 前台服务（dataSync 类型）：`ImportPipelineWorker`（导入/解析，断点续传按"已落盘分块"）与 `GenerateWorker`（AI 生成，断点续传按"已答即跳过"）；进度写 Room 表（import_jobs/generate_jobs），UI 观察 Flow
 - LLM：`data/llm/LlmClient.kt`（OpenAI 兼容 chat/completions，jsonMode 失败自动降级重试，max_tokens 支持）；**系统提示词集中**在 `data/llm/Prompts.kt`（用户可在设置页覆盖，稳定前缀为命中 DeepSeek 前缀缓存——命中价是未命中 1/50）
@@ -62,6 +62,18 @@ Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）�
 - 对外入口 `Latex.LatexText(text, style, color, maxLines, allowDisplay)`。**`allowDisplay = false` 是选项/预览/单行场景的必填项**：否则选项里出现 `$$` 会被当成行间公式，把整张卡片撑成两行并居中错位。
 - `Markdown.MarkdownText(text, style, color, tight)` 支持标题/粗斜体/行内代码/引用/有序无序列表/表格/分隔线，内部把公式段落转交 `Latex`。所有展示 AI 输出的地方（解析、深度解题、问 AI 回答、错题本详情、测试报告）都走它。
 - **列表预览不要按字符 `take(n)` 截断**——会把 LaTeX 命令从中间切断渲染成乱码；改成完整传入 + `maxLines` 由排版层省略。
+
+## 版面分析（`data/ocr/LayoutAnalyzer.kt` + `rapidocr-src/.../LayoutNet.cpp`，v1.0.9）
+
+RapidOCR 识别一页分两步：**先版面分析，再识别文字**。模型是 PP-DocLayout-S（4.7MB ONNX，`app/src/main/assets/pp_doclayout_s.onnx`），ONNX Runtime C++ 侧跑（`LayoutNet`，letterbox 保比例到 480×480，raw 输出恒 100 行，先按 score 过滤再 NMS）。ML Kit 引擎没有版面模型，永远拿 `PageLayout.NONE`。
+
+- **栏缝绝不能由版面模型算**（决定性实测结论）：PP-DocLayout-S 是**段落粒度**检测器，双栏页常被并成横跨全宽的大框，缝里全是权重 → `columnCuts` 由版面模型返回恒为空。栏缝改用**OCR 行块垂直投影**（`LayoutAnalyzer.withGutters(layout, boxes, pageWidth)` → `detectGutters`），粒度细、原图坐标才找得到真正中缝。所以 `RapidOcrEngine.recognize` 的顺序是 `analyze()` → `engine.detect()` → `withGutters()` → `rebuildReadingOrder()`。
+- `detectGutters` 细节：按每块覆盖的 x 区间累加**高度加权**的投影直方图；**横跨超过 0.72 页宽的块不参与**（`SPANNING_SKIP_RATIO`，取 0.5 会把整栏正文当通栏丢掉，实测踩过）；只在页宽 0.26~0.74 找；走廊宽度需 ≥ 页宽 2%（`MIN_GUTTER_RATIO`）；还要求左右两侧块数覆盖 ≥ 某比例才认。
+- `columnOf(box)` / `columnAt(x)` **按左边界判栏**（`columnAt(box.left)`）。早期用右边界，跨栏标题的右边界落在第二栏会被误判成右栏内容。
+- 版面模型仍然有用：页眉页脚（`header/footer/header_image/footer_image/number`）、表格、公式的定位靠它。**页眉页脚只在页面上下 12% 内才算数**——模型常把正文里的「一、名词解释」误判成 header，不加这条会删题干。
+- `PageLayout.NONE` 是可选降级：assets 缺模型或 native 加载失败时 `layoutEngineAvailable = false`，自动退回旧的双栏启发式（块在页宽一半哪一侧），不影响出题。
+- **坐标全用自研 `Box`**（`data/ocr/Box.kt`，left/top/right/bottom Int + centerX/centerY/width/height + `Box.of()`），不用 `android.graphics.Rect`：单测是纯 JVM（无 Robolectric），`LayoutReadingOrderTest` 9 个用例全绿。
+- 实测（模拟器 API35）：合成双栏页 1240×1753（通栏标题 + 左 3 题 + 右 3 题，中缝 560..660）日志 `analyzed=true cols=2 cuts=[549]`，重排后左栏三题连排、右栏三题连排、标题在最前 —— 顺序正确。
 
 ## 本地文件存储规范（**硬要求**）
 
