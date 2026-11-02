@@ -198,11 +198,25 @@ object LayoutAnalyzer {
         return listOf(cut)
     }
 
-    /** 某个点是否落在页眉页脚区域里（留 2px 容差） */
+    /**
+     * 块是否属于页眉页脚。
+     *
+     * 判据不能是「被 noise 框完全包含」：PP-DocLayout-S 给的框比 OCR 的紧贴框小一圈，
+     * 实测「绪论」OCR 框 [1439,81]-[1499,116] 而版面框 [1439,84]-[1492,109]，
+     * 右/下各差 7px，严格包含一律不成立 —— 于是页眉页码从来没被滤掉过，
+     * 混在正文里被当成题干或上题续行（v1.0.9 的「绪论」出现在文末就是这个原因）。
+     *
+     * 改为：中心点落在 noise 框内，且 OCR 框被覆盖超过一半。
+     * 用覆盖率兜住「恰好压在页眉区域上的长正文行」，不会误删题干。
+     */
     fun isNoise(box: Box, layout: PageLayout): Boolean =
         layout.noiseBoxes.any { n ->
-            box.left >= n.left - 2 && box.right <= n.right + 2 &&
-                box.top >= n.top - 2 && box.bottom <= n.bottom + 2
+            if (!n.contains(box.centerX, box.centerY)) return@any false
+            val iw = (minOf(box.right, n.right) - maxOf(box.left, n.left)).coerceAtLeast(0)
+            val ih = (minOf(box.bottom, n.bottom) - maxOf(box.top, n.top)).coerceAtLeast(0)
+            val inter = iw.toLong() * ih
+            val area = box.width.toLong() * box.height
+            area > 0 && inter.toFloat() / area >= 0.5f
         }
 
     /** 块是否落在某个表格区域内（按中心点判定） */

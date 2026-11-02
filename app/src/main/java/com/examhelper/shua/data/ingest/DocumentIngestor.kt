@@ -76,8 +76,10 @@ class DocumentIngestor(
     private fun readTextUtf8(uri: Uri): String {
         val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
             ?: throw IllegalArgumentException("无法读取文件")
-        val body = String(bytes, Charsets.UTF_8)
-        return if (body.startsWith("\uFEFF")) body.substring(1) else body
+        // 不能直接 String(bytes, UTF_8)：Windows 上的 .txt/.md 多为 GBK，
+        // 按 UTF-8 硬解会得到成片 U+FFFD，表现为「文字完全错乱」的乱码。
+        // TextDecoder 先看 BOM，再严格试 UTF-8，最后回退 GB18030，并顺带剥掉 BOM。
+        return TextDecoder.decode(bytes)
     }
 
     private fun queryDisplayName(uri: Uri): String? = runCatching {
@@ -152,10 +154,13 @@ class DocumentIngestor(
                     stripper.endPage = i
                     val pageText = runCatching { stripper.getText(doc) }.getOrDefault("").trim()
                     result.appendLine("[[PG:$i]]")
-                    if (pageText.length >= 20) {
+                    // 两个条件都要过：长度够（不是几乎空白的扫描页），且不是乱码。
+                    // 嵌入式字体缺 ToUnicode CMap 时 PDFBox 会抽出成片 U+FFFD 或私有区字符，
+                    // 长度能过阈值但内容全是垃圾——这类页必须走 OCR，否则垃圾会直接进题库。
+                    if (pageText.length >= 20 && !TextDecoder.looksGarbled(pageText)) {
                         result.appendLine(pageText)
                     } else {
-                        // 文字过少 → 判定为扫描页，走 OCR
+                        // 文字过少或乱码 → 判定为扫描页，走 OCR
                         result.appendLine(ocrPdfPage(file, i, onProgress, i, total))
                     }
                 }

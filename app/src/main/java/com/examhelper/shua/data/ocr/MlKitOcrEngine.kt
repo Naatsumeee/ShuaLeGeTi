@@ -87,28 +87,25 @@ class MlKitOcrEngine : OcrProvider {
 
             if (pageWidth <= 0) return kept.joinToString("\n") { it.text }
 
-            if (layout.analyzed && layout.columnCuts.isNotEmpty()) {
+            // 只要版面分析跑通了，就必须完全听它的——包括「它就是单栏」这个结论。
+            // 曾经的写法是 `analyzed && columnCuts.isNotEmpty()` 才走版面分支，
+            // 于是单栏页（cuts 为空）掉进了下面的旧启发式，而旧启发式在真实单栏试卷上
+            // 会把「题干+三列并排选项」误判成左右双栏（实测 62 块里 left=34/right=22），
+            // 结果整页选项被劈成两半、后半页的选项全被甩到文末——v1.0.9 的乱码事故。
+            // 单栏时 orderedByLayout 的 byCol 只有一个桶，等价于「全部按行排序」，正是要的结果。
+            if (layout.analyzed) {
                 return orderedByLayout(kept, layout)
             }
 
-            val mid = pageWidth / 2.0
-            val left = kept.filter { it.box != null && it.box!!.right < mid * 1.1 }
-            val right = kept.filter { it.box != null && it.box!!.left > mid * 0.9 }
-            val spanning = kept.filter {
-                it.box == null || (it.box!!.right >= mid * 1.1 && it.box!!.left <= mid * 0.9)
+            // 没有版面模型时（ML Kit 引擎）不能退回「块在页宽哪一侧」的老启发式——
+            // 它同样会在单栏试卷上把三列并排的选项劈成左右两半（与 v1.0.9 事故同因）。
+            // detectGutters 是纯几何计算（x 轴垂直投影找空白走廊），不依赖模型，
+            // 这里直接用它算栏缝；找不到缝就按行排，正好是单栏该有的结果。
+            val gutter = LayoutAnalyzer.detectGutters(kept.mapNotNull { it.box }, pageWidth)
+            if (gutter.isNotEmpty()) {
+                return orderedByLayout(kept, layout.copy(columnCuts = gutter))
             }
-
-            val twoColumn = left.size >= 2 && right.size >= 2 &&
-                left.size + right.size >= kept.size * 7 / 10
-
-            return if (twoColumn) {
-                val header = sortByLines(spanning).joinToString("\n") { it.text }
-                val leftText = sortByLines(left).joinToString("\n") { it.text }
-                val rightText = sortByLines(right).joinToString("\n") { it.text }
-                listOf(header, leftText, rightText).filter { it.isNotBlank() }.joinToString("\n")
-            } else {
-                sortByLines(kept).joinToString("\n") { it.text }
-            }
+            return sortByLines(kept).joinToString("\n") { it.text }
         }
 
         /**

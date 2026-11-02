@@ -152,6 +152,25 @@ class LayoutReadingOrderTest {
         assertFalse(LayoutAnalyzer.isNoise(Box.of(10, 100, 800, 140), layout))
     }
 
+    /**
+     * 回归：页面模型的框比 OCR 框小一圈时，页眉仍必须被滤掉。
+     *
+     * 真实数据（`.shots/real_p25.png`）：页眉「绪论」OCR 框 [1439,81]-[1499,116]，
+     * PP-DocLayout-S 给的 number 框 [1439,84]-[1492,109]——右边界差 7、下边界差 7。
+     * 旧的「严格包含 + 2px 容差」永远不成立，页眉页码从来没被滤掉过。
+     */
+    @Test
+    fun noiseDetectionWorksWhenModelBoxIsTighterThanOcrBox() {
+        val layout = PageLayout(
+            emptyList(), emptyList(), emptyList(), emptyList(),
+            listOf(Box.of(1439, 84, 1492, 109)), true
+        )
+        // OCR 框比版面框大一圈，但中心落在内、覆盖率高 → 仍然必须判为噪声
+        assertTrue(LayoutAnalyzer.isNoise(Box.of(1439, 81, 1499, 116), layout))
+        // 页眉下方的正常正文行不能被误删
+        assertFalse(LayoutAnalyzer.isNoise(Box.of(224, 235, 489, 267), layout))
+    }
+
     @Test
     fun detectGuttersFindsGutterFromOcrLines() {
         // 真实双栏：左栏 x 40..410，右栏 x 470..860，页宽 900 -> 缝在 440 上下
@@ -223,5 +242,50 @@ class LayoutReadingOrderTest {
     @Test
     fun emptyBlocksProduceEmptyText() {
         assertEquals("", MlKitOcrEngine.rebuildReadingOrder(emptyList(), 900, PageLayout.NONE))
+    }
+
+    /**
+     * v1.0.9 乱码事故的回归测试。
+     *
+     * 真实单栏试卷（题号 + 三列并排的 A~E 选项）在旧启发式下会被判成双栏：
+     * down 以页宽一半为界，左半的选项算 left、右半的算 right，只要两边各 ≥2 块
+     * 且加起来占 70% 就成立。于是整页被劈成「左边所有块 / 右边所有块」两段，
+     * 后半页的选项全被甩到文末——用户看到的正是这个。
+     *
+     * 版面分析已经明确给出「单栏」（analyzed=true, cuts 为空）时，必须按行排，
+     * 绝不能退回启发式。
+     */
+    @Test
+    fun analyzedSingleColumnNeverFallsIntoLegacyTwoColumnHeuristic() {
+        val pageWidth = 900
+        val single = PageLayout(
+            regions = emptyList(),
+            columnCuts = emptyList(),
+            tableBoxes = emptyList(),
+            formulaBoxes = emptyList(),
+            noiseBoxes = emptyList(),
+            analyzed = true
+        )
+        // 三列并排选项：A 在左三分之一、B/C 在右半区，正是被判成「双栏」的形状
+        // （页宽 900 时旧启发式的边界是 mid*0.9=405 与 mid*1.1=495：
+        //  A 右边界 260 < 495 算左栏；B/C 左边界 415/700 > 405 算右栏）
+        val blocks = listOf(
+            block("11. 题干第一行", 60, 100, 840, 140),
+            block("A. 甲", 100, 150, 260, 190),
+            block("B. 乙", 415, 150, 560, 190),
+            block("C. 丙", 700, 150, 830, 190),
+            block("D. 丁", 100, 200, 260, 240),
+            block("E. 戊", 415, 200, 560, 240),
+            block("12. 题干第二行", 60, 250, 840, 290)
+        )
+        val text = MlKitOcrEngine.rebuildReadingOrder(blocks, pageWidth, single)
+        // 关键断言：末尾不能出现被甩出去的后半段选项，顺序必须是逐行读下来
+        assertEquals(
+            listOf(
+                "11. 题干第一行", "A. 甲", "B. 乙", "C. 丙",
+                "D. 丁", "E. 戊", "12. 题干第二行"
+            ).joinToString("\n"),
+            text
+        )
     }
 }

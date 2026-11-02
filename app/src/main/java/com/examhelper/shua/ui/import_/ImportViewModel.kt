@@ -267,8 +267,11 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
     fun importBankFile(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                val text = getApplication<Application>().contentResolver.openInputStream(uri)
-                    ?.bufferedReader()?.readText() ?: error("无法读取文件")
+                val bytes = getApplication<Application>().contentResolver.openInputStream(uri)
+                    ?.use { it.readBytes() } ?: error("无法读取文件")
+                // 统一走 TextDecoder：带 BOM 的 JSON 会让 decodeFromString 直接抛
+                // 「Expected start of the object '{'」，而 GBK 存的中文题库会变乱码。
+                val text = com.examhelper.shua.data.ingest.TextDecoder.decode(bytes)
                 try {
                     com.examhelper.shua.data.model.JsonCodec.json
                         .decodeFromString<com.examhelper.shua.data.model.ShuaBankFile>(text)
