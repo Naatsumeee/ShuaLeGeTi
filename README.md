@@ -110,6 +110,17 @@ cd ShuaLeGeTi
 ./gradlew testDebugUnitTest      # 单元测试
 ```
 
+### 原生依赖准备（克隆后必做）
+
+仓库不入库体积庞大的第三方原生依赖，构建 `rapidocr-src/OcrLibrary` 前需手动放置两份：
+
+| 目录 | 来源 | 说明 |
+|---|---|---|
+| `rapidocr-src/OcrLibrary/src/sdk/` | [opencv-mobile 3.4.15](https://github.com/nolange/opencv-mobile/releases) | 解压后保证 `src/sdk/native/jni/OpenCVConfig.cmake` 存在，约 43MB |
+| `rapidocr-src/OcrLibrary/src/main/onnxruntime-shared/` | [onnxruntime-android 1.20.0](https://github.com/microsoft/onnxruntime/releases) | 头文件 + `OnnxRuntimeConfig.cmake` 包装层，约 1.6MB |
+
+两处缺任一项，CMake 会直接 `FATAL_ERROR: opencv Not Found!`，构建无法完成。
+
 架构决策、环境细节、已知问题与路线图见 [AGENTS.md](AGENTS.md)。
 
 ## 🗺️ 路线图
