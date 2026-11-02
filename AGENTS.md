@@ -72,7 +72,7 @@ RapidOCR 识别一页分两步：**先版面分析，再识别文字**。模型�
 - `columnOf(box)` / `columnAt(x)` **按左边界判栏**（`columnAt(box.left)`）。早期用右边界，跨栏标题的右边界落在第二栏会被误判成右栏内容。
 - 版面模型仍然有用：页眉页脚（`header/footer/header_image/footer_image/number`）、表格、公式的定位靠它。**页眉页脚只在页面上下 12% 内才算数**——模型常把正文里的「一、名词解释」误判成 header，不加这条会删题干。
 - `PageLayout.NONE` 是可选降级：assets 缺模型或 native 加载失败时 `layoutEngineAvailable = false`，自动退回旧的双栏启发式（块在页宽一半哪一侧），不影响出题。
-- **坐标全用自研 `Box`**（`data/ocr/Box.kt`，left/top/right/bottom Int + centerX/centerY/width/height + `Box.of()`），不用 `android.graphics.Rect`：单测是纯 JVM（无 Robolectric），`LayoutReadingOrderTest` 9 个用例全绿。
+- **坐标全用自研 `Box`**（`data/ocr/Box.kt`，left/top/right/bottom Int + centerX/centerY/width/height + `Box.of()`），不用 `android.graphics.Rect`：单测是纯 JVM（无 Robolectric），`LayoutReadingOrderTest` 14 个用例全绿。
 - 实测（模拟器 API35）：合成双栏页 1240×1753（通栏标题 + 左 3 题 + 右 3 题，中缝 560..660）日志 `analyzed=true cols=2 cuts=[549]`，重排后左栏三题连排、右栏三题连排、标题在最前 —— 顺序正确。
 
 ## 本地文件存储规范（**硬要求**）
