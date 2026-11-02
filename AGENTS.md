@@ -100,6 +100,7 @@ RapidOCR 识别一页分两步：**先版面分析，再识别文字**。模型�
 - APK 体积：debug 全 ABI ~190MB；v1.0.0 起启用 **ABI splits**（arm64-v8a / armeabi-v7a / x86_64），release 用 debug 签名（未配置正式签名）
 - **APK 一律不入库**（v1.0.4 起）：`/app-*.apk` 已被 `.gitignore` 忽略，分发只走 GitHub Releases；但 `启动模拟器.bat` 仍读根目录 APK，所以本地构建后要手动 `cp app/build/outputs/apk/debug/app-<abi>-debug.apk .`
 - 样例题库在 `QuestionBankExample/`（gitignore，版权资料）；`app-debug*.apk` 也 gitignore
+- **仓库体积**：v1.0.9 时代仓库已有 167MB（GitHub 上），其中约 290MB 历史 blob 是早期误跟踪的 APK（x86_64/arm64/v7a 三包）与 `app/libs/OcrLibrary-1.3.0-release.aar`。这些已从工作区移除并写入 `.gitignore`，但**仍在历史里**——若要真正瘦身需 `git filter-repo` 重写历史 + 强推（会改变所有 commit hash，尚未执行）。当前入库大文件只有内置模型与预编译 onnxruntime.so（合计 74.9MB，构建必需，不可删）
 
 ## 常用命令
 
