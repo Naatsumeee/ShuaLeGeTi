@@ -14,7 +14,8 @@
 - **多源导入**：docx / 文字型 PDF / 扫描型 PDF / 拍照 / 粘贴文本 / **Markdown 题库** / 标准题库 JSON
 - **让 AI 帮你整理题库**：复制内置格式化提示词给任意 AI，让它直接产出可一键导入的 `.json`
 - **双 OCR 引擎**（均完全离线）：ML Kit 中文（轻量快速）+ RapidOCR **PP-OCRv5**（高精度，符号与密集小字更准），导入时可任选
-- **双栏重排**：自动识别左右双栏扫描试卷的阅读顺序
+- **先看版面再认字**：PP-DocLayout-S 按标题 / 正文 / 表格 / 公式分区，页眉页脚与页码自动跳过
+- **双栏重排**：由文字行块的垂直投影算出真实中缝，左右双栏扫描试卷按栏读完，不会整段串行
 - **AI 结构化解析**：题目、选项、答案、章节、页码、题型全部分类；支持医学 **A1/A2/A3/B 型题**分组（共用题干、共用选项自动聚合）；章末集中答案表按题号回填；OCR 错字按"只修不改"原则纠正
 - **后台流水线**：WorkManager 前台服务运行，切应用 / 锁屏不中断；分块并行、断点续传，中断后只补失败段不重复计费
 
@@ -82,17 +83,21 @@ Kotlin · Jetpack Compose (Material 3) · Room · DataStore · WorkManager · Ok
 app/src/main/java/com/examhelper/shua/
 ├── data/
 │   ├── db/          # Room：实体、DAO、迁移（v1→v7）
-│   ├── ocr/         # 双 OCR 引擎 + 双栏阅读顺序重排
-│   ├── ingest/      # docx/PDF/图片统一提取（页码标记贯穿）
-│   ├── parse/       # AI 结构化解析 / 离线正则 / 选项规范化
-│   ├── generate/    # 批量答案生成、三省六部聚合、后台 Worker
+│   ├── ocr/         # 双 OCR 引擎 + 版面分析 + 双栏阅读顺序重排
+│   ├── ingest/      # docx/PDF/图片/Markdown 统一提取（页码标记贯穿）
+│   ├── parse/       # AI 结构化解析（分块防断裂）/ 离线正则 / 选项规范化
+│   ├── generate/    # 批量答案生成、三省六部聚合、峰谷计价、后台 Worker
 │   ├── importjob/   # 导入流水线 Worker（断点续传）
-│   ├── llm/         # OpenAI 兼容客户端、集中式系统提示词
+│   ├── llm/         # OpenAI 兼容客户端（含 SSE 流式）、集中式系统提示词
 │   ├── repo/        # BankRepository / StudyRepository（判分逻辑）
+│   ├── storage/     # 本地文件存储唯一入口（缓存分区与清理）
 │   └── settings/    # DataStore 设置
-├── ui/              # Compose 页面（bank/study/exam/editor/...）
-└── theme/           # 纸感阅读风主题（editorial-reader 设计语言）
+├── ui/              # Compose 页面
+│   ├── bank/ study/ exam/ editor/ generate/ import_/ search/
+│   ├── stats/ wrongbook/ settings/ sound/
+│   └── theme/       # 暖纸主题、液态玻璃组件、自研 LaTeX 与 Markdown 渲染
 rapidocr-src/OcrLibrary/  # 内置的 RapidOCR 原生模块（NDK r27, 16KB 对齐）
+app/src/main/assets/      # 内置 ONNX 模型（PP-OCRv5 / PP-DocLayout-S）
 AGENTS.md           # 项目完整记忆（供任何模型/Agent 接手开发）
 ```
 
