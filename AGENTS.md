@@ -116,7 +116,18 @@ GH_TOKEN=$TOKEN gh release list                    # GitHub API 操作
 
 `credential.helper=helper-selector`（指向 GCM 2.9.1）在后台/无交互 shell 里会**永久挂起**：`git push` 停在 `Pushing to https://github.com/...` 不动，`git credential fill` 也一起卡死。`git ls-remote` 却很快——因为本仓库公开、读不需要认证，极易误判成网络问题。
 
-已验证的绕过办法（注意别把 token 写进日志）：
+已验证的绕过办法（**首选**，token 不落盘、不弹窗）：
+
+```bash
+TOKEN=$(printf "protocol=https\nhost=github.com\n\n" | git credential fill 2>/dev/null | grep '^password=' | cut -d= -f2-)
+GIT_TERMINAL_PROMPT=0 git -c credential.helper= \
+  -c http.extraheader="AUTHORIZATION: basic $(printf "x-access-token:$TOKEN" | base64 -w0)" \
+  push origin main
+```
+
+`git credential fill` 能取到 token（40 位，user=Naatsumeee），**但只取不推**——把密码塞进 `http.extraheader` 走 Basic 认证即可，绕开 helper 与 askpass 两套交互。
+
+旧办法（也可用，但要多写临时文件）：
 
 ```bash
 printf "protocol=https\nhost=github.com\n\n" | GCM_INTERACTIVE=never git credential-manager get > cred.txt
