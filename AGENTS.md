@@ -100,7 +100,17 @@ RapidOCR 识别一页分两步：**先版面分析，再识别文字**。模型�
 - APK 体积：debug 全 ABI ~190MB；v1.0.0 起启用 **ABI splits**（arm64-v8a / armeabi-v7a / x86_64），release 用 debug 签名（未配置正式签名）
 - **APK 一律不入库**（v1.0.4 起）：`/app-*.apk` 已被 `.gitignore` 忽略，分发只走 GitHub Releases；但 `启动模拟器.bat` 仍读根目录 APK，所以本地构建后要手动 `cp app/build/outputs/apk/debug/app-<abi>-debug.apk .`
 - 样例题库在 `QuestionBankExample/`（gitignore，版权资料）；`app-debug*.apk` 也 gitignore
-- **仓库体积**：v1.0.9 时代仓库已有 167MB（GitHub 上），其中约 290MB 历史 blob 是早期误跟踪的 APK（x86_64/arm64/v7a 三包）与 `app/libs/OcrLibrary-1.3.0-release.aar`。这些已从工作区移除并写入 `.gitignore`，但**仍在历史里**——若要真正瘦身需 `git filter-repo` 重写历史 + 强推（会改变所有 commit hash，尚未执行）。当前入库大文件只有内置模型与预编译 onnxruntime.so（合计 74.9MB，构建必需，不可删）
+- **仓库体积**：v1.0.9 时代仓库已有 167MB（GitHub 上），其中约 290MB 历史 blob 是早期误跟踪的 APK（x86_64/arm64/v7a 三包）与 `app/libs/OcrLibrary-1.3.0-release.aar`。这些已从工作区移除并写入 `.gitignore`，但**仍在历史里**——若要真正瘦身需 `git filter-repo` 重写历史 + 强推（会改变所有 commit hash）。**用户已决定「先不动历史，保持现状」，不要再提重写**。当前入库大文件只有内置模型与预编译 onnxruntime.so（合计 74.9MB，构建必需，不可删）
+
+### 仓库卫生（v1.0.9 整理后）
+
+- `.gitignore` 已在 v1.0.9 后重写成分组版本（版权资料 / 构建产物 / 本地凭据 / Gradle 缓存 / 测试环境 / 编辑器系统），带「单文件 < 50MB，仓库 < 200MB」红线注释。跟踪文件 135 个、76MB，与规则零冲突。
+- **克隆后无法直接构建，必须先补两份被 `.gitignore` 挡住的第三方原生依赖**（`rapidocr-src/OcrLibrary/.gitignore:5` 与 `:7`，历史上从未入库）：
+  - `rapidocr-src/OcrLibrary/src/sdk/` ← opencv-mobile 3.4.15（43MB，含 `native/jni/OpenCVConfig.cmake` 与 `native/staticlibs/{arm64-v8a,armeabi-v7a,x86_64}/*.a`）。`cpp/CMakeLists.txt:14` 用 `set(OpenCV_DIR "${CMAKE_SOURCE_DIR}/../../sdk/native/jni")` + `find_package(OpenCV REQUIRED)`，缺失即 `FATAL_ERROR "opencv Not Found!"`。
+  - `rapidocr-src/OcrLibrary/src/main/onnxruntime-shared/` ← onnxruntime 1.20 头文件（`ORT_API_VERSION 20`）+ 各 ABI 的 `OnnxRuntimeConfig.cmake`（把 `jniLibs/<abi>/libonnxruntime.so` 包成 IMPORTED target），1.6MB。
+  - 这两块**不能删**（构建必需），也**没入库**（体积考虑）。README「原生依赖准备」节已写明来源。
+- 远程遗留分支 `UIStyleUpdate`（`686c539`）已完全合入 main，可安全删除。
+
 
 ## 常用命令
 
