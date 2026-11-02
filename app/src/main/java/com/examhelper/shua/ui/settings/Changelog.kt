@@ -20,9 +20,22 @@ data class NoteItem(val kind: Kind, val text: String) {
 
 val RELEASE_NOTES: List<ReleaseNote> = listOf(
     ReleaseNote(
-        version = "1.0.9",
+        version = "1.0.10",
         date = "2026-11-02",
         current = true,
+        items = listOf(
+            NoteItem(NoteItem.Kind.FIX, "修复题库文本乱码：以前用 Windows 记事本或教务系统导出的 .txt / .md 题库（GBK 编码）导入后，汉字会变成成片的「�」或完全看不懂的字符。现在会先自动识别文件编码再读取，GBK、GB18030、UTF-16 都能正确打开"),
+            NoteItem(NoteItem.Kind.FIX, "修复带 BOM 的文件首行失效：某些编辑器保存的文本开头会多一个看不见的标记，导致第一章标题识别不出来、第一道题丢失。现在会先把这个标记去掉"),
+            NoteItem(NoteItem.Kind.FIX, "修复生僻字与符号乱码：CJK 扩展区生僻字、数学符号、emoji 在 OCR 识别和长文本切分时可能被从中间截断，显示成乱码方块。现在会按完整字符边界切分"),
+            NoteItem(NoteItem.Kind.FIX, "修复扫描件识别后文字顺序错乱：单栏试卷曾被误判成双栏，导致题号和选项被拆到文件两端。现在版面判定为单栏时就按单栏顺序输出，不再套用双栏规则"),
+            NoteItem(NoteItem.Kind.IMPROVE, "页眉页脚过滤真正生效了：以前判据过严，页码和页眉几乎从没被去掉；现在按文字中心位置判断，导入后需要手工删的杂行明显减少"),
+            NoteItem(NoteItem.Kind.FIX, "PDF 文字层若抽出来就是乱码（字体缺少映射表），会自动改用 OCR 识别这一页，而不是把乱码直接存进题库"),
+        )
+    ),
+    ReleaseNote(
+        version = "1.0.9",
+        date = "2026-11-02",
+        current = false,
         items = listOf(
             NoteItem(NoteItem.Kind.NEW, "扫描件与拍照识别改为「先看版面、再认字」：先用版面模型把整页切成标题、正文段落、表格、公式等区域，再逐块识别，标题不会再被当成正文的一部分"),
             NoteItem(NoteItem.Kind.FIX, "修复双栏排版的试卷（医学教材、考卷里最常见的左栏右栏）识别后文字整段串行的问题：现在能找准两栏之间的中缝，左栏从头读到尾再读右栏，题干和选项不会再混在一起"),
