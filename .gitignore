@@ -1,37 +1,65 @@
-# 样例题库（版权资料 + 超过 GitHub 100MB 单文件限制，不入库）
+# ============================================================
+# 刷了个题 (ShuaGeLeTi) — 仓库忽略规则
+# 原则：源码、构建脚本、内置模型、预编译原生库入库；
+#      构建产物 / 测试产物 / 本地环境 / 版权资料一律不入库。
+# ============================================================
+
+# ---------- 版权资料（体积也超 GitHub 单文件限制）----------
 QuestionBankExample/
 
-# 构建产物：APK 一律不入库（走 GitHub Releases 分发）
-# 根目录的 app-<abi>-debug.apk 是本地装机用的，启动模拟器.bat 会优先找它
+# ---------- 构建产物：分发只走 GitHub Releases ----------
+# 根目录的 app-<abi>-debug.apk 供本地装机（启动模拟器.bat 会读它），同样不入库
+*.apk
+*.aab
+*.aar
 app-debug*.apk
 /app-*.apk
+app-*.apk
 
-# 本地临时草稿
-.tmp-*.md
+# ---------- Java / 虚拟机 ----------
+*.class
+*.dex
+*.hprof
+hs_err_pid*
+replay_pid*
 
-# Android / Gradle
+# ---------- 本地环境与凭据（绝不入库）----------
+local.properties
+*.keystore
+*.jks
+.env
+.env.*
+
+# ---------- Gradle / Kotlin / Android 构建缓存 ----------
 .gradle/
 build/
-app/build/
-local.properties
-*.iml
-.idea/
 .kotlin/
 captures/
 .externalNativeBuild/
 .cxx/
+*.iml
+.idea/
+lint/intermediates/
+lint/generated/
+lint/outputs/
+lint/tmp/
 
-# Windows
+# ---------- 测试与本地开发产物（截图、UI dump、临时脚本/草稿）----------
+.shots/
+.dsh-progress/
+__pycache__/
+*.pyc
+*.pyo
+.tmp-*
+*.log
+*.bak
+*.orig
+*.rej
+
+# ---------- 编辑器 / 系统 ----------
+.vscode/
+*.swp
+*~
 Thumbs.db
 Desktop.ini
-
-# macOS
 .DS_Store
-
-# 第三方 OCR 源码克隆（构建用预编译 AAR，不入库）
-
-# 本地视觉抽查截图（临时）
-.shots/
-
-# DSH 进度输出
-.dsh-progress/
