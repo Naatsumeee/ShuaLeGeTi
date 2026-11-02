@@ -412,3 +412,47 @@ std::string jstringTostring(JNIEnv *env, jstring input) {
     std::string ret = str;
     return ret;
 }
+
+jstring newJStringUtf8(JNIEnv *env, const std::string &utf8) {
+    // 标准 UTF-8 → UTF-16（jchar 序列），再交给 NewString。
+    // 这样 4 字节序列（emoji、CJK 扩展区生僻字）会正确变成代理对，
+    // 而 NewStringUTF 只认 modified UTF-8，遇到这些字符会产出乱码。
+    std::vector<jchar> utf16;
+    utf16.reserve(utf8.size());
+
+    const unsigned char *p = (const unsigned char *) utf8.c_str();
+    const unsigned char *end = p + utf8.size();
+    while (p < end) {
+        unsigned int cp;
+        unsigned char c = *p++;
+        if (c < 0x80) {
+            cp = c;
+        } else if ((c & 0xE0) == 0xC0) {
+            if (p >= end) break;
+            cp = ((c & 0x1F) << 6) | (*p++ & 0x3F);
+        } else if ((c & 0xF0) == 0xE0) {
+            if (p + 1 >= end) break;
+            cp = ((c & 0x0F) << 12) | ((p[0] & 0x3F) << 6) | (p[1] & 0x3F);
+            p += 2;
+        } else if ((c & 0xF8) == 0xF0) {
+            if (p + 2 >= end) break;
+            cp = ((c & 0x07) << 18) | ((p[0] & 0x3F) << 12) |
+                 ((p[1] & 0x3F) << 6) | (p[2] & 0x3F);
+            p += 3;
+        } else {
+            continue;  // 非法首字节：跳过，不产出垃圾字符
+        }
+
+        if (cp <= 0xFFFF) {
+            utf16.push_back((jchar) cp);
+        } else if (cp <= 0x10FFFF) {
+            // BMP 以外：拆成代理对（与 Java 内部表示一致）
+            cp -= 0x10000;
+            utf16.push_back((jchar) (0xD800 + (cp >> 10)));
+            utf16.push_back((jchar) (0xDC00 + (cp & 0x3FF)));
+        }
+        // 超出 Unicode 范围的码点直接丢弃
+    }
+
+    return env->NewString(utf16.data(), (jsize) utf16.size());
+}

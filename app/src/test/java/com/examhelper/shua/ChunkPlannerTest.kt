@@ -275,4 +275,29 @@ class ChunkPlannerTest {
         assertEquals("A", out[0].answer)
         assertEquals("解析内容", out[0].analysis)
     }
+
+    @Test
+    fun `超长单行硬切时不切断代理对`() {
+        // 构造一行远超 hardCap（= size * 3 = 18000）的无换行文本。
+        // 关键是让 emoji（占两个 Char）均匀分布在各个切点附近，
+        // 这样 6000 字符的固定步长必然有落点踩在代理对中间。
+        val emoji = "\uD83D\uDE00"  // 😀
+        val unit = "测试内容".repeat(3) + emoji   // 13 个 Char，其中 emoji 占 2
+        val line = "1. " + unit.repeat(1500)
+        assertTrue("行必须超过 hardCap", line.length > 18000)
+
+        val chunks = ChunkPlanner.plan(line, 6000)
+        assertTrue("应当切出多块", chunks.size > 1)
+
+        chunks.forEachIndexed { i, c ->
+            val t = c.text
+            assertTrue("第 $i 块以孤立低代理开头", t.isEmpty() || !t[0].isLowSurrogate())
+            assertTrue("第 $i 块以孤立高代理结尾", t.isEmpty() || !t[t.length - 1].isHighSurrogate())
+        }
+
+        // 拼回去必须与原串完全一致：既没丢字符，也没产生替换符
+        val rejoined = chunks.joinToString("") { it.text }
+        assertEquals(line, rejoined)
+        assertTrue("不应出现替换字符", !rejoined.contains('\uFFFD'))
+    }
 }

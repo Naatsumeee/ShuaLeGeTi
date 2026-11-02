@@ -103,7 +103,15 @@ object ChunkPlanner {
                 val line = lines[start]
                 var from = 0
                 while (from < line.length) {
-                    val to = minOf(from + size, line.length)
+                    var to = minOf(from + size, line.length)
+                    // 切点不能落在代理对中间：BMP 以外的字符（生僻字、emoji）在 Kotlin
+                    // 里占两个 Char，硬切会把一个字符劈成两半，两段都拿到孤立代理，
+                    // 发给模型或落盘后显示成乱码。往后退一位即可，代价是最多丢一个字符的边界。
+                    if (to < line.length && to > from + 1 &&
+                        line[to - 1].isHighSurrogate() && line[to].isLowSurrogate()
+                    ) {
+                        to--
+                    }
                     chunks += Chunk(index++, line.substring(from, to), start, start)
                     from = to
                 }

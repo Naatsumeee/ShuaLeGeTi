@@ -16,7 +16,7 @@ OcrResultUtils::OcrResultUtils(JNIEnv *env, OcrResult &ocrResult, jobject boxImg
     jobject textBlocks = getTextBlocks(ocrResult.textBlocks);
     jdouble dbNetTime = (jdouble) ocrResult.dbNetTime;
     jdouble detectTime = (jdouble) ocrResult.detectTime;
-    jstring jStrRest = jniEnv->NewStringUTF(ocrResult.strRes.c_str());
+    jstring jStrRest = newJStringUtf8(jniEnv, ocrResult.strRes);
 
     jOcrResult = env->NewObject(jOcrResultClass, jOcrResultConstructor, dbNetTime,
                                 textBlocks, boxImg, detectTime, jStrRest);
@@ -73,7 +73,7 @@ jobject OcrResultUtils::getTextBlock(TextBlock &textBlock) {
     jfloat jBoxScore = (jfloat) textBlock.boxScore;
     jfloat jAngleScore = (jfloat) textBlock.angleScore;
     jdouble jAngleTime = (jdouble) textBlock.angleTime;
-    jstring jText = jniEnv->NewStringUTF(textBlock.text.c_str());
+    jstring jText = newJStringUtf8(jniEnv, textBlock.text);
     jobject jCharScores = newJScoreArray(textBlock.charScores);
     jdouble jCrnnTime = (jdouble) textBlock.crnnTime;
     jdouble jBlockTime = (jdouble) textBlock.blockTime;

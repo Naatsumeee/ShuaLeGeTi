@@ -96,4 +96,17 @@ void *getModelDataFromAssets(AAssetManager *mgr, const char *modelName, int &siz
 
 std::string jstringTostring(JNIEnv *env, jstring input);
 
+/**
+ * std::string(UTF-8) -> jstring，安全处理 4 字节 UTF-8。
+ *
+ * 为什么不能用 NewStringUTF：JNI 规范里它只接受 **modified UTF-8**（CESU-8），
+ * BMP 以外的字符必须写成两个 3 字节代理对。而 PaddleOCR 的字典里有 900 多个
+ * 4 字节 UTF-8 序列（CJK 扩展 B/C/D 生僻字、数学字母、emoji），直接丢给
+ * NewStringUTF 会被 ART 判为非法序列，该字符变成乱码。常见汉字是三字节不受影响，
+ * 所以这个 bug 只在生僻字/符号上冒头，很隐蔽。
+ *
+ * 做法：自己把 UTF-8 解成 UTF-16，再调接受 UTF-16 的 NewString。
+ */
+jstring newJStringUtf8(JNIEnv *env, const std::string &utf8);
+
 #endif //__OCR_UTILS_H__
