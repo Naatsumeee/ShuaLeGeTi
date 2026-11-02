@@ -20,9 +20,20 @@ data class NoteItem(val kind: Kind, val text: String) {
 
 val RELEASE_NOTES: List<ReleaseNote> = listOf(
     ReleaseNote(
-        version = "1.0.8",
+        version = "1.0.9",
         date = "2026-11-02",
         current = true,
+        items = listOf(
+            NoteItem(NoteItem.Kind.NEW, "扫描件与拍照识别改为「先看版面、再认字」：先用版面模型把整页切成标题、正文段落、表格、公式等区域，再逐块识别，标题不会再被当成正文的一部分"),
+            NoteItem(NoteItem.Kind.FIX, "修复双栏排版的试卷（医学教材、考卷里最常见的左栏右栏）识别后文字整段串行的问题：现在能找准两栏之间的中缝，左栏从头读到尾再读右栏，题干和选项不会再混在一起"),
+            NoteItem(NoteItem.Kind.IMPROVE, "页眉、页脚、页码不再混进题干——识别时会先认出这些区域并跳过，导入后要手工删的多余行少了一大截"),
+            NoteItem(NoteItem.Kind.IMPROVE, "版面模型缺失或机型不支持时自动退回原来的识别方式，不影响正常出题"),
+        )
+    ),
+    ReleaseNote(
+        version = "1.0.8",
+        date = "2026-11-02",
+        current = false,
         items = listOf(
             NoteItem(NoteItem.Kind.NEW, "本轮做完全新完成页：文案改为「这轮题目已经完成啦」，主按钮变成醒目的「返回」；答错的话多一个「刷本轮错题（N）」入口，一键只刷本轮做错的那几道"),
             NoteItem(NoteItem.Kind.NEW, "深度解题与「问 AI」改为逐字流式输出：答案和推理过程边生成边显示，不再让用户对着转圈干等"),
