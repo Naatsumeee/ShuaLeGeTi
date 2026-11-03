@@ -1,6 +1,6 @@
 # AGENTS.md — 刷了个题 (ShuaGeLeTi) 项目记忆
 
-> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：v1.0.11（2026-11-03）。
+> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：v1.0.12（2026-11-04）。
 
 ## 项目一句话
 
@@ -159,6 +159,7 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 → **v1.0.9**（RapidOCR 先跑版面分析 PP-DocLayout-S 再识别：双栏中缝由 OCR 行块投影算出，阅读顺序修复；页眉页脚/页码自动跳过）。
 → **v1.0.10**（编码乱码专项：新增 `data/ingest/TextDecoder.kt` 按 BOM/UTF-8/UTF-16/GB18030 顺序探测解码；`NewStringUTF` 换自研 `newJStringUtf8` 修 4 字节 UTF-8；ChunkPlanner 硬切不切代理对；单栏不再套双栏启发式）。
 → **v1.0.11**（章节与答案识别：`chapterHeadingRegex` 保住「第X章」+ `pendingChapterPrefix` 拼接拆行章名 + `fillMissingChapterNumbers` 补齐序号；`sectionRegex` 命中题型标签时只在无章标题文件里当分组；答案表新增「每行一对」与「一行多对」两种裸格式并按章分表；成本修复 providerModel 未回写。首页标题栏加「导入」「问 AI」、空态居中大按钮、长按菜单（置顶/改名/归档/删除）+ 归档折叠区；AI 解析流式预览；默认引擎改 RapidOCR；DB v8 加 `import_jobs.streamTail` / `banks.pinned` / `banks.archived`）。
+→ **v1.0.12**（答案区重做：新增 `data/parse/AnswerSheet.kt` 把「三、参考答案」整块从题目流里剥离并按章回填，支持整行一对/拆两行/一行多对/整段正文四种排版；`ParsedQuestion.sourceNumber` 记住题号；`parseChineseNumber` 认单字「十」；同章重复标题不再拼成「第十章 第十章」；「学习目标」小节跳过；名词解释按内容匹配、B1 型题取 `sharedOptions`、选项丢失时按题号兜底但排除问句。真实 47 页扫描件答案覆盖率 0% → 95%）。
 
 ## 首页题库列表（`ui/bank/BankListScreen.kt` + `BankViewModels.kt`，v1.0.11）
 
@@ -174,15 +175,25 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - 关键节流参数：`STREAM_TAIL_CHARS = 1200`（只留尾巴，DB 写入量可控）、`STREAM_FLUSH_MS = 350L`（写库频率）。`tailScope` 是独立 `CoroutineScope(Dispatchers.IO + SupervisorJob())`，**DONE 时必须 `tailScope.cancel()` 并把 `streamTail` 置 null**，否则界面残留半截输出。
 - `parseChunkWithRetry` 只在**首次尝试**（`wait == 0L`）传 `onDelta`：重试会把同样内容再吐一遍，预览会重复。
 
-## 章节识别与答案表（`data/parse/`，v1.0.11）
+## 章节识别与答案表（`data/parse/`，v1.0.12 重做）
 
-- **`chapterHeadingRegex`**（`^\s*第\s*([一二三四五六七八九十百零\d]{1,4})\s*([章节篇卷])\s*[、.．:：]?\s*(.*)$`）必须排在 `sectionRegex` 之前处理；命中时 `flush()` + `headingStack.clear()` + `hasChapterHeading = true`。
-- **`hasChapterHeading` 要全文预扫描**（`text.lineSequence().any { chapterHeadingRegex.containsMatchIn(it) }`）：题型标签可能出现在第一个章标题之前。为 true 时题型标签（「（一）名词解释」）**不许**顶掉章节名；为 false 时只能退而拿它当分组（否则整库无章节）。
-- **`pendingChapterPrefix`** 处理 OCR 把「第六章」与章名拆成两行：章号先存，下一行若不像题目/选项/答案就拼成 `"$prefix $line"`。注意 `continue` 不能写在 `?.let{}` 里（Kotlin 实验特性），要先用局部 val 判空。
-- **`fillMissingChapterNumbers`**：按出现顺序收集章节，`expected` 起始为 null——**第一个带章号的章节之前，无号章节原样保留**（早期写 `expected = known.first()` 会把它们误编号）。
-- **答案表两种裸格式**（用户报的「章后集中答案大范围识别不出」）：① `bareAnswerLineRe` 整行一对 `1.A` / `2. D`；② `bareAnswerPairRe` 一行多对 `1.E"2.B3.D`，校验方式是「除答案对外只剩分隔标点」。带「答案：」前缀的老格式仍保留。
-- **必须按章节分表**：题号在每章内重新从 1 开始，全书合并成一张表会让第 7 章的 `1.A` 填到第 6 章。`applyAnswerTable` 用 `chapterOf` 先查本章表再查合并表。
-- 回归护栏：`app/src/test/java/com/examhelper/shua/AnswerTableTest.kt`（5 项）+ `ChunkPlannerTest` 的 3 个答案回填用例。改这块务必跑全量单测（132 项）。
+> v1.0.11 那版答案表修复**没打中根因**：`TextQuestionParser` 根本没有「答案区」概念，整块「三、参考答案」被当题目解析（实测整本 684 题、答案 0 条）。v1.0.12 用 `AnswerSheet` 重做，答案覆盖率 0% → 95%。
+
+- **`app/src/main/java/com/examhelper/shua/data/parse/AnswerSheet.kt`**（新建，object）：`isRegionStart(line)` 认 `三、参考答案` / `答案与解析` / `答案汇总`；`splitRegion(text): Pair<题目区, 答案区?>` 取**最后一个**起点切；`parse(span): List<Pair<Int,String>>` 返回**列表不是 Map**（同章名词解释与选择题各自从 1 编号，Map 会覆盖）。
+- `parse` 支持四种排版，顺序不能乱：① 整行一对 `1. D`（`linePairRe` 允许行首 2 个非字母数字脏字符，实测 `¥19.B`、`*20.C`）；② 只有题号 `18.` 则与下一行单个答案拼接（`numberOnlyRe` 允许题号后 3 个非字母脏字符，实测 `27.1`）；③ 一行多对 `1.E"2.B3.D`（`fillerRe` 含 `\d`，容忍 `31.E32.C3` 的尾部残留）；④ 主观题 `1．纯质性（…):是指…` 整段正文。
+- **`parse()` 主流程**（`TextQuestionParser.kt`）：`splitIntoChapterSegments` 按章切段 → 逐段 `AnswerSheet.splitRegion`；有答案区则「题目区进题目流 + 答案区进表」；**无起点但同章前一段有起点的，整段都是答案续页**（扫描件每页页眉重复印章名会切断答案区）→ 只收表不进题目流。
+- **`chapterHeadingMultilineRegex` 必须带 `(?m)`**：`splitIntoChapterSegments` 对整篇 `findAll`，缺 `(?m)` 时 `^...$` 一个都匹配不到，切段形同虚设（v1.0.11 的头号 bug）。主循环逐行 find 用的 `chapterHeadingRegex` 不带 `(?m)`，两者并存。
+- **`ParsedQuestion.sourceNumber`**（`Models.kt`，`var`，不写库不序列化）：`questionStartRegex` 的 group 1 是题号、group 2 才是题干，题干里题号已被剥掉，必须单独记下来，否则章末答案表按题号索引全部失败。
+- **`parseChineseNumber` 要认单字「十」**：`digit` 映射里没有 `'十'`，`s == "十"` 必须显式返回 10，否则「第十章」章号取不到 → 同章判重失效、按章回填错位。
+- **同章重复标题只保留第一次**：扫描件页眉重复印章名，`chapterNumber(currentSection) == chapterNumber(prefix)` 时不再拼成「第十章 第十章 多基因病」，只在已有标题残缺（`length <= prefix.length + 1`）时补全。
+- **「学习目标」小节必须跳过**：`objectiveSectionRegex = (学习目标|学习要求|本章要求|教学要求|重点难点|重点掌握)` + `skipObjectiveSection` 标志，否则「1.掌握… 2.熟悉…」占掉题号 1/2/3，章末答案整体错位。
+- **`applyAnswers` 的三条判定**（`TextQuestionParser.kt`）：
+  1. **主观题优先按内容**：`proseWins = proseHit != null && q.options.isEmpty()` 必须放在选择题分支**之前**。实测坑：「（一）名词解释」紧跟上一题型时会误继承 `sharedOptions`（「分子病」挂了 5 个共用选项），被当成选择题按题号 1 取到 `D`，把正文答案覆盖掉。
+  2. **B1 型题**（共用备选答案）自己的 `options` 是空的，选项在 `sharedOptions` 里 → 判定用 `q.options + q.sharedOptions`。
+  3. **选项丢失兜底**：正文池无匹配时按题号从字母池取，但要求 `looksObjective`（`stem.length <= 40`、不含 `？`/`?`、不匹配 `subjectiveHintRegex`）。宁可留空也不给简答题填一个字母。
+- **`stemMatchesAnswer` 不要在原始题干上先删标点**：删了会把「何谓血红蛋白病？可分为几类？」粘成一整串，探针过长永远匹配不上；标点本身是天然断句点，直接在原串上取 `[\u4e00-\u9fa5]{2,}` 的前 3 长片段做探针。
+- 回归护栏：`app/src/test/java/com/examhelper/shua/AnswerSheetTest.kt`（11 项）+ `AnswerTableTest.kt`（5 项）+ `ChunkPlannerTest` 的 3 个回填用例。**全量 143 项**，改这块务必 `--rerun-tasks` 跑全量。
+- 真实素材验证：`.shots/p2_full.txt`（47 页扫描件的 OCR 全文，2580 行）是标准回归输入，用 `TextQuestionParser.parse` 跑后答案覆盖率应 ≥ 90%（当前 95%，332/347）。
 
 ## 待办池（按价值排序）
 
