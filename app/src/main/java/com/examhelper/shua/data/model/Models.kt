@@ -16,6 +16,13 @@ data class ParsedQuestion(
     /** 医学题型子类型 A1/A2/A3/B */
     var subtype: String? = null,
     var stem: String = "",
+    /**
+     * 原文里的题号（`1.` `2、` `（3）`）。
+     *
+     * 只在解析过程中使用：stem 里已经把题号剥掉了，但章末答案表是按题号索引的，
+     * 没有它就无法回填答案。不写库、不序列化。
+     */
+    var sourceNumber: Int? = null,
     /** A3 型共用题干材料 */
     var sharedStem: String? = null,
     /** B 型共用选项组 */

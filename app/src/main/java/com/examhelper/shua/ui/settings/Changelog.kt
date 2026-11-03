@@ -20,9 +20,22 @@ data class NoteItem(val kind: Kind, val text: String) {
 
 val RELEASE_NOTES: List<ReleaseNote> = listOf(
     ReleaseNote(
+        version = "1.0.12",
+        date = "2026-11-04",
+        current = true,
+        items = listOf(
+            NoteItem(NoteItem.Kind.FIX, "彻底修复章末集中答案识别不出：扫描件每章末的「三、参考答案」现在会被单独识别成答案表，不再被当成题目"),
+            NoteItem(NoteItem.Kind.FIX, "答案表支持三种排版：每行一对「1.A」、题号与答案被拆到两行、以及一行挤了多道「1.E 2.B 3.D」"),
+            NoteItem(NoteItem.Kind.FIX, "答案按章节分开对应。同一章里名词解释与选择题各自从 1 编号，不会再互相错位"),
+            NoteItem(NoteItem.Kind.FIX, "名词解释、简答题的答案按内容匹配，不再被当成选择题套上一个字母"),
+            NoteItem(NoteItem.Kind.FIX, "修复「第十章」这类章号识别不出，以及页眉重复导致章节名变成「第十章 第十章 多基因病」"),
+            NoteItem(NoteItem.Kind.IMPROVE, "「一、学习目标」下的「1.掌握… 2.熟悉…」不再被当成题目，章末答案的题号不会因此错位"),
+        )
+    ),
+    ReleaseNote(
         version = "1.0.11",
         date = "2026-11-03",
-        current = true,
+        current = false,
         items = listOf(
             NoteItem(NoteItem.Kind.NEW, "首页标题栏新增「导入」按钮，空题库时页面正中也有一个大按钮，不用再找右下角"),
             NoteItem(NoteItem.Kind.NEW, "首页标题栏新增「问 AI」，与刷题页同一套面板，可以直接问概念、考点和复习方法"),

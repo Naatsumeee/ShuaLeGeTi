@@ -28,6 +28,13 @@ object TextQuestionParser {
     private val sharedOptionsHintRegex = Regex("""共用备选答案|共用选项|备选答案""")
     private val caseStartRegex = Regex("""^(患者|某男|某女|某患|男[，,].{0,3}\d|女[，,].{0,3}\d|病历|病例|一[名位].{0,6}(岁|男|女))""")
     private val pageMarkerRegex = Regex("""^\[\[PG:(\d+)\]\]$""")
+
+    /**
+     * 非题目小节的标题：「学习目标 / 本章要求 / 教学要求 / 重点难点」。
+     *
+     * 这些小节里是「1.掌握… 2.熟悉… 3.了解…」，格式与题目完全一样，必须整节跳过。
+     */
+    private val objectiveSectionRegex = Regex("""(学习目标|学习要求|本章要求|教学要求|重点难点|重点掌握)""")
     /**
      * 「第六章」「第 6 章 线粒体遗传」「第三章 抗菌药物」这类章节标题。
      *
@@ -44,6 +51,225 @@ object TextQuestionParser {
 
     fun parse(text: String): List<ParsedQuestion> {
         val questions = mutableListOf<ParsedQuestion>()
+
+        // 扫描版习题集每章末都有一块「三、参考答案」，里面是「1. D / 2.B」这种
+        // 答案清单。这些行长得像题目（有题号），若直接进主循环会被当成题目，
+        // 结果整本 684 题、答案 0 条。所以先按章切段，把每段的答案区剥离出来，
+        // 只解析题目区，最后再按章回填答案。
+        val chapterSegments = splitIntoChapterSegments(text)
+
+        // 逐段判定「题目区」与「答案区」。
+        //
+        // 两个必须处理的情况（都是实测踩出来的）：
+        // 1. 扫描件每页页眉都重复印章名，同一章被切成好几段（第六章切成 4 段），
+        //    只有一段带答案区 —— 所以答案表必须用 List 累加，不能 toMap() 覆盖。
+        // 2. 答案区可能跨页：起点在前一段，内容延续到下一段（下一页页眉又印章名，
+        //    后一段没有「三、参考答案」起点）。这类续段整段都是答案，不能再当题目。
+        val answerTables: List<Pair<String?, List<Pair<Int, String>>>> = mutableListOf()
+        val questionParts = mutableListOf<String>()
+
+        chapterSegments.forEachIndexed { idx, (chapter, body) ->
+            val (questionPart, answerSpan) = AnswerSheet.splitRegion(body)
+            if (answerSpan != null) {
+                (answerTables as MutableList) += chapter to AnswerSheet.parse(answerSpan)
+                questionParts += questionPart
+                return@forEachIndexed
+            }
+            // 本段没有答案区起点：若同章的前一段有，说明本段整段都是答案的续页
+            val continuingAnswer = chapterSegments.take(idx).reversed()
+                .takeWhile { chapterNumberOf(it.first) == chapterNumberOf(chapter) }
+                .any { AnswerSheet.splitRegion(it.second).second != null }
+            if (continuingAnswer) {
+                (answerTables as MutableList) += chapter to AnswerSheet.parse(body)
+            } else {
+                questionParts += body
+            }
+        }
+
+        val questionOnly = questionParts.joinToString("\n")
+        parseQuestions(questionOnly, questions)
+
+        val withChapters = fillMissingChapterNumbers(questions)
+        applyAnswers(withChapters, answerTables)
+        return withChapters
+    }
+
+    private fun chapterNumberOf(name: String?): Int? = chapterNumber(name.orEmpty())
+
+    /**
+     * 按「第X章」把全文切段，每段含该章题目与其章末答案区。
+     *
+     * 没有章标题的文件整体算一段。首个章标题之前的内容（封面、目录）单独成段。
+     *
+     * 注意必须用 **(?m) 多行模式**：主循环里是逐行 find，所以 chapterHeadingRegex
+     * 没加多行标志；但这里是对整篇文本 findAll，`^`/`$` 不带 (?m) 只会匹配
+     * 整个输入的首尾，结果一个章标题都找不到，切段形同失效。
+     */
+    private val chapterHeadingMultilineRegex = Regex(
+        """(?m)^[ \t]*第\s*([一二三四五六七八九十百零\d]{1,4})\s*([章节篇卷])\s*[、.．:：]?\s*(.*)$"""
+    )
+
+    private fun splitIntoChapterSegments(text: String): List<Pair<String?, String>> {
+        val marks = chapterHeadingMultilineRegex.findAll(text).map { it.range.first }.toList()
+        if (marks.isEmpty()) return listOf(null to text)
+        val out = mutableListOf<Pair<String?, String>>()
+        if (marks.first() > 0) out += null to text.substring(0, marks.first())
+        marks.forEachIndexed { i, start ->
+            val end = if (i + 1 < marks.size) marks[i + 1] else text.length
+            val body = text.substring(start, end)
+            val head = chapterHeadingMultilineRegex.find(body)?.value?.trim()
+            out += head to body
+        }
+        return out
+    }
+
+    /**
+     * 把答案表回填到题目上。
+     *
+     * 题号在每章内重新从 1 开始，所以先按章号精确匹配；匹配不到再退回全书合并表
+     * （单章文件、或章节标题没识别出来的情况）。
+     *
+     * 两条护栏，都是为了不把答案填到错的题上：
+     * 1. **选择题**：答案必须是本题选项字母之一。
+     * 2. **主观题**（名词解释/简答，答案是一大段正文）：只有题干和答案正文对得上
+     *    才采纳。章节开头的「学习目标」条目也会被当题目占掉题号 1/2/3，
+     *    若无条件按题号填，名词解释的正文就会挂到「掌握 mtDNA 的结构…」这种
+     *    目标条目上 —— 实测踩过。
+     */
+    private fun applyAnswers(
+        questions: List<ParsedQuestion>,
+        tables: List<Pair<String?, List<Pair<Int, String>>>>
+    ) {
+        if (tables.all { it.second.isEmpty() }) return
+
+        // 同一章里名词解释和选择题各自从 1 编号，题号会重复，所以答案按「形态」分池：
+        //  · 字母池：`1. D` 这种选择题答案
+        //  · 正文池：`1．纯质性（…):是指…` 这种名词解释/简答题答案
+        // 选择题只在字母池里按题号取，主观题只在正文池里按内容找 —— 两类互不干扰。
+        fun isLetterOnly(s: String): Boolean {
+            val t = s.trim()
+            return t.isNotEmpty() && t.length <= 8 && t.all { it in "ABCDEFGH对错正确误TF√×" }
+        }
+
+        val letterByNo = mutableMapOf<Int, String>()   // 章号 → 池
+        val proseByNo = mutableMapOf<Int, MutableList<String>>()
+        val letterWhole = mutableMapOf<Int, String>()
+        val proseWhole = mutableListOf<String>()
+
+        tables.forEach { (name, rows) ->
+            val n = chapterNumber(name.orEmpty())
+            rows.forEach { (k, v) ->
+                if (isLetterOnly(v)) {
+                    letterWhole.putIfAbsent(k, v)
+                    if (n != null) letterByNo.putIfAbsent(n * 100000 + k, v)
+                } else if (v.trim().length > 8) {
+                    proseWhole += v
+                    if (n != null) proseByNo.getOrPut(n) { mutableListOf() } += v
+                }
+            }
+        }
+
+        questions.forEach { q ->
+            if (!q.answer.isNullOrBlank()) return@forEach
+            val no = chapterNumber(q.chapter.orEmpty())
+            val prosePool = no?.let { proseByNo[it] } ?: proseWhole
+            val proseHit = prosePool.firstOrNull { ans -> stemMatchesAnswer(q.stem, ans) }
+
+            // B1 型题（共用备选答案）自己的 options 是空的，选项在 sharedOptions 里。
+            // 只按 q.options 判断会把它们误归到主观题分支，按内容匹配必然失败。
+            val allOptions = q.options + q.sharedOptions
+
+            // 名词解释的题干就是那个术语，且答案正文必然以它开头 —— 这种必须优先按内容配。
+            // 实测坑：答案区里「（一）名词解释」紧跟在上一个题型后面时，会误继承
+            // 前一题的 sharedOptions（「分子病」挂了 5 个共用选项），于是被当成选择题，
+            // 按题号 1 从字母池取到 D，把名词解释的正文答案覆盖掉了。
+            val proseWins = proseHit != null && q.options.isEmpty()
+            if (proseWins) {
+                q.answer = proseHit
+                return@forEach
+            }
+
+            if (allOptions.size >= 2) {
+                // ---- 选择题：按题号从字母池取 ----
+                val guess = q.sourceNumber?.let { num ->
+                    (no?.let { letterByNo[it * 100000 + num] }) ?: letterWhole[num]
+                } ?: leadingNumber(q.stem)?.let { num ->
+                    (no?.let { letterByNo[it * 100000 + num] }) ?: letterWhole[num]
+                }
+                if (guess.isNullOrBlank()) return@forEach
+                val letters = allOptions.map { it.key.trim().uppercase() }.filter { it.isNotEmpty() }.toSet()
+                val tokens = guess.split(Regex("""[\s,，、/]+""")).filter { it.isNotEmpty() }
+                val ok = tokens.isNotEmpty() && tokens.all { t ->
+                    val u = t.trim().uppercase()
+                    u in letters || u in setOf("对", "错", "正确", "错误", "T", "F")
+                }
+                if (!ok) return@forEach
+                q.answer = guess
+            } else {
+                // ---- 主观题：按内容配，不按题号 ----
+                // 「学习目标」条目虽已被跳过，但名词解释与选择题题号重叠，
+                // 按题号取正文必然错位；题干本身就是术语，直接拿它去正文里找更可靠。
+                if (proseHit != null) {
+                    q.answer = proseHit
+                } else {
+                    // 兜底：正文池里没有匹配，说明它不是名词解释/简答题，而是
+                    // **选项被 OCR 弄丢了的客观题**（实测扫描件里「21．mtDNA含基因数为」
+                    // 后面直接跟下一题，A~E 全丢）。这种情况仍可按题号从字母池取。
+                    //
+                    // 但简答题绝不能吃字母答案：「人类染色体的多态性主要体现在哪些方面？
+                    // 它们与表型效应的关系如何？」正文池没匹配到时会拿到一个字母，
+                    // 填一个错答案比留空更糟。所以只在题干不像问答句时才兜底。
+                    val looksObjective = q.stem.length <= 40 &&
+                        '？' !in q.stem && '?' !in q.stem &&
+                        !subjectiveHintRegex.containsMatchIn(q.stem)
+                    if (looksObjective) {
+                        val fallback = q.sourceNumber?.let { num ->
+                            (no?.let { letterByNo[it * 100000 + num] }) ?: letterWhole[num]
+                        }
+                        if (!fallback.isNullOrBlank() && isLetterOnly(fallback)) q.answer = fallback
+                    }
+                }
+            }
+        }
+    }
+
+    private fun isLetterOnly(s: String): Boolean {
+        val t = s.trim()
+        return t.length <= 8 && t.all { it in "ABCDEFGH对错正确误TF√×" }
+    }
+
+    /** 简答题/论述题的问句特征（选项丢失兜底时用来排除主观题） */
+    private val subjectiveHintRegex =
+        Regex("""(何谓|简述|试述|论述|阐述|举例说明|有哪些|为什么|为何|如何|怎么|意义|特点是什么|关系如何)""")
+
+    /**
+     * 主观题的题干与答案正文是否对得上。
+     *
+     * 判据：题干里长度 ≥2 的汉字片段出现在答案正文里。名词解释的题干就是那个术语
+     * （如「纯质性」），正文必然以它开头；「掌握 mtDNA 的结构和组成…」这类
+     * 学习目标条目则不会命中，从而被排除。
+     */
+    private fun stemMatchesAnswer(stem: String, answer: String): Boolean {
+        // 直接在**原始题干**上取汉字片段：先删标点会把「何谓血红蛋白病？可分为几类？」
+        // 粘成一整串，探针过长永远匹配不上（实测简答题因此全部漏配）。
+        // 标点本身就是天然断句点，保留它反而切得更准。
+        val probes = Regex("""[\u4e00-\u9fa5]{2,}""").findAll(stem)
+            .map { it.value }
+            .sortedByDescending { it.length }
+            .take(3)
+            .toList()
+        if (probes.isEmpty()) return false
+        return probes.any { answer.contains(it) }
+    }
+
+    /** 题干开头的题号（`1.` `2、` `（3）`） */
+    private val leadingNumberRe = Regex("""^\s*[（(]?\s*(\d{1,4})\s*[）)]?\s*[、.．,，:：)）]""")
+
+    private fun leadingNumber(stem: String): Int? =
+        leadingNumberRe.find(stem)?.groupValues?.get(1)?.toIntOrNull()
+
+    /** 真正逐行解析题目的主循环 */
+    private fun parseQuestions(text: String, questions: MutableList<ParsedQuestion>) {
         var current: ParsedQuestion? = null
         var currentSection: String? = null
         // Markdown 标题层级栈：level → 标题。做题时的「章节」取当前标题链，
@@ -61,6 +287,8 @@ object TextQuestionParser {
         // 有 → 题型标签（（一）名词解释）不许顶掉章节名；没有 → 只能拿它当分组。
         // 必须预扫描：题型标签可能出现在第一个章标题之前。
         var hasChapterHeading = text.lineSequence().any { chapterHeadingRegex.containsMatchIn(it) }
+        // 是否正处于「学习目标」这种非题目小节里（见下面 objectiveSectionRegex）
+        var skipObjectiveSection = false
 
         fun flush() {
             current?.let { q ->
@@ -73,6 +301,12 @@ object TextQuestionParser {
         for (rawLine in text.lines()) {
             val line = rawLine.trim()
             if (line.isEmpty()) continue
+
+            // 处于「学习目标」小节内：整段丢弃，直到遇到下一个分组/章节标题
+            if (skipObjectiveSection) {
+                val isNextSection = sectionRegex.matches(line) || chapterHeadingRegex.containsMatchIn(line)
+                if (!isNextSection) continue
+            }
 
             // 页码标记
             val pageMarker = pageMarkerRegex.find(line)
@@ -106,6 +340,7 @@ object TextQuestionParser {
             if (chm != null) {
                 flush()
                 headingStack.clear()
+                skipObjectiveSection = false
                 val no = chm.groupValues[1]
                 val unit = chm.groupValues[2]
                 val title = chm.groupValues[3].trim()
@@ -116,8 +351,18 @@ object TextQuestionParser {
                     pendingChapterPrefix = prefix
                     currentSection = prefix
                 } else {
-                    pendingChapterPrefix = null
-                    currentSection = "$prefix $title"
+                    // 扫描件的每页页眉会重复印章名（「第十章多基因病」），OCR 逐页都会读出来。
+                    // 同一章号再次出现时不能当成新章节，也不能拼成「第十章 第十章 多基因病」——
+                    // 只保留第一次的完整标题，后续重复行直接忽略。
+                    val sameChapter = chapterNumber(currentSection.orEmpty()) == chapterNumber(prefix)
+                    if (!sameChapter || currentSection.isNullOrBlank()) {
+                        pendingChapterPrefix = null
+                        currentSection = "$prefix $title"
+                    } else {
+                        // 同一章重复出现：若已有标题是残缺的（只有章号），用这行的完整标题补全
+                        val existing = currentSection.orEmpty()
+                        if (existing.length <= prefix.length + 1) currentSection = "$prefix $title"
+                    }
                 }
                 appendingTo = 0
                 continue
@@ -136,6 +381,17 @@ object TextQuestionParser {
             }
             if (sectionRegex.matches(line)) {
                 flush()
+                // 「学习目标 / 本章要求 / 教学要求」这一节里是「1.掌握… 2.熟悉…」，
+                // 长得和题目一模一样，但根本不是题 —— 留在结果里既污染题库，
+                // 又会占掉题号 1/2/3 让章末答案错位。整节跳过直到下一个分组标题。
+                val bare = line.trimStart('一', '二', '三', '四', '五', '六', '七', '八', '九', '十', ' ', '、', '.', '（', '）', '(', ')')
+                if (objectiveSectionRegex.containsMatchIn(bare) || objectiveSectionRegex.containsMatchIn(line)) {
+                    skipObjectiveSection = true
+                    currentSection = currentSection   // 章节不变
+                    appendingTo = 0
+                    continue
+                }
+                skipObjectiveSection = false
                 // 纯文本的「一、」「（一）」是题型/小节分组。
                 // 关键区分：
                 //  · 文件里**有**「第X章」→ 题型标签不能顶掉章节名（用户报的
@@ -175,6 +431,8 @@ object TextQuestionParser {
                 flush()
                 current = ParsedQuestion(chapter = currentSection).apply {
                     stem = qm.groupValues[2].trim()
+                    // 记下原题号：stem 里的题号已被剥掉，但章末答案表按题号索引
+                    sourceNumber = qm.groupValues[1].toIntOrNull()
                     sourcePage = currentPage
                     if (sharedStemBuf.isNotBlank()) sharedStem = sharedStemBuf.toString().trim()
                     if (sharedOptionsBuf.isNotEmpty()) sharedOptions.addAll(sharedOptionsBuf)
@@ -238,7 +496,6 @@ object TextQuestionParser {
             }
         }
         flush()
-        return fillMissingChapterNumbers(questions)
     }
 
     /**
@@ -294,6 +551,9 @@ object TextQuestionParser {
             '一' to 1, '二' to 2, '三' to 3, '四' to 4, '五' to 5,
             '六' to 6, '七' to 7, '八' to 8, '九' to 9
         )
+        // 单字「十」= 10。漏了这一条会让「第十章」「第十章多基因病」这类最常见的
+        // 章号全部取不到（返回 null），进而导致同章重复判断失效、按章回填答案错位。
+        if (s == "十") return 10
         if (s.length == 1) return digit[s[0]]
         // 十、十一、二十、二十三 ……
         if (s.startsWith("十")) return 10 + (digit[s.getOrNull(1)] ?: 0)

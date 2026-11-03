@@ -14,8 +14,8 @@ android {
         applicationId = "com.examhelper.shua"
         minSdk = 26
         targetSdk = 35
-        versionCode = 11
-        versionName = "1.0.11"
+        versionCode = 12
+        versionName = "1.0.12"
     }
 
     // ABI 分包：控制单包体积（模型 + 双 OCR 原生库较大）
