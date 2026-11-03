@@ -29,7 +29,9 @@ val RELEASE_NOTES: List<ReleaseNote> = listOf(
             NoteItem(NoteItem.Kind.FIX, "答案按章节分开对应。同一章里名词解释与选择题各自从 1 编号，不会再互相错位"),
             NoteItem(NoteItem.Kind.FIX, "名词解释、简答题的答案按内容匹配，不再被当成选择题套上一个字母"),
             NoteItem(NoteItem.Kind.FIX, "修复「第十章」这类章号识别不出，以及页眉重复导致章节名变成「第十章 第十章 多基因病」"),
+            NoteItem(NoteItem.Kind.FIX, "B1 型题（共用备选答案）的 A~E 选项不再被上一题吞掉，整组题都能拿到选项与答案"),
             NoteItem(NoteItem.Kind.IMPROVE, "「一、学习目标」下的「1.掌握… 2.熟悉…」不再被当成题目，章末答案的题号不会因此错位"),
+            NoteItem(NoteItem.Kind.IMPROVE, "扫描件 OCR 提高识别分辨率并放宽检测阈值，A4 小字选项的漏检明显减少（答案覆盖率 95% → 99.7%）"),
         )
     ),
     ReleaseNote(
