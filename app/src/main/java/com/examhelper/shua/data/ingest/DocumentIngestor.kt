@@ -231,6 +231,8 @@ class DocumentIngestor(
             android.graphics.BitmapFactory.decodeStream(it, null, bounds)
         }
         var sample = 1
+        // 上限 2200：RapidOcrEngine 的检测长边上限是 1920，
+        // 解码时留一点余量（拍照常有边缘空白），再大只是白占内存。
         while (bounds.outWidth / sample > 2200) sample *= 2
         val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
         context.contentResolver.openInputStream(uri)?.use {

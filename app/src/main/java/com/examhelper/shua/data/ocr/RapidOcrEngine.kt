@@ -25,15 +25,29 @@ class RapidOcrEngine(context: Context) : OcrProvider {
 
     private val engine by lazy {
         com.benjaminwan.ocrlibrary.OcrEngine(appContext).apply {
-            // 扫描试卷场景参数
+            // 扫描试卷场景参数。
+            //
+            // boxThresh / unClipRatio 的取值依据（官方参数说明）：
+            // · box_thresh「存在漏检时，调低该值」——试卷里 A~E 五个选项常被整块漏掉，
+            //   调低到 0.2 用少量误检换召回，多认几个噪声字比漏掉整个选项好；
+            // · unclip_ratio「出现框截断文字的情况，调大该值」——1.6 → 1.8 让文本框
+            //   多留一点边，避免紧贴的文字被切掉首尾。
+            // boxScoreThresh 仍是 0.5：它管的是「算不算文字」，再降会把污点当字。
             padding = 50
             boxScoreThresh = 0.5f
-            boxThresh = 0.3f
-            unClipRatio = 1.6f
+            boxThresh = 0.2f
+            unClipRatio = 1.8f
             doAngle = true
             mostAngle = true
         }
     }
+
+    /**
+     * 检测阶段的长边上限。**这是小字漏检的关键**：PDF 页面渲染出来约 1400×1980，
+     * 这里若给 1280，A4 扫描件在检测时只剩 905px 高，10pt 的小字字高约 8px，
+     * DBNet 很容易判成噪声。给 1920 让小字有足够像素，代价是耗时约 2.25 倍（按面积）。
+     */
+    private val detectMaxSideLen: Int = 1920
 
     /**
      * 版面分析模型。加载失败（assets 没打进模型、NDK 没编译该源文件）时为 null，
@@ -55,7 +69,7 @@ class RapidOcrEngine(context: Context) : OcrProvider {
             // 栏缝必须等 OCR 行块出来后再算（见下面 withGutters）。
             val rawLayout = LayoutAnalyzer.analyze(layoutEngine, bitmap)
 
-            val result = engine.detect(bitmap, output, maxSideLen = 1280)
+            val result = engine.detect(bitmap, output, maxSideLen = detectMaxSideLen)
             val blocks = result.textBlocks.map { tb ->
                 val xs = tb.boxPoint.map { it.x }
                 val ys = tb.boxPoint.map { it.y }
