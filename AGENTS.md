@@ -1,6 +1,6 @@
 # AGENTS.md — 刷了个题 (ShuaGeLeTi) 项目记忆
 
-> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：v1.0.9（2026-11-02）。
+> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：v1.0.11（2026-11-03）。
 
 ## 项目一句话
 
@@ -26,7 +26,7 @@ Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）�
 
 - Kotlin + Jetpack Compose（BOM 2024.12.01）+ Material3；MVVM（ViewModel 用 @JvmOverloads/SavedStateHandle 构造，无 DI 框架，`ShuaApp.instance.container` 手工容器）
 - Room v4（`data/db/`：Entities/Daos/AppDatabase，含 1→2→3→4 迁移，**禁用破坏性重建需谨慎**：fallbackToDestructiveMigration 仍在，新增字段必须写正式迁移）
-- 双 OCR 引擎（`data/ocr/`）：ML Kit 中文 bundled（默认）+ RapidOCR（PP-OCRv5 ONNX）；OCR 后做**双栏阅读顺序重排**（`MlKitOcrEngine.rebuildReadingOrder`，扫描试卷是左右双栏）；RapidOCR 额外跑**版面分析**（见「版面分析」节）
+- 双 OCR 引擎（`data/ocr/`）：**默认 RapidOCR**（PP-OCRv5 ONNX，v1.0.11 起）+ ML Kit 中文 bundled（备选，轻量）；OCR 后做**双栏阅读顺序重排**（`MlKitOcrEngine.rebuildReadingOrder`，扫描试卷是左右双栏）；RapidOCR 额外跑**版面分析**（见「版面分析」节）
 - RapidOCR 为**源码模块** `rapidocr-src/OcrLibrary`（Apache-2.0，已入库 ~93MB）：NDK r27 + `ANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON` + onnxruntime **1.20**（16KB 页对齐，Maven 的 AAR 抽取）+ opencv-mobile 3.4.15（`src/sdk/`）。**16KB 页对齐是硬要求**（用户手机是 16KB 设备），换依赖时必须验证 PT_LOAD p_align=16384
 - 后台任务 = WorkManager 前台服务（dataSync 类型）：`ImportPipelineWorker`（导入/解析，断点续传按"已落盘分块"）与 `GenerateWorker`（AI 生成，断点续传按"已答即跳过"）；进度写 Room 表（import_jobs/generate_jobs），UI 观察 Flow
 - LLM：`data/llm/LlmClient.kt`（OpenAI 兼容 chat/completions，jsonMode 失败自动降级重试，max_tokens 支持）；**系统提示词集中**在 `data/llm/Prompts.kt`（用户可在设置页覆盖，稳定前缀为命中 DeepSeek 前缀缓存——命中价是未命中 1/50）
@@ -156,6 +156,32 @@ rm -f tok askpass.sh cred.txt                      # 用完立刻删
 M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI 生成+置信度 → M4 模式补全 → M5 三省六部 → M6 错题本/统计/收藏/导出 → 后台解析+提速 → A1/A2/A3/B 型题+筛选+斩题+测试模式+热力图+搜索 → 纸感主题 → 导出增强（AI 内容开关+章节汇总+完整往返）→ 生成后台化+断点续传+费用透明 → 字体/配色/错题本重设计 → RapidOCR 上线 → 16KB 页对齐修复（NDK 重编）→ **v1.0.0** → 视觉层 v2 重做（暖纸+液态玻璃+底部悬浮 Dock+设置页音效/暗黑/数据管理）→ v1.0.1~v1.0.3（顶栏统一、底栏重写、Serif 加粗、暗绿正确色、震动与音效拆分、左右滑切题、AI 深度解题、LaTeX 自研渲染、回到上次进度、更新日志）→ v1.0.4（问 AI 追问面板+常驻入口）→ v1.0.5（8 bug 修复 + 成本显示/错题本章节重刷/热力图增强/名词解释独立题型）→ **v1.0.6**（LaTeX 渲染器全量重写 + Markdown 渲染器，公式与 Markdown 全站混排）→ **v1.0.7**（Markdown 题库导入+复制格式化提示词、RapidOCR 升 PP-OCRv5、分块解析防断裂+跨段答案回填、成本按官方峰谷分时、深度解题重试与 $$ 公式修复、问 AI 键盘遮挡修复、切题平移动画、热力图气泡跟手）。
 → **v1.0.8**（深度解题/问 AI 改 SSE 流式逐字输出、切题重做为跟手左右连续卡片、本轮完成页重做+刷本轮错题、导入提示词改为产出可直接导入的 JSON、DeepSeek 官方余额接口、速刷默认 2s、震动短促三档真区分、做完的进度即清、AI 免责小字）。
 → **v1.0.9**（RapidOCR 先跑版面分析 PP-DocLayout-S 再识别：双栏中缝由 OCR 行块投影算出，阅读顺序修复；页眉页脚/页码自动跳过）。
+→ **v1.0.10**（编码乱码专项：新增 `data/ingest/TextDecoder.kt` 按 BOM/UTF-8/UTF-16/GB18030 顺序探测解码；`NewStringUTF` 换自研 `newJStringUtf8` 修 4 字节 UTF-8；ChunkPlanner 硬切不切代理对；单栏不再套双栏启发式）。
+→ **v1.0.11**（章节与答案识别：`chapterHeadingRegex` 保住「第X章」+ `pendingChapterPrefix` 拼接拆行章名 + `fillMissingChapterNumbers` 补齐序号；`sectionRegex` 命中题型标签时只在无章标题文件里当分组；答案表新增「每行一对」与「一行多对」两种裸格式并按章分表；成本修复 providerModel 未回写。首页标题栏加「导入」「问 AI」、空态居中大按钮、长按菜单（置顶/改名/归档/删除）+ 归档折叠区；AI 解析流式预览；默认引擎改 RapidOCR；DB v8 加 `import_jobs.streamTail` / `banks.pinned` / `banks.archived`）。
+
+## 首页题库列表（`ui/bank/BankListScreen.kt` + `BankViewModels.kt`，v1.0.11）
+
+- **导入入口在标题栏**（`CompactTopBar` 的 actions：搜索 → 问 AI → 赤陶色「+ 导入」胶囊）。原右下角悬浮玻璃胶囊已删——它挡住列表最后一张卡片。0 题库时页面正中另有一个大号「导入题库」按钮（两个 `DropdownMenu` 用**各自的** open 标志，共用会导致两个菜单同时弹出）。
+- **问 AI 与刷题页共用同一个面板**：`AskAiPanel(state: AskAiState, ...)` 吃的是轻量 `AskAiState`（chat/asking/askStream/askError/askModelName/deepSolved/hint/placeholder），不是 `StudyUiState`。首页由 `ui/bank/HomeAskViewModel.kt` 提供状态（无「当前题目」上下文，走 `Prompts.ASK_DEFAULT` + `chatStreamMessages`）。**不要为了首页另写一套面板**，样式会走偏。
+- **长按题库卡片**（`combinedClickable(onLongClick = ...)`）弹二级菜单四项：置顶 / 取消置顶、编辑题库名称、归档 / 取消归档、删除题库。右上角 `MoreVert` 图标点开同一个菜单。
+- **归档**：`banks.archived = true` 的题库不进主列表，只在最下方一行小字「显示已归档题库（N）」/「收起已归档题库」居中显示，点开才渲染。`BankDao.observeAll()` 排序是 `ORDER BY pinned DESC, updatedAt DESC`。
+- 改名的 `RenameBankDialog` 用 `OutlinedTextField` + 空值禁用「保存」；`BankListViewModel.renameBank` 会 `trim` 后空则忽略。
+
+## AI 解析流式预览（`ImportPipelineWorker` + `ImportScreen.kt`，v1.0.11）
+
+- 解析时模型逐字输出写进 `import_jobs.streamTail`，UI 用 `StreamPreviewCard`（`PaperCard` + 132dp 高 `Monospace` 滚动框，自动滚到底）渲染，**不铺满整页**。
+- 关键节流参数：`STREAM_TAIL_CHARS = 1200`（只留尾巴，DB 写入量可控）、`STREAM_FLUSH_MS = 350L`（写库频率）。`tailScope` 是独立 `CoroutineScope(Dispatchers.IO + SupervisorJob())`，**DONE 时必须 `tailScope.cancel()` 并把 `streamTail` 置 null**，否则界面残留半截输出。
+- `parseChunkWithRetry` 只在**首次尝试**（`wait == 0L`）传 `onDelta`：重试会把同样内容再吐一遍，预览会重复。
+
+## 章节识别与答案表（`data/parse/`，v1.0.11）
+
+- **`chapterHeadingRegex`**（`^\s*第\s*([一二三四五六七八九十百零\d]{1,4})\s*([章节篇卷])\s*[、.．:：]?\s*(.*)$`）必须排在 `sectionRegex` 之前处理；命中时 `flush()` + `headingStack.clear()` + `hasChapterHeading = true`。
+- **`hasChapterHeading` 要全文预扫描**（`text.lineSequence().any { chapterHeadingRegex.containsMatchIn(it) }`）：题型标签可能出现在第一个章标题之前。为 true 时题型标签（「（一）名词解释」）**不许**顶掉章节名；为 false 时只能退而拿它当分组（否则整库无章节）。
+- **`pendingChapterPrefix`** 处理 OCR 把「第六章」与章名拆成两行：章号先存，下一行若不像题目/选项/答案就拼成 `"$prefix $line"`。注意 `continue` 不能写在 `?.let{}` 里（Kotlin 实验特性），要先用局部 val 判空。
+- **`fillMissingChapterNumbers`**：按出现顺序收集章节，`expected` 起始为 null——**第一个带章号的章节之前，无号章节原样保留**（早期写 `expected = known.first()` 会把它们误编号）。
+- **答案表两种裸格式**（用户报的「章后集中答案大范围识别不出」）：① `bareAnswerLineRe` 整行一对 `1.A` / `2. D`；② `bareAnswerPairRe` 一行多对 `1.E"2.B3.D`，校验方式是「除答案对外只剩分隔标点」。带「答案：」前缀的老格式仍保留。
+- **必须按章节分表**：题号在每章内重新从 1 开始，全书合并成一张表会让第 7 章的 `1.A` 填到第 6 章。`applyAnswerTable` 用 `chapterOf` 先查本章表再查合并表。
+- 回归护栏：`app/src/test/java/com/examhelper/shua/AnswerTableTest.kt`（5 项）+ `ChunkPlannerTest` 的 3 个答案回填用例。改这块务必跑全量单测（132 项）。
 
 ## 待办池（按价值排序）
 
