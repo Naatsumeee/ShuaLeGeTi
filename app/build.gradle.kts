@@ -18,12 +18,21 @@ android {
         versionName = "1.0.11"
     }
 
-    // ABI 分包：控制单包体积（模型+双OCR原生库较大）
+    // ABI 分包：控制单包体积（模型 + 双 OCR 原生库较大）
+    //
+    // v1.0.12 起只发 arm64-v8a：
+    //  · armeabi-v7a 是 2017 年前的 32 位老机与少数低价机，本项目目标用户是大学生，
+    //    实际装机量接近 0，却让 Release 多 70MB；
+    //  · x86_64 只有模拟器/Chromebook 用，真实手机为 0。
+    // 需要给模拟器或老机出包时用命令行覆盖，不必改代码：
+    //    ./gradlew assembleDebug -PabiOverride=arm64-v8a,x86_64
+    val abiOverride = (project.findProperty("abiOverride") as String?)
+        ?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }
     splits {
         abi {
             isEnable = true
             reset()
-            include("armeabi-v7a", "arm64-v8a", "x86_64")
+            include(*(abiOverride ?: listOf("arm64-v8a")).toTypedArray())
             isUniversalApk = false
         }
     }
