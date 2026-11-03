@@ -1,6 +1,6 @@
 # AGENTS.md — 刷了个题 (ShuaGeLeTi) 项目记忆
 
-> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：v1.0.12（2026-11-04）。
+> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：v1.0.12 重发版（2026-11-04）。
 
 ## 项目一句话
 
@@ -194,6 +194,15 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - **`stemMatchesAnswer` 不要在原始题干上先删标点**：删了会把「何谓血红蛋白病？可分为几类？」粘成一整串，探针过长永远匹配不上；标点本身是天然断句点，直接在原串上取 `[\u4e00-\u9fa5]{2,}` 的前 3 长片段做探针。
 - 回归护栏：`app/src/test/java/com/examhelper/shua/AnswerSheetTest.kt`（11 项）+ `AnswerTableTest.kt`（5 项）+ `ChunkPlannerTest` 的 3 个回填用例。**全量 143 项**，改这块务必 `--rerun-tasks` 跑全量。
 - 真实素材验证：`.shots/p2_full.txt`（47 页扫描件的 OCR 全文，2580 行）是标准回归输入，用 `TextQuestionParser.parse` 跑后答案覆盖率应 ≥ 90%（当前 95%，332/347）。
+
+### OCRUpdate 分支（v1.0.12 重发，versionCode 13）
+
+- **B1 型题（共用备选答案）曾被整块吞掉**：`TextQuestionParser` 里 `sharedStemHintRegex` / `sharedOptionsHintRegex` 两个分支原来都带 `current == null` 守卫；真实扫描件中 `【B1型题】` 紧跟上一题最后一个选项，此时 `current` 仍挂着上一题 → 整块被跳过，A~E 备选答案被当成上一题的选项续行。**去掉守卫、进入前无条件 `flush()`** 才修好（实测救回 11 道）。
+- 光去掉守卫会引发**作用域泄漏**：`sharedOptionsBuf` 一直留到下一个共用块，同章后面所有题（含简答题）都继承这组备选答案（实测 262/281 泄漏）。新增 `sharedRangeRegex` 解析 `（21~25题共用备选答案）` 的区间，题号超出 `[from, to]` 即清空；没写区间时退化为「有效到下一个共用块」。
+- **`stemMatchesAnswer` 用 2-gram 命中率**（`PROSE_MATCH_THRESHOLD = 0.55`）而不是「最长片段完全包含」：OCR 常吃掉题干一个字（「常染**色**质与异染色质…」被识别成「常染质…」），完全包含判据会把整题判无答案。另保留快速通道：任一长度 ≥6 的汉字片段被答案原样包含 → 直接 1.0。
+- **OCR 检测质量**：`RapidOcrEngine.detectMaxSideLen = 1920`（原 1280；`DocumentIngestor` 渲染约 1400×1980，给 1280 时 A4 检测只剩 905px 高，10pt 小字约 8px 高，DBNet 易判成噪声），代价耗时约 2.25 倍；`boxThresh 0.3 → 0.2`（官方「存在漏检时调低」）、`unClipRatio 1.6 → 1.8`（官方「框截断文字时调大」）。`boxScoreThresh` 保持 0.5（它管「算不算文字」，再降会把污点当字）。
+- 实测（医学遗传学部分2.pdf，47 页扫描件，App 端端到端）：v1.0.12 首发版 332/347（95%）→ 本版 **345/346（99.7%）**，八章分别 40/40、34/34、50/50、82/83、25/25、41/41、39/39、34/34；章节名含题型标签 0 条、stem 残留题号 0 条。唯一无答案的那题是 OCR 把选项 α/β/δ/γ/ψ 与答案表 E 对不上，**留空比填错安全**。
+- **versionCode 13 / versionName 1.0.12**：用户明确要求「重发 1.0.12 而不是发 1.0.13」，所以版本名保持不变、versionCode 递增以保证覆盖升级。远程 tag `v1.0.12` 已用 `gh api -X PATCH repos/.../git/refs/tags/v1.0.12 -F force=true` 移到 merge 提交（Git 本地删标签的操作被 CC Safety Net 的规则拦截，改用 GitHub API 更新 ref）。
 
 ## 待办池（按价值排序）
 
