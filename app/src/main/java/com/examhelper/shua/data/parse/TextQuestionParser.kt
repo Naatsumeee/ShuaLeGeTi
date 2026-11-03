@@ -26,6 +26,8 @@ object TextQuestionParser {
     private val trailingColonAnswerRegex = Regex("""[:：]\s*[(（]?\s*([A-Ea-e])\s*[)）]?\s*$""")
     private val sharedStemHintRegex = Regex("""共用题干|共同题干|共用材料|以下材料""")
     private val sharedOptionsHintRegex = Regex("""共用备选答案|共用选项|备选答案""")
+    /** 「(21~25题共用备选答案)」「第1-5题共用备选答案」「（21～25）」里的题号区间 */
+    private val sharedRangeRegex = Regex("""(?:第)?\s*(\d{1,4})\s*[~～\-－—至到]\s*(\d{1,4})\s*(?:题)?""")
     private val caseStartRegex = Regex("""^(患者|某男|某女|某患|男[，,].{0,3}\d|女[，,].{0,3}\d|病历|病例|一[名位].{0,6}(岁|男|女))""")
     private val pageMarkerRegex = Regex("""^\[\[PG:(\d+)\]\]$""")
 
@@ -249,18 +251,39 @@ object TextQuestionParser {
      * （如「纯质性」），正文必然以它开头；「掌握 mtDNA 的结构和组成…」这类
      * 学习目标条目则不会命中，从而被排除。
      */
-    private fun stemMatchesAnswer(stem: String, answer: String): Boolean {
-        // 直接在**原始题干**上取汉字片段：先删标点会把「何谓血红蛋白病？可分为几类？」
-        // 粘成一整串，探针过长永远匹配不上（实测简答题因此全部漏配）。
-        // 标点本身就是天然断句点，保留它反而切得更准。
-        val probes = Regex("""[\u4e00-\u9fa5]{2,}""").findAll(stem)
-            .map { it.value }
-            .sortedByDescending { it.length }
-            .take(3)
-            .toList()
-        if (probes.isEmpty()) return false
-        return probes.any { answer.contains(it) }
+    private fun stemMatchesAnswer(stem: String, answer: String): Boolean =
+        answerProbeScore(stem, answer) >= PROSE_MATCH_THRESHOLD
+
+    /**
+     * 题干与答案正文的匹配分（0..1）。
+     *
+     * 只用「最长片段完全包含」太严：OCR 常把题干吃掉一个字
+     * （实测「常染**色**质与异染色质…有何差异?」在题干侧写成「常染质…」，
+     * 最长片段就再也匹配不上，整题被判为无答案）。
+     * 这里改成 **2-gram 命中率**：题干的所有相邻汉字二元组，有多少比例出现在答案里。
+     * 对同一个术语的两种写法容忍度好得多，同时对「完全不同的题」仍然打低分。
+     *
+     * 另外保留一条快速通道：题干里任一长度 ≥6 的汉字片段被答案原样包含，直接算满命中。
+     */
+    private fun answerProbeScore(stem: String, answer: String): Double {
+        if (answer.isBlank()) return 0.0
+        val runs = Regex("""[\u4e00-\u9fa5]{2,}""").findAll(stem).map { it.value }.toList()
+        if (runs.isEmpty()) return 0.0
+        // 快速通道：长片段原样命中
+        if (runs.any { it.length >= 6 && answer.contains(it) }) return 1.0
+
+        val grams = mutableSetOf<String>()
+        for (run in runs) {
+            if (run.length < 2) continue
+            for (i in 0 until run.length - 1) grams += run.substring(i, i + 2)
+        }
+        if (grams.isEmpty()) return 0.0
+        val hit = grams.count { answer.contains(it) }
+        return hit.toDouble() / grams.size
     }
+
+    /** 2-gram 命中率达到这个比例就认为这题在答案区里有对应正文 */
+    private val PROSE_MATCH_THRESHOLD = 0.55
 
     /** 题干开头的题号（`1.` `2、` `（3）`） */
     private val leadingNumberRe = Regex("""^\s*[（(]?\s*(\d{1,4})\s*[）)]?\s*[、.．,，:：)）]""")
@@ -280,6 +303,11 @@ object TextQuestionParser {
 
         var sharedStemBuf = StringBuilder()
         var sharedOptionsBuf = mutableListOf<QuestionOption>()
+        // 「(21~25题共用备选答案)」给出的题号范围。**必须用它封住 sharedOptions 的作用域**：
+        // 旧实现只设置不清空，于是同一章后面所有题（包括简答题）都挂上这 5 个备选答案，
+        // 实测一本样书 262/281 道题都带 sharedOptions，简答题还被错填成字母答案。
+        var sharedNoFrom: Int? = null
+        var sharedNoTo: Int? = null
         var currentPage: Int? = null
         // OCR 把「第六章」和章名拆成两行时，先把章号暂存，等下一行标题本体拼起来
         var pendingChapterPrefix: String? = null
@@ -411,17 +439,30 @@ object TextQuestionParser {
             }
 
             // 共用题干 / 共用备选答案 提示行
-            if (sharedStemHintRegex.containsMatchIn(line) && current == null) {
+            //
+            // 这里刻意**不**要求 `current == null`：真实的扫描习题集里，
+            // 【B1型题】/(21~25题共用备选答案）紧跟在上一题的最后一个选项后面，
+            // 此时 current 还挂着上一题。旧写法加了这个守卫 → 整块被跳过，
+            // 备选答案 A~E 被当成上一题的选项续行吞掉，后续 5 道 B1 题
+            // 全都拿不到 sharedOptions（实测一本样书丢了 11 道）。
+            // 现在无条件先 flush 上一题，再开始收集。
+            if (sharedStemHintRegex.containsMatchIn(line)) {
                 flush()
                 sharedStemBuf = StringBuilder()
                 sharedOptionsBuf = mutableListOf()
+                sharedNoFrom = null
+                sharedNoTo = null
                 appendingTo = 3
                 continue
             }
-            if (sharedOptionsHintRegex.containsMatchIn(line) && current == null) {
+            if (sharedOptionsHintRegex.containsMatchIn(line)) {
                 flush()
                 sharedStemBuf = StringBuilder()
                 sharedOptionsBuf = mutableListOf()
+                // 记下共用区间，超界的题就不再继承这组备选答案
+                val range = sharedRangeRegex.find(line)
+                sharedNoFrom = range?.groupValues?.get(1)?.toIntOrNull()
+                sharedNoTo = range?.groupValues?.get(2)?.toIntOrNull()
                 appendingTo = 4
                 continue
             }
@@ -429,13 +470,27 @@ object TextQuestionParser {
             val qm = questionStartRegex.find(line)
             if (qm != null && !isLikelyNotQuestion(qm)) {
                 flush()
+                val no = qm.groupValues[1].toIntOrNull()
+                // 共用备选答案只对「(21~25题共用备选答案)」声明的区间生效。
+                // 没写区间时退化成「一直有效到下一个共用块」，兼容旧行为。
+                val inSharedScope = sharedOptionsBuf.isNotEmpty() && when {
+                    sharedNoFrom == null || sharedNoTo == null -> true
+                    no == null -> true
+                    else -> no in sharedNoFrom!!..sharedNoTo!!
+                }
                 current = ParsedQuestion(chapter = currentSection).apply {
                     stem = qm.groupValues[2].trim()
                     // 记下原题号：stem 里的题号已被剥掉，但章末答案表按题号索引
-                    sourceNumber = qm.groupValues[1].toIntOrNull()
+                    sourceNumber = no
                     sourcePage = currentPage
                     if (sharedStemBuf.isNotBlank()) sharedStem = sharedStemBuf.toString().trim()
-                    if (sharedOptionsBuf.isNotEmpty()) sharedOptions.addAll(sharedOptionsBuf)
+                    if (inSharedScope) sharedOptions.addAll(sharedOptionsBuf)
+                }
+                if (!inSharedScope) {
+                    // 超出区间：这组备选答案已经用完，清掉避免继续往下泄漏
+                    sharedOptionsBuf = mutableListOf()
+                    sharedNoFrom = null
+                    sharedNoTo = null
                 }
                 appendingTo = 0
                 continue
