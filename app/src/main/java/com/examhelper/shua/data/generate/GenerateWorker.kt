@@ -299,15 +299,11 @@ class GenerateWorker(
 
     private fun foregroundInfo(text: String, progress: Int, total: Int): ForegroundInfo {
         val nm = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (Build.VERSION.SDK_INT >= 26) {
-            nm.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "AI 生成", NotificationManager.IMPORTANCE_LOW)
-            )
-        }
-        val builder = if (Build.VERSION.SDK_INT >= 26)
-            Notification.Builder(applicationContext, CHANNEL_ID) else
-            Notification.Builder(applicationContext)
-        val notification = builder
+        // minSdk = 26，通知渠道必然可用，不需要版本判断
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_ID, "AI 生成", NotificationManager.IMPORTANCE_LOW)
+        )
+        val notification = Notification.Builder(applicationContext, CHANNEL_ID)
             .setContentTitle("刷了个题 · AI 生成答案")
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
@@ -318,6 +314,7 @@ class GenerateWorker(
                 else setProgress(0, 0, true)
             }
             .build()
+        // API 29 才有前台服务类型；26~28 仍要走两参构造
         return if (Build.VERSION.SDK_INT >= 29) {
             ForegroundInfo(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } else {
@@ -328,17 +325,12 @@ class GenerateWorker(
     private fun notifyDone(ok: Int) {
         runCatching {
             val nm = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            if (Build.VERSION.SDK_INT >= 26) {
-                nm.createNotificationChannel(
-                    NotificationChannel(CHANNEL_ID, "AI 生成", NotificationManager.IMPORTANCE_LOW)
-                )
-            }
-            val builder = if (Build.VERSION.SDK_INT >= 26)
-                Notification.Builder(applicationContext, CHANNEL_ID) else
-                Notification.Builder(applicationContext)
+            nm.createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, "AI 生成", NotificationManager.IMPORTANCE_LOW)
+            )
             nm.notify(
                 NOTIFICATION_ID + 1,
-                builder
+                Notification.Builder(applicationContext, CHANNEL_ID)
                     .setContentTitle("AI 生成完成：$ok 题")
                     .setContentText("回到应用查看答案与置信度")
                     .setSmallIcon(R.drawable.ic_launcher_foreground)
