@@ -30,6 +30,32 @@ class BankListViewModel @JvmOverloads constructor(
     fun deleteBank(bankId: Long) {
         viewModelScope.launch { bankRepo.deleteBank(bankId) }
     }
+
+    /** 长按菜单：置顶 / 取消置顶 */
+    fun setPinned(bankId: Long, pinned: Boolean) {
+        viewModelScope.launch {
+            ShuaApp.instance.container.database.bankDao()
+                .setPinned(bankId, pinned, System.currentTimeMillis())
+        }
+    }
+
+    /** 长按菜单：重命名题库 */
+    fun renameBank(bankId: Long, name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch {
+            ShuaApp.instance.container.database.bankDao()
+                .rename(bankId, trimmed, System.currentTimeMillis())
+        }
+    }
+
+    /** 长按菜单：归档 / 取消归档 */
+    fun setArchived(bankId: Long, archived: Boolean) {
+        viewModelScope.launch {
+            ShuaApp.instance.container.database.bankDao()
+                .setArchived(bankId, archived, System.currentTimeMillis())
+        }
+    }
 }
 
 class ImportTextViewModel @JvmOverloads constructor(

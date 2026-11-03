@@ -38,8 +38,11 @@ class LlmQuestionParser(
     )
 
     /** 供后台任务逐块调用 */
-    suspend fun parseChunkText(provider: LlmProvider, chunk: String): List<QuestionDto> =
-        parseChunk(provider, chunk)
+    suspend fun parseChunkText(
+        provider: LlmProvider,
+        chunk: String,
+        onDelta: ((String) -> Unit)? = null
+    ): List<QuestionDto> = parseChunk(provider, chunk, onDelta = onDelta)
 
     /**
      * 本次解析累计的 token 用量。AI 解析同样计费，后台任务要靠它把
@@ -92,16 +95,31 @@ class LlmQuestionParser(
     private suspend fun parseChunk(
         provider: LlmProvider,
         chunk: String,
-        depth: Int = 0
+        depth: Int = 0,
+        onDelta: ((String) -> Unit)? = null
     ): List<QuestionDto> {
-        val result = llmClient.chatWithUsage(
-            provider = provider,
-            systemPrompt = systemPrompt,
-            userPrompt = chunk,
-            jsonMode = true,
-            temperature = 0.1,
-            maxTokens = PARSE_MAX_TOKENS
-        )
+        // 有 onDelta 就走流式：导入页要把「模型正在写什么」实时显示出来。
+        // 流式与非流式返回同一个 ChatResult，解析逻辑完全一致。
+        val result = if (onDelta != null) {
+            llmClient.chatStream(
+                provider = provider,
+                systemPrompt = systemPrompt,
+                userPrompt = chunk,
+                jsonMode = true,
+                temperature = 0.1,
+                maxTokens = PARSE_MAX_TOKENS,
+                onDelta = onDelta
+            )
+        } else {
+            llmClient.chatWithUsage(
+                provider = provider,
+                systemPrompt = systemPrompt,
+                userPrompt = chunk,
+                jsonMode = true,
+                temperature = 0.1,
+                maxTokens = PARSE_MAX_TOKENS
+            )
+        }
         val parsed = decodeQuestions(result.content)
         recordUsage(result.usage)
         if (parsed.isNotEmpty()) return parsed
@@ -112,7 +130,7 @@ class LlmQuestionParser(
         if (depth >= MAX_SPLIT_DEPTH || chunk.length < MIN_SPLIT_CHARS) return emptyList()
         val halves = ChunkPlanner.plan(chunk, chunk.length / 2)
         if (halves.size < 2) return emptyList()
-        return halves.flatMap { parseChunk(provider, it.text, depth + 1) }
+        return halves.flatMap { parseChunk(provider, it.text, depth + 1, onDelta) }
     }
 
     private fun decodeQuestions(content: String): List<QuestionDto> {
@@ -235,26 +253,128 @@ class LlmQuestionParser(
         fun chunkText(text: String, size: Int): List<String> =
             ChunkPlanner.plan(text, size).map { it.text }
 
-        /** 答案表行：`答案：1.B 2.C`、`参考答案 1、B`、`1.A 2.B 3.C 4.D` */
+        /** 答案表行：`答案：1.B 2.C`、`参考答案 1、B` */
         private val answerTableRe = Regex(
             """(?:参考)?答案\s*[:：]?\s*(.+)"""
         )
         private val answerPairRe = Regex("""(\d{1,4})\s*[.、．:：)）]?\s*([A-EGH]{1,8}|对|错|正确|错误)""")
 
-        private fun parseAnswerTable(rawText: String): Map<Int, String> {
-            // 只在文末 40% 里找，避免把题干中的「答案」字样误当答案表
-            val tailStart = (rawText.length * 0.6).toInt().coerceAtLeast(0)
-            val tail = rawText.substring(tailStart)
+        /**
+         * 裸答案行：整行只有一个「题号 + 答案」，如 `1.A`、`2. D`、`12.C`。
+         *
+         * 样例题库（医学遗传学/医学伦理）的答案区就是这种最朴素的形式——
+         * 每行一对，前面**没有**「答案：」二字。旧实现只认带前缀的成行表，
+         * 于是这类答案区整块被丢弃，用户看到的「章后集中答案大范围识别不出」。
+         */
+        private val bareAnswerLineRe = Regex(
+            """^\s*(\d{1,4})\s*[.、．:：)）]\s*([A-EGH]{1,8}|对|错|正确|错误)\s*$"""
+        )
+
+        /**
+         * 一行里挤了多对、但没有「答案：」前缀的形式：`1.E"2.B3.D`、`6.A7.B`。
+         *
+         * OCR 把答案区排版压成一行时会这样，中间的分隔符可能是引号、空格、顿号，
+         * 甚至完全没有（`6.A7.B`）。判据是「整行除答案对外不剩任何实义字符」，
+         * 这样 `3.1988年首次确定的…` 这种题干不会被误判。
+         */
+        private val bareAnswerPairRe = Regex(
+            """(\d{1,4})\s*[.、．:：)）]\s*([A-EGH]{1,8}|对|错|正确|错误)"""
+        )
+        /** 判断「整行都是答案对」时允许残留的字符（空白与各类分隔标点） */
+        private val answerLineFillerRe = Regex("""[\s“”"'‘’、,，;；.。()（）/|]+""")
+
+        /** 「第X章/节/篇/卷」标题，用于把原文切成章段 */
+        private val chapterSplitRe = Regex(
+            """(?m)^[ \t]*第\s*([一二三四五六七八九十百零\d]{1,4})\s*[章节篇卷]"""
+        )
+
+        /** 中文/阿拉伯数字 → Int，认不出返回 null */
+        private fun parseChineseNumber(raw: String): Int? {
+            val t = raw.trim()
+            t.toIntOrNull()?.let { return it }
+            val digits = mapOf(
+                '零' to 0, '一' to 1, '二' to 2, '三' to 3, '四' to 4,
+                '五' to 5, '六' to 6, '七' to 7, '八' to 8, '九' to 9
+            )
+            if (t.isEmpty()) return null
+            if (t == "十") return 10
+            if (t.length == 2 && t[0] == '十') return 10 + (digits[t[1]] ?: return null)
+            if (t.length == 2 && t[1] == '十') return (digits[t[0]] ?: return null) * 10
+            if (t.length == 3 && t[1] == '十') {
+                return (digits[t[0]] ?: return null) * 10 + (digits[t[2]] ?: return null)
+            }
+            return if (t.length == 1) digits[t[0]] else null
+        }
+
+        /** 从「第六章 线粒体遗传」这类章节名里取章号；取不到返回 null */
+        private fun chapterNumberOf(chapter: String?): Int? {
+            if (chapter.isNullOrBlank()) return null
+            val m = chapterSplitRe.find(chapter) ?: return null
+            return parseChineseNumber(m.groupValues[1])
+        }
+
+        /**
+         * 按「第X章」把原文切成章段，返回 (章号, 段文本)。
+         *
+         * 为什么必须切：题号在每章内重新从 1 开始计数，而答案区也是每章末尾一块。
+         * 全书合并成一张 `题号 → 答案` 的表，第 7 章的 `1.A` 会填到第 6 章第 1 题上。
+         */
+        private fun splitByChapter(rawText: String): List<Pair<Int?, String>> {
+            val marks = chapterSplitRe.findAll(rawText).toList()
+            if (marks.isEmpty()) return listOf(null to rawText)
+            val out = mutableListOf<Pair<Int?, String>>()
+            // 第一个章标题之前的内容（封面/目录）归到 null 段
+            if (marks.first().range.first > 0) {
+                out += null to rawText.substring(0, marks.first().range.first)
+            }
+            for ((i, m) in marks.withIndex()) {
+                val end = if (i + 1 < marks.size) marks[i + 1].range.first else rawText.length
+                out += parseChineseNumber(m.groupValues[1]) to rawText.substring(m.range.first, end)
+            }
+            return out
+        }
+
+        /**
+         * 解析一段文本里的答案表。支持两种排版：
+         * 1. 带前缀的成行表：`答案：1.B 2.C 3.D`（一行多对）
+         * 2. 裸行表：每行 `1.A`（一行一对，样例题库的常见形式）
+         */
+        private fun parseAnswerTable(span: String): Map<Int, String> {
             val table = mutableMapOf<Int, String>()
-            for (line in tail.lines()) {
-                val hit = answerTableRe.find(line) ?: continue
-                val body = hit.groupValues[1]
-                val pairs = answerPairRe.findAll(body).toList()
-                if (pairs.size < 2) continue
-                pairs.forEach { p ->
-                    val no = p.groupValues[1].toIntOrNull() ?: return@forEach
-                    val ans = p.groupValues[2]
-                    if (no in 1..9999) table.putIfAbsent(no, ans)
+            for (line in span.lines()) {
+                // 形式一：带「答案」字样的成行表（要求一行至少两对，否则容易把题干里的
+                // 「答案：B」误当答案表）
+                val hit = answerTableRe.find(line)
+                if (hit != null) {
+                    val pairs = answerPairRe.findAll(hit.groupValues[1]).toList()
+                    if (pairs.size >= 2) {
+                        pairs.forEach { p ->
+                            val no = p.groupValues[1].toIntOrNull() ?: return@forEach
+                            val ans = p.groupValues[2]
+                            if (no in 1..9999) table.putIfAbsent(no, ans)
+                        }
+                    }
+                    continue
+                }
+                // 形式二：整行只有一对（`1.A` / `2. D`）
+                val bare = bareAnswerLineRe.find(line)
+                if (bare != null) {
+                    val no = bare.groupValues[1].toIntOrNull() ?: continue
+                    if (no in 1..9999) table.putIfAbsent(no, bare.groupValues[2])
+                    continue
+                }
+                // 形式三：一行挤了多对但没前缀（`1.E"2.B3.D`）。
+                // 要求整行去掉答案对后只剩分隔标点——否则会把题干里的「3.14」之类误当答案。
+                val pairs = bareAnswerPairRe.findAll(line).toList()
+                if (pairs.size >= 2) {
+                    val residue = bareAnswerPairRe.replace(line, "").replace(answerLineFillerRe, "")
+                    if (residue.isEmpty()) {
+                        pairs.forEach { p ->
+                            val no = p.groupValues[1].toIntOrNull() ?: return@forEach
+                            val ans = p.groupValues[2]
+                            if (no in 1..9999) table.putIfAbsent(no, ans)
+                        }
+                    }
                 }
             }
             return table
@@ -317,20 +437,44 @@ class LlmQuestionParser(
             stemOf: (T) -> String,
             optionsOf: (T) -> List<QuestionOption>,
             answerOf: (T) -> String?,
-            withAnswer: (T, String) -> T
+            withAnswer: (T, String) -> T,
+            chapterOf: (T) -> String? = { null }
         ) {
-            val table = parseAnswerTable(rawText)
-            if (table.isEmpty()) return
             if (list.none { answerOf(it).isNullOrBlank() }) return
-            val keys = table.keys
-            val positional = keys.size == list.size && keys.min() == 1 && keys.max() == list.size
+
+            // 按章切段：题号在每章内重新计数，全书一张表会串章。
+            // 每段各自建表，题目按自己的章号取对应段的表；取不到再退回全文表。
+            val byChapter: Map<Int?, Map<Int, String>> = splitByChapter(rawText)
+                .associate { (no, span) -> no to parseAnswerTable(span) }
+            val merged = mutableMapOf<Int, String>()
+            // null 段（章标题之前的内容）先放，各章段后放：全书兜底表只要有数就行，
+            // 真正的精确匹配走 scoped（按章的表）。
+            for ((no, tbl) in byChapter) {
+                if (no == null) tbl.forEach { (k, v) -> merged.putIfAbsent(k, v) }
+            }
+            for ((no, tbl) in byChapter) {
+                if (no != null) tbl.forEach { (k, v) -> merged.putIfAbsent(k, v) }
+            }
+            val wholeTable: Map<Int, String> = merged
+            if (byChapter.values.all { it.isEmpty() }) return
+
             for (i in list.indices) {
                 if (!answerOf(list[i]).isNullOrBlank()) continue
                 val opts = optionsOf(list[i])
-                val byNumber = leadingNumber(stemOf(list[i]))?.let { table[it] }
-                val guessed: String = byNumber
-                    ?: (if (positional) table[i + 1] else null)
-                    ?: continue
+                val num = leadingNumber(stemOf(list[i]))
+                val chNo = chapterNumberOf(chapterOf(list[i]))
+
+                // 优先用本章的表；本章没有该题号再退回全文表
+                val scoped: Map<Int, String> = chNo?.let { byChapter[it] } ?: emptyMap()
+                val guessed: String? = when {
+                    num != null && scoped[num] != null -> scoped[num]
+                    num != null && wholeTable[num] != null -> wholeTable[num]
+                    num == null && scoped.isNotEmpty() -> scoped[i + 1]
+                    num == null && wholeTable.isNotEmpty() -> wholeTable[i + 1]
+                    else -> null
+                }
+                if (guessed == null) continue
+
                 // 选项护栏：答案字母必须是本题选项之一
                 if (opts.size >= 2) {
                     val letters = opts.map { it.key.trim().uppercase() }.filter { it.isNotEmpty() }.toSet()
@@ -383,7 +527,8 @@ class LlmQuestionParser(
                 stemOf = { it.stem },
                 optionsOf = { it.options },
                 answerOf = { it.answer },
-                withAnswer = { q, ans -> q.copy(answer = ans) }
+                withAnswer = { q, ans -> q.copy(answer = ans) },
+                chapterOf = { it.chapter }
             )
             return list
         }
@@ -422,7 +567,8 @@ class LlmQuestionParser(
                 stemOf = { it.stem },
                 optionsOf = { it.options },
                 answerOf = { it.answer },
-                withAnswer = { l, ans -> l.copy(answer = ans) }
+                withAnswer = { l, ans -> l.copy(answer = ans) },
+                chapterOf = { it.chapter }
             )
             return list
         }

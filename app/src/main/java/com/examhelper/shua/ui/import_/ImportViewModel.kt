@@ -42,7 +42,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
         val providerModel: String? = null,
         val concurrency: Int = 4,
         /** 本次导入使用的 OCR 引擎 */
-        val ocrEngine: String = com.examhelper.shua.data.settings.OcrEngine.ML_KIT,
+        val ocrEngine: String = com.examhelper.shua.data.settings.OcrEngine.RAPID_OCR,
         /** 分析过程日志（最新在下） */
         val log: List<String> = emptyList()
     )
@@ -62,10 +62,12 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         viewModelScope.launch {
-            val concurrency = settings.settings.first().parseConcurrency
+            val prefs = settings.settings.first()
             val providers = providerDao.observeAll().first()
             _state.value = _state.value.copy(
-                concurrency = concurrency,
+                concurrency = prefs.parseConcurrency,
+                // 尊重设置页选的引擎，别把用户的选择覆盖成默认值
+                ocrEngine = prefs.ocrEngine,
                 providersReady = providers.any { it.enabled }
             )
             // 自动恢复进行中的任务（切走/重开后回来自动续上）
@@ -152,7 +154,14 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                 concurrency = s.concurrency,
                 ocrEngine = ocrEngine
             )
-            _state.value = _state.value.copy(stage = Stage.RUNNING, jobId = jobId, pendingUri = null)
+            _state.value = _state.value.copy(
+                stage = Stage.RUNNING,
+                jobId = jobId,
+                pendingUri = null,
+                // 必须把实际解析用的模型写回 state：成本展示按它挑价目挡位，
+                // 漏了这一步 providerModel 永远是 null → 界面恒定显示「未知模型不计价」。
+                providerModel = provider?.model ?: _state.value.providerModel
+            )
             observeJob(jobId)
         }
     }

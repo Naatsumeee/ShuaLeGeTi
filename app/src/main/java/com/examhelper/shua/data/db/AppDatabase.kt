@@ -36,7 +36,7 @@ class Converters {
         ImportJob::class,
         GenerateJob::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -151,6 +151,20 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v7 → v8：
+         * 1. AI 解析的实时输出尾巴（导入页「生成过程预览」用）。只存最近一小段文本，
+         *    不落完整输出 —— 一次导入可能几十万字符。
+         * 2. 题库的置顶与归档标记（首页长按菜单）。
+         */
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE import_jobs ADD COLUMN streamTail TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE banks ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE banks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -161,7 +175,10 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "shua.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                    .addMigrations(
+                        MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
+                        MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8
+                    )
                     .fallbackToDestructiveMigration()
                     .build()
                     .also { instance = it }

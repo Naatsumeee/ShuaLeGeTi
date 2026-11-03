@@ -10,11 +10,21 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface BankDao {
-    @Query("SELECT * FROM banks ORDER BY updatedAt DESC")
+    // 置顶的排最前，其次按最近更新；归档的由 UI 单独收起，这里一并取出
+    @Query("SELECT * FROM banks ORDER BY pinned DESC, updatedAt DESC")
     fun observeAll(): Flow<List<QuestionBank>>
 
     @Query("SELECT * FROM banks WHERE id = :id")
     suspend fun getById(id: Long): QuestionBank?
+
+    @Query("UPDATE banks SET name = :name, updatedAt = :now WHERE id = :id")
+    suspend fun rename(id: Long, name: String, now: Long)
+
+    @Query("UPDATE banks SET pinned = :pinned, updatedAt = :now WHERE id = :id")
+    suspend fun setPinned(id: Long, pinned: Boolean, now: Long)
+
+    @Query("UPDATE banks SET archived = :archived, updatedAt = :now WHERE id = :id")
+    suspend fun setArchived(id: Long, archived: Boolean, now: Long)
 
     @Insert
     suspend fun insert(bank: QuestionBank): Long

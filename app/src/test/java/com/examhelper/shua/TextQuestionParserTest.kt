@@ -3,8 +3,10 @@ package com.examhelper.shua
 import com.examhelper.shua.data.db.QuestionType
 import com.examhelper.shua.data.parse.TextQuestionParser
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TextQuestionParserTest {
@@ -74,5 +76,111 @@ class TextQuestionParserTest {
     fun decimalNumbersNotQuestions() {
         val text = "给药剂量为1.5毫升，每日2次。"
         assertEquals(0, TextQuestionParser.parse(text).size)
+    }
+
+    @Test
+    fun `题型标签不再被当成章节名`() {
+        // 用户报告：「（一）名词解释」「（三）简答题」被错误识别成章节名
+        val text = """
+            第六章 线粒体遗传
+            一、学习目标
+            掌握线粒体遗传的特点。
+            二、习题
+            （一）名词解释
+            1.纯质性
+            （二）选择题
+            【A1型题】
+            1.mtDNA指
+            A.突变的DNA
+            B.线粒体DNA
+            答案：B
+            （三）简答题
+            2.简述母系遗传的特点。
+            答案：母亲把mtDNA传给所有子女。
+        """.trimIndent()
+        val qs = TextQuestionParser.parse(text)
+        assertTrue("应当解析出题目", qs.isNotEmpty())
+        qs.forEach { q ->
+            val c = q.chapter.orEmpty()
+            assertFalse("章节不该是题型标签：$c", c.contains("名词解释") || c.contains("简答题"))
+            assertTrue("章节应含第六章，实际=$c", c.contains("第六章") || c.contains("线粒体遗传"))
+        }
+    }
+
+    @Test
+    fun `OCR 拆行的第X章与章名能拼回完整章节`() {
+        // 扫描件常见：章号和章名分两行
+        val text = """
+            第六章
+            线粒体遗传
+            1.mtDNA指
+            A.突变的DNA
+            B.线粒体DNA
+            答案：B
+            第七章
+            单基因遗传病
+            2.下列属于常染色体显性遗传的是
+            A.甲病
+            B.乙病
+            答案：A
+        """.trimIndent()
+        val qs = TextQuestionParser.parse(text)
+        assertEquals(2, qs.size)
+        assertTrue("第一章题应归到第六章，实际=${qs[0].chapter}", qs[0].chapter!!.contains("第六章"))
+        assertTrue("章名本体应拼上，实际=${qs[0].chapter}", qs[0].chapter!!.contains("线粒体遗传"))
+        assertTrue("第二章题应归到第七章，实际=${qs[1].chapter}", qs[1].chapter!!.contains("第七章"))
+    }
+
+    @Test
+    fun `章节序号不会因为去前缀而丢失`() {
+        // 用户报告：「章节名前依然会出现第xx章丢失」
+        val text = """
+            第一章 绪论
+            1.第一题
+            A.甲
+            B.乙
+            答案：A
+            第二章 细胞
+            2.第二题
+            A.甲
+            B.乙
+            答案：B
+        """.trimIndent()
+        val qs = TextQuestionParser.parse(text)
+        assertEquals(2, qs.size)
+        assertEquals("第一章 绪论", qs[0].chapter)
+        assertEquals("第二章 细胞", qs[1].chapter)
+    }
+
+    @Test
+    fun `缺失的章节序号按顺序补齐`() {
+        // 第七章那一行 OCR 漏掉了，只剩章名 → 应补成「第七章」
+        val text = """
+            第六章 线粒体遗传
+            1.第一题
+            A.甲
+            B.乙
+            答案：A
+            单基因遗传病
+            2.第二题
+            A.甲
+            B.乙
+            答案：B
+            多基因遗传病
+            3.第三题
+            A.甲
+            B.乙
+            答案：A
+            第九章 群体遗传
+            4.第四题
+            A.甲
+            B.乙
+            答案：B
+        """.trimIndent()
+        val qs = TextQuestionParser.parse(text)
+        assertTrue("应解析出至少 3 题", qs.size >= 3)
+        val chapters = qs.mapNotNull { it.chapter }.distinct()
+        // 补出来的章节必须带章号，且序号连贯
+        assertTrue("章节应全部带章号：$chapters", chapters.all { it.contains("第") && it.contains("章") })
     }
 }

@@ -34,7 +34,7 @@ class SettingsViewModel(
         db.providerDao().observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     data class UiState(
-        val ocrEngine: String = OcrEngine.ML_KIT,
+        val ocrEngine: String = OcrEngine.RAPID_OCR,
         val speedSeconds: Int = 2,
         val sanShengLiuBu: Boolean = false,
         val parseConcurrency: Int = 4,

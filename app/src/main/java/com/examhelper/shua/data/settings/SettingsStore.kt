@@ -13,12 +13,13 @@ private val Context.dataStore by preferencesDataStore(name = "settings")
 
 /** OCR 引擎选项 */
 object OcrEngine {
-    const val ML_KIT = "mlkit"      // 默认，轻量
-    const val RAPID_OCR = "rapidocr" // 高精度（M2 提供）
+    const val ML_KIT = "mlkit"      // 轻量，内置无需额外模型
+    const val RAPID_OCR = "rapidocr" // 默认：高精度（PP-OCRv5 + 版面分析）
 }
 
 data class AppSettings(
-    val ocrEngine: String = OcrEngine.ML_KIT,
+    // 默认走 RapidOCR：中文题库基本是扫描件/照片，ML Kit 对双栏与生僻字明显更差
+    val ocrEngine: String = OcrEngine.RAPID_OCR,
     val speedModeSeconds: Int = 2,
     val sanShengLiuBu: Boolean = false, // 三省六部模式开关
     val parseConcurrency: Int = 4,      // AI 解析分块并发数
@@ -52,7 +53,7 @@ class SettingsStore(private val context: Context) {
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { p ->
         AppSettings(
-            ocrEngine = p[Keys.OCR_ENGINE] ?: OcrEngine.ML_KIT,
+            ocrEngine = p[Keys.OCR_ENGINE] ?: OcrEngine.RAPID_OCR,
             speedModeSeconds = (p[Keys.SPEED_SECONDS] ?: 2).coerceIn(1, 10),
             sanShengLiuBu = p[Keys.SAN_SHENG] ?: false,
             parseConcurrency = (p[Keys.PARSE_CONCURRENCY] ?: 4).coerceIn(1, 8),

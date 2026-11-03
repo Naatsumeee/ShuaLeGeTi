@@ -24,9 +24,14 @@ import com.examhelper.shua.data.model.ParsedLine
 import com.examhelper.shua.data.parse.ChunkPlanner
 import com.examhelper.shua.data.parse.LlmQuestionParser
 import com.examhelper.shua.data.parse.TextQuestionParser
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.encodeToString
@@ -52,6 +57,11 @@ class ImportPipelineWorker(
         const val KEY_CONCURRENCY = "concurrency"
         const val KEY_OCR_ENGINE = "ocrEngine" // "mlkit" / "rapidocr"
         const val CHANNEL_ID = "import_pipeline"
+
+        /** 预览框里保留的模型输出尾巴长度（字符） */
+        private const val STREAM_TAIL_CHARS = 1200
+        /** 流式尾巴落库的最小间隔：模型吐字极快，逐字写 Room 会把 IO 打满 */
+        private const val STREAM_FLUSH_MS = 350L
 
         fun enqueue(
             context: Context,
@@ -115,10 +125,12 @@ class ImportPipelineWorker(
                 updateJob(jobId) {
                     it.copy(stage = "INGEST", message = "正在识别文件内容", totalUnits = 0, doneUnits = 0)
                 }
-                val ocr = if (inputData.getString(KEY_OCR_ENGINE) == "rapidocr") {
-                    com.examhelper.shua.data.ocr.RapidOcrEngine(applicationContext)
-                } else {
+                // 只有显式选了 mlkit 才走 ML Kit；缺省（含旧版本遗留任务）一律 RapidOCR，
+                // 与设置页的默认值保持一致。
+                val ocr = if (inputData.getString(KEY_OCR_ENGINE) == "mlkit") {
                     com.examhelper.shua.data.ocr.MlKitOcrEngine()
+                } else {
+                    com.examhelper.shua.data.ocr.RapidOcrEngine(applicationContext)
                 }
                 val text = DocumentIngestor(applicationContext, ocr).ingest(Uri.parse(uriStr)) { p ->
                     // OCR / 逐页读取阶段也要把进度写回数据库：
@@ -221,13 +233,41 @@ class ImportPipelineWorker(
             var failCount = 0
             var parsedSoFar = JsonCodec.readParsedLines(parsed).size
 
+            // 实时输出尾巴：多段并发同时吐字，这里按「最后写入者」拼接展示，
+            // 只保留末尾 STREAM_TAIL_CHARS 字符（数据库字段不该被几十万字撑爆）。
+            // 回调是同步的（流式 onDelta 在 IO 线程里调用），且 doWork 是 suspend
+            // 但没有可直接 launch 的作用域，所以用独立 scope + 时间戳节流落库。
+            val tailBuffer = StringBuilder()
+            val tailLock = Any()
+            val tailLastFlush = java.util.concurrent.atomic.AtomicLong(0)
+            val tailScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+            val pushTail: (String) -> Unit = { delta ->
+                val snapshot: String? = synchronized(tailLock) {
+                    tailBuffer.append(delta)
+                    if (tailBuffer.length > STREAM_TAIL_CHARS * 2) {
+                        tailBuffer.delete(0, tailBuffer.length - STREAM_TAIL_CHARS)
+                    }
+                    val now = System.currentTimeMillis()
+                    // 节流：模型吐字极快，逐字写 Room 会把 IO 打满
+                    if (now - tailLastFlush.get() < STREAM_FLUSH_MS) {
+                        null
+                    } else {
+                        tailLastFlush.set(now)
+                        tailBuffer.takeLast(STREAM_TAIL_CHARS).toString()
+                    }
+                }
+                if (snapshot != null) {
+                    tailScope.launch { updateJob(jobId) { it.copy(streamTail = snapshot) } }
+                }
+            }
+
             coroutineScope {
                 val semaphore = Semaphore(concurrency)
                 val deferred = pending.map { idx ->
                     async {
                         semaphore.withPermit {
                             if (isStopped) null
-                            else idx to parseChunkWithRetry(parser, provider, chunks[idx])
+                            else idx to parseChunkWithRetry(parser, provider, chunks[idx], pushTail)
                         }
                     }
                 }
@@ -304,10 +344,14 @@ class ImportPipelineWorker(
                 Cost.yuan(u.normalizedCacheHit().toLong(), u.cacheMissTokens.toLong(),
                     u.completionTokens.toLong(), provider.model)
             }.getOrNull()
+            // 收尾：停掉流式尾巴的落库协程，并把预览框的内容清空
+            // （任务已 DONE，预览框要显示的是「已解析题目」，不是模型的原始 JSON）
+            tailScope.cancel()
             updateJob(jobId) {
                 val u = parser.snapshotUsage()
                 it.copy(
                     stage = "DONE", parsedCount = totalParsed,
+                    streamTail = null,
                     cacheHitTokens = u.normalizedCacheHit().toLong(),
                     cacheMissTokens = u.cacheMissTokens.toLong(),
                     outputTokens = u.completionTokens.toLong(),
@@ -345,14 +389,19 @@ class ImportPipelineWorker(
     private suspend fun parseChunkWithRetry(
         parser: LlmQuestionParser,
         provider: com.examhelper.shua.data.db.LlmProvider,
-        chunk: String
+        chunk: String,
+        onDelta: ((String) -> Unit)? = null
     ): List<LlmQuestionParser.QuestionDto> {
         val waits = longArrayOf(0L, 1200L, 3000L)
         var last: List<LlmQuestionParser.QuestionDto> = emptyList()
         for (wait in waits) {
             if (isStopped) return last
             if (wait > 0) kotlinx.coroutines.delay(wait)
-            val r = runCatching { parser.parseChunkText(provider, chunk) }
+            // 只在第一次尝试时接流式预览：重试会把同样的内容再吐一遍，
+            // 预览框里会出现「同一段话重复两次」的观感。
+            val r = runCatching {
+                parser.parseChunkText(provider, chunk, if (wait == 0L) onDelta else null)
+            }
             val list = r.getOrNull()
             if (!list.isNullOrEmpty()) return list
             val msg = r.exceptionOrNull()?.message.orEmpty()

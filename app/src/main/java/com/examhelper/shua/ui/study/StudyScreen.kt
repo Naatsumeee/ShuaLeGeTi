@@ -423,7 +423,14 @@ fun StudyScreen(
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ) {
             AskAiPanel(
-                state = state,
+                state = com.examhelper.shua.ui.study.AskAiState(
+                    chat = state.chat,
+                    asking = state.asking,
+                    askStream = state.askStream,
+                    askError = state.askError,
+                    askModelName = state.askModelName,
+                    deepSolved = state.deepSolved
+                ),
                 onAsk = vm::ask,
                 onClear = vm::clearAsk,
                 onDismiss = { vm.toggleAsk() }

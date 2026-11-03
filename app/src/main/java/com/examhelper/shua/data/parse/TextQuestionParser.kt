@@ -28,6 +28,14 @@ object TextQuestionParser {
     private val sharedOptionsHintRegex = Regex("""共用备选答案|共用选项|备选答案""")
     private val caseStartRegex = Regex("""^(患者|某男|某女|某患|男[，,].{0,3}\d|女[，,].{0,3}\d|病历|病例|一[名位].{0,6}(岁|男|女))""")
     private val pageMarkerRegex = Regex("""^\[\[PG:(\d+)\]\]$""")
+    /**
+     * 「第六章」「第 6 章 线粒体遗传」「第三章 抗菌药物」这类章节标题。
+     *
+     * 扫描件的章标题常被 OCR 拆成两行（「第六章」/「线粒体遗传」），所以组 3
+     * 允许为空——为空时把「第X章」暂存为 pending，等下一行标题本体来了再拼起来。
+     */
+    private val chapterHeadingRegex =
+        Regex("""^\s*第\s*([一二三四五六七八九十百零\d]{1,4})\s*([章节篇卷])\s*[、.．:：]?\s*(.*)$""")
     /** Markdown 标题行 `# xxx` ~ `###### xxx` 当作章节标题；组1=井号、组2=标题（井号后必须有空白，避免误吃题干） */
     private val headingRegex = Regex("""^\s{0,3}(#{1,6})[ \t]+(.*?)[ \t]*#*[ \t]*$""")
 
@@ -47,6 +55,12 @@ object TextQuestionParser {
         var sharedStemBuf = StringBuilder()
         var sharedOptionsBuf = mutableListOf<QuestionOption>()
         var currentPage: Int? = null
+        // OCR 把「第六章」和章名拆成两行时，先把章号暂存，等下一行标题本体拼起来
+        var pendingChapterPrefix: String? = null
+        // 全文是否出现过「第X章 / 第X节」这类真章节标题。
+        // 有 → 题型标签（（一）名词解释）不许顶掉章节名；没有 → 只能拿它当分组。
+        // 必须预扫描：题型标签可能出现在第一个章标题之前。
+        var hasChapterHeading = text.lineSequence().any { chapterHeadingRegex.containsMatchIn(it) }
 
         fun flush() {
             current?.let { q ->
@@ -85,12 +99,58 @@ object TextQuestionParser {
                 appendingTo = 0
                 continue
             }
+            // 章节标题：「第X章 / 第X节」优先，且**保留完整章号**。
+            // 旧代码用 trimStart('第','一'…'十') 削前缀，会把「第六章」削成「章」，
+            // 章节序号就此丢失（用户报的「章节名前依然会出现第xx章丢失」）。
+            val chm = chapterHeadingRegex.find(line)
+            if (chm != null) {
+                flush()
+                headingStack.clear()
+                val no = chm.groupValues[1]
+                val unit = chm.groupValues[2]
+                val title = chm.groupValues[3].trim()
+                val prefix = "第$no$unit"
+                hasChapterHeading = true
+                if (title.isBlank()) {
+                    // OCR 把章号和章名拆成两行：先记下章号，等下一行拼
+                    pendingChapterPrefix = prefix
+                    currentSection = prefix
+                } else {
+                    pendingChapterPrefix = null
+                    currentSection = "$prefix $title"
+                }
+                appendingTo = 0
+                continue
+            }
+            // 上一行只拿到「第六章」，本行就是章名本体
+            val pendingPrefix = pendingChapterPrefix
+            if (pendingPrefix != null) {
+                pendingChapterPrefix = null
+                if (!looksLikeQuestionOrSection(line)) {
+                    currentSection = "$pendingPrefix $line"
+                    appendingTo = 0
+                    continue
+                }
+                // 本行不是章名（直接就是题目/小节），章号单独成立
+                currentSection = pendingPrefix
+            }
             if (sectionRegex.matches(line)) {
                 flush()
-                // 纯文本的「第一章 / 一、」是平铺结构，不再继承 Markdown 标题链
+                // 纯文本的「一、」「（一）」是题型/小节分组。
+                // 关键区分：
+                //  · 文件里**有**「第X章」→ 题型标签不能顶掉章节名（用户报的
+                //    「（一）名词解释 被当成章节名」）；
+                //  · 文件里**没有**任何章标题 → 只能退而用「一、单项选择题」当分组，
+                //    否则所有题都成了无章节。
                 headingStack.clear()
-                currentSection = line.trimStart('第', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十', ' ', '、', '.', '（', '）', '(', ')')
+                val label = line.trimStart('一', '二', '三', '四', '五', '六', '七', '八', '九', '十', ' ', '、', '.', '（', '）', '(', ')')
                     .ifBlank { line }
+                if (isTypeHeading(label) || isTypeHeading(line)) {
+                    if (!hasChapterHeading && currentSection.isNullOrBlank()) currentSection = label
+                } else if (currentSection.isNullOrBlank() || !hasChapterHeading) {
+                    currentSection = label
+                }
+                appendingTo = 0
                 continue
             }
 
@@ -178,7 +238,80 @@ object TextQuestionParser {
             }
         }
         flush()
+        return fillMissingChapterNumbers(questions)
+    }
+
+    /**
+     * 按出现顺序补齐缺失的章节序号。
+     *
+     * 场景：OCR 把「第七章」那一行漏掉，或整章标题没被识别出来，结果章节序列
+     * 变成 第六章 → 线粒体遗传 / 单基因遗传病 / 多基因遗传病 / 第八章 ……
+     * 用户希望「前后数字能连得上」，所以这里把没有章号的章节按序插补成
+     * 第七章、第八章……（只在**明确缺失**的位置补，已有的序号一律不动）。
+     */
+    private fun fillMissingChapterNumbers(questions: List<ParsedQuestion>): List<ParsedQuestion> {
+        if (questions.isEmpty()) return questions
+        // 按出现顺序收集不重复的章节名
+        val order = LinkedHashSet<String>()
+        questions.forEach { q -> q.chapter?.takeIf { it.isNotBlank() }?.let { order += it } }
+        if (order.size < 2) return questions
+
+        val numbered = order.map { it to chapterNumber(it) }
+        val known = numbered.mapNotNull { it.second }
+        // 至少要有一个带章号的，否则无从推断
+        if (known.isEmpty()) return questions
+
+        val fixed = mutableListOf<String>()
+        var expected: Int? = null   // null = 还没遇到第一个带章号的章节，无从推断
+        for ((name, no) in numbered) {
+            if (no != null) {
+                expected = no
+                fixed += name
+            } else if (expected == null) {
+                // 第一个带章号的章节之前，无法推断，原样保留
+                fixed += name
+            } else {
+                expected += 1
+                fixed += "第${chineseNumber(expected!!)}章 $name"
+            }
+        }
+        val mapping = order.zip(fixed).toMap()
+        questions.forEach { q ->
+            q.chapter?.let { c -> mapping[c]?.let { q.chapter = it } }
+        }
         return questions
+    }
+
+    /** 从章节名里取出章号（阿拉伯或中文数字）；取不到返回 null */
+    private fun chapterNumber(name: String): Int? {
+        val m = Regex("""第\s*([一二三四五六七八九十百零\d]{1,4})\s*[章节篇卷]""").find(name) ?: return null
+        return parseChineseNumber(m.groupValues[1])
+    }
+
+    private fun parseChineseNumber(s: String): Int? {
+        s.toIntOrNull()?.let { return it }
+        val digit = mapOf(
+            '一' to 1, '二' to 2, '三' to 3, '四' to 4, '五' to 5,
+            '六' to 6, '七' to 7, '八' to 8, '九' to 9
+        )
+        if (s.length == 1) return digit[s[0]]
+        // 十、十一、二十、二十三 ……
+        if (s.startsWith("十")) return 10 + (digit[s.getOrNull(1)] ?: 0)
+        val idx = s.indexOf('十')
+        if (idx > 0) {
+            val tens = digit[s[idx - 1]] ?: return null
+            val ones = if (idx + 1 < s.length) digit[s[idx + 1]] ?: 0 else 0
+            return tens * 10 + ones
+        }
+        return null
+    }
+
+    private fun chineseNumber(n: Int): String {
+        if (n <= 10) return listOf("一", "二", "三", "四", "五", "六", "七", "八", "九", "十")[n - 1]
+        if (n < 20) return "十" + chineseNumber(n - 10)
+        val tens = n / 10
+        val ones = n % 10
+        return chineseNumber(tens) + "十" + if (ones == 0) "" else chineseNumber(ones)
     }
 
     /** 避免把 "3.5厘米"、"2023.1" 之类识别为题号 */
@@ -260,6 +393,15 @@ object TextQuestionParser {
         val t = title.replace(" ", "")
         if (t.length > 14) return false
         return typeHeadingKeywords.any { t.contains(it) }
+    }
+
+    /** 该行是否已经是题目/选项/答案等实质内容（用于判断「第六章」下一行到底是不是章名） */
+    private fun looksLikeQuestionOrSection(line: String): Boolean {
+        if (line.length > 30) return true
+        if (questionStartRegex.find(line)?.let { !isLikelyNotQuestion(it) } == true) return true
+        if (answerRegex.matches(line) || analysisRegex.matches(line)) return true
+        if (optionTightRegex.matches(line)) return true
+        return false
     }
 
     private val typeHeadingKeywords = listOf(

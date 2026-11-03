@@ -88,6 +88,27 @@ fun AskAiButton(compact: Boolean, active: Boolean, onClick: () -> Unit) {
 }
 
 /**
+ * 问 AI 面板的最小状态。
+ *
+ * 刻意不直接吃 [StudyUiState]：首页也要用同一个面板（题库列表页问 AI），
+ * 但它没有「当前题目 / 深度解题」这些概念。抽成小结构体后两处共用一套 UI，
+ * 样式与交互天然保持一致。
+ */
+data class AskAiState(
+    val chat: List<ChatTurn> = emptyList(),
+    val asking: Boolean = false,
+    val askStream: String = "",
+    val askError: String? = null,
+    val askModelName: String? = null,
+    /** 深度解题之后的面板提示语；首页没有这层，传 null */
+    val deepSolved: Boolean = false,
+    /** 副标题提示。null 时按 deepSolved 自动选 */
+    val hint: String? = null,
+    /** 输入框占位提示 */
+    val placeholder: String = "追问这道题…"
+)
+
+/**
  * 追问面板（底部弹层）。
  *
  * 深度解题之后这里就是"继续问"的入口，也可以不深度解题直接问。对话只属于当前题目，
@@ -95,7 +116,7 @@ fun AskAiButton(compact: Boolean, active: Boolean, onClick: () -> Unit) {
  */
 @Composable
 fun AskAiPanel(
-    state: StudyUiState,
+    state: AskAiState,
     onAsk: (String) -> Unit,
     onClear: () -> Unit,
     onDismiss: () -> Unit
@@ -163,7 +184,7 @@ fun AskAiPanel(
         }
         Spacer(Modifier.padding(top = 2.dp))
         Text(
-            if (state.deepSolved) "已深度解题，可以继续追问考点、易错点或相似题"
+            state.hint ?: if (state.deepSolved) "已深度解题，可以继续追问考点、易错点或相似题"
             else "就当前这道题提问，例如「为什么不选 C」「这题考的什么」",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -249,7 +270,7 @@ fun AskAiPanel(
                 onValueChange = { input = it.take(500) },
                 modifier = Modifier.weight(1f),
                 placeholder = {
-                    Text("追问这道题…", style = MaterialTheme.typography.bodySmall)
+                    Text(state.placeholder, style = MaterialTheme.typography.bodySmall)
                 },
                 textStyle = MaterialTheme.typography.bodyMedium,
                 shape = RoundedCornerShape(14.dp),

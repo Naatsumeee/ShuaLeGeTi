@@ -40,7 +40,11 @@ data class QuestionBank(
     val sourceFileName: String? = null,
     val questionCount: Int = 0,
     val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    /** 置顶：首页列表里始终排在最前（长按菜单） */
+    val pinned: Boolean = false,
+    /** 归档：默认收进「显示已归档题库」里，不占主列表（长按菜单） */
+    val archived: Boolean = false
 )
 
 /** 题目。选项/分歧等复杂字段以 JSON 字符串存储，由仓库层编解码。 */
@@ -226,6 +230,11 @@ data class ImportJob(
     val balanceBefore: Double? = null,
     val balanceAfter: Double? = null,
     val balanceCurrency: String? = null,
+    /**
+     * AI 解析时模型的实时输出尾巴（只保留最近一小段，用于导入页的「生成过程预览」）。
+     * 不落完整输出：一次导入可能几十万字符，全存进数据库既占空间也没人看。
+     */
+    val streamTail: String? = null,
     val errorMessage: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()

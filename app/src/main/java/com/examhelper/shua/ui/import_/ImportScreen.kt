@@ -5,6 +5,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -424,6 +427,12 @@ fun ImportScreen(
                             }
                         }
                     }
+                    // 生成过程预览：模型正在写什么，一眼能看到。
+                    // 固定高度 + 内部滚动，不铺满整页，也不让下方「已解析」列表跟着抖。
+                    val tail = job?.streamTail
+                    if (!tail.isNullOrBlank() && job?.stage == "PARSE") {
+                        StreamPreviewCard(tail)
+                    }
                     if (state.log.isNotEmpty()) {
                         state.log.takeLast(5).forEach { line ->
                             Text(
@@ -557,6 +566,58 @@ private fun EngineTab(text: String, selected: Boolean, modifier: Modifier = Modi
 
 private fun Modifier.clickableTab(onClick: () -> Unit): Modifier =
     this.then(Modifier.clickable(onClick = onClick))
+
+/**
+ * 生成过程预览：AI 解析时模型正在写的原始输出。
+ *
+ * 设计取舍：
+ * - **固定高度**（不铺满页面）——解析要跑几分钟，预览框抢走整屏会让人没法看下面的进度；
+ * - 内部可滚动且默认停在底部，最新一行始终可见；
+ * - 等宽小字 + 低对比，明确它只是「过程」，不是最终结果。
+ */
+@Composable
+private fun StreamPreviewCard(tail: String) {
+    val extra = shuaColors
+    val scroll = rememberScrollState()
+    LaunchedEffect(tail) { scroll.animateScrollTo(scroll.maxValue) }
+    PaperCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(15.dp)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "生成过程",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = extra.terracottaDeep
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "模型实时输出 · 仅预览",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            }
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(132.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+            ) {
+                Text(
+                    text = tail,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(scroll)
+                        .padding(horizontal = 9.dp, vertical = 7.dp),
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        lineHeight = 16.sp
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
 
 @Composable
 private fun ParsedCard(index: Int, q: ParsedLine) {
