@@ -4,6 +4,7 @@ package com.examhelper.shua.ui.study
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
@@ -281,6 +282,20 @@ fun StudyScreen(
                     val pageWidth = remember { mutableIntStateOf(0) }
                     val w = pageWidth.intValue.toFloat().coerceAtLeast(1f)
                     var drag by remember { mutableFloatStateOf(0f) }
+                    /**
+                     * 按钮翻页的驱动信号：每点一次 `flipTick` 自增，`LaunchedEffect(flipTick)`
+                     * 就会重启协程播一段滑出动画。方向存在 [flipDir]。
+                     *
+                     * 旧实现用 `var flipping` 做互斥（`if (flipping) { 排队; return }`）。
+                     * 只要有一次协程没跑到 `flipping = false`（重组把旧闭包丢掉、动画被打断、
+                     * 协程所在的 scope 被取消），这个标志就永久为 true，之后每一次点按钮
+                     * 都只排队、永远不播动画 —— 用户看到的就是「按钮翻页动画依然消失」。
+                     * 改成 tick 驱动后，Compose 自己负责取消与重启：旧的协程被取消时
+                     * `drag` 停在半路，新的从当前位置续滑，连点也不会跳帧，也不需要互斥。
+                     */
+                    var flipTick by remember { mutableIntStateOf(0) }
+                    /** +1 = 向后翻 / -1 = 向前翻，配合 [flipTick] 使用 */
+                    var flipDir by remember { mutableIntStateOf(1) }
                     // 翻页「交接」：滑出动画走完的瞬间把带子拍成快照、并把 drag 归零。
                     // 因为快照里目标题已经站在 0 位，这一步在屏幕上一帧都不变；
                     // 等 VM reload() 把新题装载好再撤掉快照，真实内容正好与快照重合。
@@ -321,39 +336,74 @@ fun StudyScreen(
                     // 内容瞬间替换、没有任何过渡；用户感知就是「点按钮丢动画」。
                     // 这里把按钮也接到跟手动画的同一条路径上：先滑出当前卡，
                     // 滑出完成的那一帧换内容，视觉上就和手势滑动完全一致。
-                    val flipScope = rememberCoroutineScope()
-                    fun flipForward() {
-                        if (frozen) return
+
+                    /**
+                     * 按钮翻页。
+                     *
+                     * 旧实现有三个让动画「看起来消失」的点，逐个修掉：
+                     *
+                     * 1. **宽度取的是组合时的快照**。`w` 是局部 val，第一次组合时
+                     *    `pageWidth` 还是 0（`onSizeChanged` 要等布局），此时 `w = 1f`，
+                     *    `animateTo(-1f)` 只挪 1 像素 —— 视觉上就是瞬切。现在进协程后
+                     *    直接读 `pageWidth.intValue`（mutableIntState，拿到的是最新布局值）。
+                     * 2. **150ms + FastOutLinearInEasing 太冲**。这条贝塞尔曲线前 20% 时间
+                     *    就走完 60% 位移，在 120Hz 屏上只有十几帧，观感等同"啪"地跳过去。
+                     *    换成 260ms + FastOutSlowInEasing，起步柔和、落点稳定。
+                     * 3. **滑出距离 = 一整屏**。若上一帧 `drag` 已经接近 -w，动画距离趋近 0，
+                     *    看起来就没有动画。现在至少保证滑出 `0.9w` 的有效行程。
+                     *
+                     * 为什么还要换成「tick + LaunchedEffect」而不是 `scope.launch{}`：
+                     * 上一版用 `var flipping` 做互斥，`if (flipping) { 排队; return }`。
+                     * 只要有一次协程没跑到 `flipping = false`（比如重组把旧闭包丢掉、
+                     * 或动画被打断），这个标志就永久为 true，之后每一次点按钮都只排队、
+                     * 永远不播动画 —— 用户看到的正是「按钮翻页动画依然消失」。
+                     * 现在让 Compose 自己管：`flipTick` 只增不减，`LaunchedEffect(flipTick)`
+                     * 每次点击重启协程，旧的自动取消；取消时 `drag` 停在半路，
+                     * 新的从当前位置继续滑，连点也不会跳帧。
+                     */
+
+                    fun runFlip(dir: Int) {
+                        flipDir = dir
+                        flipTick += 1
+                    }
+
+                    LaunchedEffect(flipTick) {
+                        if (flipTick == 0) return@LaunchedEffect
+                        val dir = flipDir
+                        val target = if (dir > 0) liveNext else livePrev
+                        if (target == null) return@LaunchedEffect
                         val cur = session?.question
-                        val nxt = liveNext ?: return
-                        flipScope.launch {
-                            Animatable(drag).animateTo(
-                                -w, tween(150, easing = FastOutLinearInEasing)
-                            ) { drag = value }
-                            snapCur = nxt
+                        // 协程内读取：拿到的是此刻真实的布局宽度，而不是组合时的 1f
+                        val width = pageWidth.intValue.toFloat().coerceAtLeast(1f)
+                        val from = drag
+                        val to = if (dir > 0) {
+                            // 保证有效行程：起点太靠右时先把目标压到 -(from + 0.9w)
+                            minOf(-width, from - width * 0.9f)
+                        } else {
+                            maxOf(width, from + width * 0.9f)
+                        }
+                        animate(
+                            initialValue = from,
+                            targetValue = to,
+                            animationSpec = tween(260, easing = FastOutSlowInEasing)
+                        ) { v, _ -> drag = v }
+                        // 交接：目标题此刻正好站在 0 位，把它拍成快照后 drag 归零，
+                        // 屏幕一帧都不闪；等 VM reload() 回来再撤快照。
+                        if (dir > 0) {
+                            snapCur = snapNext ?: liveNext
                             snapPrev = cur
                             snapNext = null
-                            frozen = true
-                            drag = 0f
-                            vm.next()
-                        }
-                    }
-                    fun flipBackward() {
-                        if (frozen) return
-                        val cur = session?.question
-                        val prv = livePrev ?: return
-                        flipScope.launch {
-                            Animatable(drag).animateTo(
-                                w, tween(150, easing = FastOutLinearInEasing)
-                            ) { drag = value }
-                            snapCur = prv
+                        } else {
+                            snapCur = snapPrev ?: livePrev
                             snapPrev = null
                             snapNext = cur
-                            frozen = true
-                            drag = 0f
-                            vm.prev()
                         }
+                        frozen = true
+                        drag = 0f
+                        if (dir > 0) vm.next() else vm.prev()
                     }
+                    fun flipForward() = runFlip(1)
+                    fun flipBackward() = runFlip(-1)
 
                     Box(
                         Modifier
@@ -406,12 +456,15 @@ fun StudyScreen(
                                     dragStartAt = 0L
                                     when {
                                         goNext -> {
+                                            // 手势翻页给一记震动；按钮翻页在 BottomControls 里给，
+                                            // ViewModel 的 next()/prev() 不再震（否则一次点两次响）
+                                            com.examhelper.shua.ui.sound.Haptics.tick()
                                             // 先拍快照再滑出：滑到 -w 时目标题正好补位到 0，
                                             // 于是"滑出完成"与"内容交接"是同一个画面
                                             val cur = session?.question
                                             val nxt = liveNext
                                             Animatable(drag).animateTo(
-                                                -w, tween(150, easing = FastOutLinearInEasing)
+                                                -w, tween(260, easing = FastOutSlowInEasing)
                                             ) { drag = value }
                                             snapCur = nxt
                                             snapPrev = cur
@@ -421,10 +474,11 @@ fun StudyScreen(
                                             vm.next()
                                         }
                                         goPrev -> {
+                                            com.examhelper.shua.ui.sound.Haptics.tick()
                                             val cur = session?.question
                                             val prv = livePrev
                                             Animatable(drag).animateTo(
-                                                w, tween(150, easing = FastOutLinearInEasing)
+                                                w, tween(260, easing = FastOutSlowInEasing)
                                             ) { drag = value }
                                             snapCur = prv
                                             snapPrev = null

@@ -97,20 +97,19 @@ class SettingsViewModel(
         if (v) Haptics.ok() // 打开时给一次触感试听
     }
 
+    /**
+     * 强度 1-10：只写振幅，预览震动由设置页的滑块（每跨一档）触发，
+     * 这里不再额外震 —— 否则拖一次滑块会连成一片「嗡嗡」。
+     */
     fun setHapticStrength(v: Int) = viewModelScope.launch {
         settingsStore.setHapticStrength(v)
         Haptics.setStrength(v)
-        // 停 60ms 再震：连续两次震动若首尾相接，多数 ROM 会合并成一次，
-        // 用户根本分不出前后差异（这就是"调了强度没感觉"的观感来源之一）
-        kotlinx.coroutines.delay(60)
-        Haptics.tick()
     }
 
+    /** 时长 1-10：只写毫秒，预览同样交给设置页滑块 */
     fun setHapticDuration(v: Int) = viewModelScope.launch {
         settingsStore.setHapticDuration(v)
         Haptics.setDuration(v)
-        kotlinx.coroutines.delay(60)
-        Haptics.tick()
     }
 
     /** null = 跟随系统；true/false = 强制橄榄夜读 / 暖纸 */

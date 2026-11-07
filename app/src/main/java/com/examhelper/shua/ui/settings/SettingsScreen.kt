@@ -35,6 +35,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
@@ -45,6 +46,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -68,6 +71,8 @@ import com.examhelper.shua.ui.theme.SectionLabel
 import com.examhelper.shua.ui.theme.SemanticChip
 import com.examhelper.shua.ui.theme.serifTitle
 import com.examhelper.shua.ui.theme.shuaColors
+import com.examhelper.shua.ui.sound.Haptics
+import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.first
 
 private const val AUTHOR = "@Natsume"
@@ -133,92 +138,30 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                         if (ui.hapticEnabled) {
                             DividerLine()
                             Column(Modifier.padding(14.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                // 转子马达（或系统禁用了振幅控制）时，amplitude 会被系统忽略，
+                                // 「强度」滑块怎么拖都是同一个手感。与其让用户反复试，
+                                // 不如在这里直说 —— 这正是以前「强度调节失效」最容易被误判的来源。
+                                if (!Haptics.supportsAmplitude()) {
                                     Text(
-                                        "震动强度",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Medium,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    MonoText(
-                                        when (ui.hapticStrength) {
-                                            1 -> "轻"
-                                            3 -> "强"
-                                            else -> "中"
-                                        },
-                                        color = extra.terracotta
+                                        "当前设备的马达不支持振幅调节，强度滑块可能感觉不出差别，时长仍然有效。",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = extra.amber,
+                                        modifier = Modifier.padding(bottom = 10.dp)
                                     )
                                 }
-                                Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
-                                    listOf(1 to "轻", 2 to "中", 3 to "强").forEach { (level, label) ->
-                                        val active = ui.hapticStrength == level
-                                        Box(
-                                            Modifier
-                                                .weight(1f)
-                                                .padding(horizontal = 3.dp)
-                                                .clip(RoundedCornerShape(10.dp))
-                                                .background(
-                                                    if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
-                                                    else MaterialTheme.colorScheme.surfaceVariant
-                                                )
-                                                .clickable { vm.setHapticStrength(level) }
-                                                .padding(vertical = 9.dp),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Text(
-                                                label,
-                                                style = MaterialTheme.typography.labelLarge,
-                                                color = if (active) MaterialTheme.colorScheme.primary
-                                                else MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                    }
-                                }
-                                // 震动时长：短 / 标准 / 长
-                                Row(
-                                    Modifier.fillMaxWidth().padding(top = 12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        "震动时长",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Medium,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    MonoText(
-                                        when (ui.hapticDuration) {
-                                            1 -> "短"
-                                            3 -> "长"
-                                            else -> "标准"
-                                        },
-                                        color = extra.terracotta
-                                    )
-                                }
-                                Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
-                                    listOf(1 to "短", 2 to "标准", 3 to "长").forEach { (level, label) ->
-                                        val active = ui.hapticDuration == level
-                                        Box(
-                                            Modifier
-                                                .weight(1f)
-                                                .padding(horizontal = 3.dp)
-                                                .clip(RoundedCornerShape(10.dp))
-                                                .background(
-                                                    if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
-                                                    else MaterialTheme.colorScheme.surfaceVariant
-                                                )
-                                                .clickable { vm.setHapticDuration(level) }
-                                                .padding(vertical = 9.dp),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Text(
-                                                label,
-                                                style = MaterialTheme.typography.labelLarge,
-                                                color = if (active) MaterialTheme.colorScheme.primary
-                                                else MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                    }
-                                }
+                                HapticSliderRow(
+                                    title = "震动强度",
+                                    hint = "只影响振幅（震得多重）",
+                                    value = ui.hapticStrength,
+                                    onChange = vm::setHapticStrength
+                                )
+                                Spacer(Modifier.height(14.dp))
+                                HapticSliderRow(
+                                    title = "震动时长",
+                                    hint = "只影响毫秒（震得多长）",
+                                    value = ui.hapticDuration,
+                                    onChange = vm::setHapticDuration
+                                )
                             }
                         }
                         DividerLine()
@@ -582,6 +525,66 @@ private fun DividerLine() {
             .height(1.dp)
             .background(shuaColors.creamLine)
     )
+}
+
+/**
+ * 1–10 档震动滑块。
+ *
+ * 为什么用滑块而不是三档 chip：用户明确要求「改成 1-10 档滑动条，划到哪就按
+ * 设置后的情况震一下作预览」。拖动过程中每跨一档就震一次（值真的变了才震），
+ * 这样调的时候手里能立刻感觉到这一档是什么手感。
+ */
+@Composable
+private fun HapticSliderRow(
+    title: String,
+    hint: String,
+    value: Int,
+    onChange: (Int) -> Unit
+) {
+    val extra = shuaColors
+    // 用 float 承载滑块位置，松手/跨档时再取整，避免 Slider 抖动
+    var pos by remember(value) { mutableFloatStateOf(value.toFloat()) }
+    var lastPreview by remember { mutableIntStateOf(value) }
+    Column(Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.weight(1f)
+            )
+            MonoText("$value / 10", color = extra.terracotta)
+        }
+        Text(
+            hint,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.outline
+        )
+        Slider(
+            value = pos,
+            onValueChange = { f ->
+                pos = f
+                val v = f.roundToInt().coerceIn(1, 10)
+                if (v != value) {
+                    onChange(v)
+                    // 预览：每跨一档震一下，跟着手指走
+                    if (v != lastPreview) {
+                        lastPreview = v
+                        Haptics.preview()
+                    }
+                }
+            },
+            onValueChangeFinished = { onChange(pos.roundToInt().coerceIn(1, 10)) },
+            valueRange = 1f..10f,
+            steps = 8,   // 10 个整点之间的 8 个刻度
+            modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+            colors = SliderDefaults.colors(
+                thumbColor = extra.terracotta,
+                activeTrackColor = extra.terracotta,
+                inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        )
+    }
 }
 
 @Composable

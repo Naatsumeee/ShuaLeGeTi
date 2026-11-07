@@ -187,11 +187,21 @@ object ChunkPlanner {
     private fun isSectionLineAt(lines: List<String>, idx: Int, section: String): Boolean =
         idx in lines.indices && sectionKey(lines[idx]) == sectionKey(section)
 
-    /** 该行所属的章节标题（向前回溯最近的一行章节标题） */
+    /**
+     * 该行所属的章节标题（向前回溯最近的一行**真**章节标题）。
+     *
+     * 这里必须跳过题型分组标题（「（一）名词解释」「一、单项选择题」）：
+     * AI 解析链路的分块上下文就是用它算出来的，旧实现只认「长得像标题」，
+     * 于是题型标题被当成 section 传给模型，模型照着写进 chapter 字段，
+     * 落库后章节名里就带着「（一）名词解释」—— 用户报了很多次的那个 bug。
+     * 现在与 [TextQuestionParser] 共用 [HeadingClassifier] 的判定。
+     */
     private fun sectionOf(lines: List<String>, from: Int = 0): String? {
         var i = from.coerceAtLeast(0)
         while (i >= 0) {
-            if (isSectionStart(lines[i])) return lines[i].trim()
+            if (isSectionStart(lines[i]) && !HeadingClassifier.isPureTypeHeading(lines[i])) {
+                return lines[i].trim()
+            }
             // 超过 200 行还没找到就当没有（避免整篇回溯）
             if (from - i > 200) return null
             i--
@@ -259,9 +269,12 @@ object ChunkPlanner {
         s.trim().trimStart('#').trim().replace(chapterPrefixRe, "").trim()
 
     fun resolveChapter(section: String?, parsed: String?): String? {
-        val sec = section?.trim()?.trimStart('#')?.trim()?.takeIf { it.isNotEmpty() }
-            ?: return parsed?.trim()?.trimStart('#')?.trim()?.takeIf { it.isNotEmpty() }
-        val got = parsed?.trim()?.trimStart('#')?.trim()?.takeIf { it.isNotEmpty() } ?: return sec
+        // 模型有时候会把「（一）名词解释」这类题型分组标题塞进 chapter，直接丢掉
+        val rawSection = section?.let { HeadingClassifier.cleanChapter(it) }
+        val parsedClean = parsed?.let { HeadingClassifier.cleanChapter(it) }
+        val sec = rawSection?.takeIf { it.isNotEmpty() }
+            ?: return parsedClean?.takeIf { it.isNotEmpty() }
+        val got = parsedClean?.takeIf { it.isNotEmpty() } ?: return sec
         val ks = sectionKey(sec)
         val kg = sectionKey(got)
         if (ks == kg) return sec

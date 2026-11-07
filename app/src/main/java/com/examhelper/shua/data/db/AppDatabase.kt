@@ -36,7 +36,7 @@ class Converters {
         ImportJob::class,
         GenerateJob::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -177,6 +177,44 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v9 → v10：把历史题库里被写坏的章节名洗一遍。
+         *
+         * 「章节名带（一）名词解释」这个 bug 从 v1.0.0 就存在，只修解析器的话，
+         * 用户手机里**已经导入**的题库仍然是错的，必须重新导入才能好 —— 而重导一本
+         * 扫描件要 OCR 十几分钟。所以这里在升级时直接把库里的脏章节名就地洗掉：
+         * 题型分组/章内小节目录 → NULL（未分章），「章名（一）名词解释」→ 只留章名。
+         *
+         * 干净的名字原样不动，所以对有章号的正规题库零影响。
+         */
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val pending = mutableListOf<Pair<Long, String?>>()
+                db.query(
+                    "SELECT id, chapter FROM questions " +
+                        "WHERE chapter IS NOT NULL AND TRIM(chapter) != ''"
+                ).use { c ->
+                    while (c.moveToNext()) {
+                        val id = c.getLong(0)
+                        val raw = c.getString(1) ?: continue
+                        val cleaned = com.examhelper.shua.data.parse.HeadingClassifier
+                            .cleanChapter(raw)
+                        if (cleaned != raw) pending += id to cleaned
+                    }
+                }
+                pending.forEach { (id, cleaned) ->
+                    if (cleaned == null) {
+                        db.execSQL("UPDATE questions SET chapter = NULL WHERE id = ?", arrayOf(id))
+                    } else {
+                        db.execSQL(
+                            "UPDATE questions SET chapter = ? WHERE id = ?",
+                            arrayOf(cleaned, id)
+                        )
+                    }
+                }
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -189,7 +227,8 @@ abstract class AppDatabase : RoomDatabase() {
                 )
                     .addMigrations(
                         MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
-                        MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9
+                        MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+                        MIGRATION_9_10
                     )
                     .fallbackToDestructiveMigration()
                     .build()

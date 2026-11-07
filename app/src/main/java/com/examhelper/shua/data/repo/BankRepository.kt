@@ -14,6 +14,7 @@ import com.examhelper.shua.data.model.JsonCodec
 import com.examhelper.shua.data.model.ParsedQuestion
 import com.examhelper.shua.data.model.ShuaBankFile
 import com.examhelper.shua.data.model.ShuaQuestionJson
+import com.examhelper.shua.data.parse.HeadingClassifier
 import kotlinx.coroutines.flow.Flow
 
 class BankRepository(
@@ -46,10 +47,14 @@ class BankRepository(
         val (judgeOpts, judgeAns) = JudgeOptions.normalize(type, options, answer)
         val finalOptions = if (type == QuestionType.JUDGE) judgeOpts else options
         val finalAnswer = if (type == QuestionType.JUDGE) judgeAns else answer
+        // 章节名最后一道闸：所有导入路径（正则 / AI / JSON）都会走到这里。
+        // 「（一）名词解释」「一、单项选择题」这类题型分组标题不是章节，
+        // cleanChapter 会把它们判成 null（未分章），或把「第三章 名词解释」压成「第三章」。
+        val finalChapter = HeadingClassifier.cleanChapter(chapter)
         return Question(
             bankId = bankId,
             orderInBank = order,
-            chapter = chapter,
+            chapter = finalChapter,
             type = type,
             subtype = subtype,
             stem = stem,

@@ -29,7 +29,7 @@ data class AppSettings(
     /** 震动强度：1=轻 2=中 3=强 */
     val hapticStrength: Int = 2,
     /** 震动时长：1=短 2=标准 3=长 */
-    val hapticDuration: Int = 1,
+    val hapticDuration: Int = 2,
     /** 暗黑护眼（橄榄柔光夜读）模式；null = 跟随系统 */
     val darkMode: Boolean? = null,
     /** 自定义系统提示词（空 = 默认） */
@@ -62,8 +62,8 @@ class SettingsStore(private val context: Context) {
             parseConcurrency = (p[Keys.PARSE_CONCURRENCY] ?: 4).coerceIn(1, 8),
             fontScale = (p[Keys.FONT_SCALE] ?: 1.0f).coerceIn(0.8f, 1.5f),
             hapticEnabled = p[Keys.HAPTIC_ENABLED] ?: true,
-            hapticStrength = (p[Keys.HAPTIC_STRENGTH] ?: 2).coerceIn(1, 3),
-            hapticDuration = (p[Keys.HAPTIC_DURATION] ?: 1).coerceIn(1, 3),
+            hapticStrength = (p[Keys.HAPTIC_STRENGTH] ?: 2).coerceIn(1, 10),
+            hapticDuration = (p[Keys.HAPTIC_DURATION] ?: 2).coerceIn(1, 10),
             darkMode = when (p[Keys.DARK_MODE]) {
                 "on" -> true
                 "off" -> false
@@ -81,8 +81,8 @@ class SettingsStore(private val context: Context) {
     suspend fun setParseConcurrency(v: Int) = context.dataStore.edit { it[Keys.PARSE_CONCURRENCY] = v.coerceIn(1, 8) }
     suspend fun setFontScale(v: Float) = context.dataStore.edit { it[Keys.FONT_SCALE] = v.coerceIn(0.8f, 1.5f) }
     suspend fun setHapticEnabled(v: Boolean) = context.dataStore.edit { it[Keys.HAPTIC_ENABLED] = v }
-    suspend fun setHapticStrength(v: Int) = context.dataStore.edit { it[Keys.HAPTIC_STRENGTH] = v.coerceIn(1, 3) }
-    suspend fun setHapticDuration(v: Int) = context.dataStore.edit { it[Keys.HAPTIC_DURATION] = v.coerceIn(1, 3) }
+    suspend fun setHapticStrength(v: Int) = context.dataStore.edit { it[Keys.HAPTIC_STRENGTH] = v.coerceIn(1, 10) }
+    suspend fun setHapticDuration(v: Int) = context.dataStore.edit { it[Keys.HAPTIC_DURATION] = v.coerceIn(1, 10) }
     suspend fun setDarkMode(v: Boolean?) = context.dataStore.edit {
         it[Keys.DARK_MODE] = when (v) {
             true -> "on"

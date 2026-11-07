@@ -356,8 +356,10 @@ object TextQuestionParser {
                 // Markdown 题库常见 `# 第一章` → `## 单项选择题` → 题目，
                 // 若把「单项选择题」当章节，同一章的题会被拆成好几组，按章节刷题就散了。
                 val chain = headingStack.toSortedMap().values.filter { it.isNotBlank() }
-                currentSection = chain.lastOrNull { !isTypeHeading(it) }
-                    ?: chain.lastOrNull()
+                // 连 lastOrNull 的兜底也不要题型标题：宁可回到「上一级标题/未分章」，
+                // 也不能把「## 单项选择题」当成章节名落库。
+                currentSection = chain.lastOrNull { !HeadingClassifier.isPureTypeHeading(it) }
+                    ?.let { HeadingClassifier.cleanChapter(it) }
                 appendingTo = 0
                 continue
             }
@@ -429,10 +431,15 @@ object TextQuestionParser {
                 headingStack.clear()
                 val label = line.trimStart('一', '二', '三', '四', '五', '六', '七', '八', '九', '十', ' ', '、', '.', '（', '）', '(', ')')
                     .ifBlank { line }
-                if (isTypeHeading(label) || isTypeHeading(line)) {
-                    if (!hasChapterHeading && currentSection.isNullOrBlank()) currentSection = label
-                } else if (currentSection.isNullOrBlank() || !hasChapterHeading) {
-                    currentSection = label
+                // 题型分组标题（「（一）名词解释」「一、单项选择题」）**永远**不写进章节名。
+                //
+                // 旧实现在「全文没有第X章」时会退而拿它当章节，结果题库里真的出现了
+                // 名为「（一）名词解释」的章节（用户反复报的那个 bug）。题型分组是章内
+                // 的段，不是章；宁可不分章，也不要给用户一个假章节。
+                val typeHeading = HeadingClassifier.isPureTypeHeading(label) ||
+                    HeadingClassifier.isPureTypeHeading(line)
+                if (!typeHeading && (currentSection.isNullOrBlank() || !hasChapterHeading)) {
+                    HeadingClassifier.cleanChapter(label)?.let { currentSection = it }
                 }
                 appendingTo = 0
                 continue
@@ -711,12 +718,14 @@ object TextQuestionParser {
         }
     }
 
-    /** 「单项选择题 / 多选题 / 判断题 / 填空题 / 名词解释」这类标题是题型分组，不是章节 */
-    private fun isTypeHeading(title: String): Boolean {
-        val t = title.replace(" ", "")
-        if (t.length > 14) return false
-        return typeHeadingKeywords.any { t.contains(it) }
-    }
+    /**
+     * 「单项选择题 / 多选题 / 判断题 / 填空题 / 名词解释」这类标题是题型分组，不是章节。
+     *
+     * 判定已抽到 [HeadingClassifier]，这里只保留转发 —— AI 解析链路
+     * （[ChunkPlanner]）与落库兜底（[com.examhelper.shua.data.repo.BankRepository]）
+     * 现在共用同一份规则，不会再出现「正则路径滤掉了、AI 路径放进来」的分裂。
+     */
+    private fun isTypeHeading(title: String): Boolean = HeadingClassifier.isTypeHeading(title)
 
     /** 该行是否已经是题目/选项/答案等实质内容（用于判断「第六章」下一行到底是不是章名） */
     private fun looksLikeQuestionOrSection(line: String): Boolean {
@@ -726,11 +735,6 @@ object TextQuestionParser {
         if (optionTightRegex.matches(line)) return true
         return false
     }
-
-    private val typeHeadingKeywords = listOf(
-        "选择题", "单选题", "多选题", "判断题", "填空题", "名词解释", "简答题",
-        "论述题", "案例分析", "问答", "计算题", "配伍题", "共用题干", "共用备选"
-    )
 
     fun normalizeAnswer(raw: String?): String? {
         var a = raw?.trim()?.uppercase() ?: return null

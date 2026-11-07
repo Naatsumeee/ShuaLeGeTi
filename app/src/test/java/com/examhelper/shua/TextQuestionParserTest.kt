@@ -43,7 +43,10 @@ class TextQuestionParserTest {
         assertEquals("D", q1.answer)
         assertEquals(4, q1.options.size)
         assertEquals("平等原则", q1.options[3].text) // √ 已剥离
-        assertEquals("单项选择题", q1.chapter?.takeLast(5)?.let { q1.chapter })
+        // 整本书没有「第X章」标题，只有「一、单项选择题」这种题型分组标题。
+        // 这类标题**不能**当章节名（用户反复报的 bug：章节名变成「（一）名词解释」），
+        // 没有真章节时宁可 chapter 为空，让 UI 显示「未分章」。
+        assertNull(q1.chapter)
 
         val q2 = questions[1]
         assertEquals("B", q2.answer)

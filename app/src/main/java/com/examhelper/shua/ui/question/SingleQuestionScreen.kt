@@ -50,6 +50,7 @@ import com.examhelper.shua.data.db.Question
 import com.examhelper.shua.data.db.QuestionType
 import com.examhelper.shua.data.model.JudgeOptions
 import com.examhelper.shua.data.model.JsonCodec
+import com.examhelper.shua.data.model.QuestionOption
 import com.examhelper.shua.ui.bank.typeLabel
 import com.examhelper.shua.ui.theme.ChipTone
 import com.examhelper.shua.ui.theme.CompactTopBar
@@ -142,8 +143,17 @@ fun SingleQuestionScreen(
             JudgeOptions.normalize(q.type, rawOptions, q.answer).first
         } else rawOptions
         val shared = JsonCodec.decodeOptions(q.sharedOptionsJson)
-        val answerLetter = q.answer?.trim()?.uppercase().orEmpty()
-        val userLetter = state.userAnswer?.trim()?.uppercase().orEmpty()
+        // 答案与作答都归一成「选项字母集合」，再逐个选项判是否命中。
+        //
+        // 旧实现用 `opt.key.uppercase() == answerLetter` 逐字比较，两个场景必然漏标：
+        // · 多选题答案是 "ABD"，单个选项 key 是 "A"，永不相等 → 一个都不标绿；
+        // · 判断题答案可能是「对」「√」，而 key 是 A/B → 同样对不上。
+        // 这里统一走 JudgeOptions（判断题 → A/B）与集合包含判断。
+        val answerLetters: Set<String> = resolveLetters(q, options, q.answer)
+        val userLetters: Set<String> = resolveLetters(q, options, state.userAnswer)
+        // 顶部/答案区展示的文案（判断题显示「正确/错误」）
+        val answerLetter = JudgeOptions.answerText(q.type, answerLetters.sorted().joinToString(""))
+        val userLetter = JudgeOptions.answerText(q.type, userLetters.sorted().joinToString(""))
 
         LazyColumn(
             Modifier.fillMaxSize(),
@@ -202,9 +212,10 @@ fun SingleQuestionScreen(
                             }
                         }
                         options.forEach { opt ->
+                            val k = opt.key.trim().uppercase()
                             val st = when {
-                                opt.key.uppercase() == answerLetter && answerLetter.isNotEmpty() -> OptionState.Correct
-                                opt.key.uppercase() == userLetter && userLetter.isNotEmpty() -> OptionState.Wrong
+                                k.isNotEmpty() && k in answerLetters -> OptionState.Correct
+                                k.isNotEmpty() && k in userLetters -> OptionState.Wrong
                                 else -> OptionState.Plain
                             }
                             OptionLine(key = opt.key, text = opt.text, state = st)
@@ -311,6 +322,39 @@ fun SingleQuestionScreen(
 }
 
 private enum class OptionState { Plain, Correct, Wrong }
+
+/**
+ * 把「答案文本」解析成选项字母集合。
+ *
+ * 三种真实数据形态都要认：
+ * 1. 多选题 `"ABD"` / `"A,B,D"` / `"A、B、D"` → {A,B,D}
+ * 2. 判断题 `"对"` / `"√"` / `"正确"` → {A}（A=正确、B=错误，见 [JudgeOptions]）
+ * 3. 答案存的是选项原文（AI 生成常见）→ 按内容匹配回选项 key
+ */
+private fun resolveLetters(
+    q: com.examhelper.shua.data.db.Question,
+    options: List<QuestionOption>,
+    raw: String?
+): Set<String> {
+    val text = raw?.trim().orEmpty()
+    if (text.isEmpty()) return emptySet()
+    if (q.type == QuestionType.JUDGE) {
+        return JudgeOptions.letterFor(text)?.let { setOf(it) } ?: emptySet()
+    }
+    val keys = options.map { it.key.trim().uppercase() }.filter { it.isNotEmpty() }.toSet()
+    val letters = text.uppercase().replace(Regex("""[^A-H]"""), "")
+    if (letters.isNotEmpty() && letters.length <= keys.size.coerceAtLeast(1) &&
+        letters.all { c -> keys.contains(c.toString()) }
+    ) {
+        return letters.map { it.toString() }.toSet()
+    }
+    // 按内容匹配：答案写成选项原文时
+    val byText = options.firstOrNull {
+        com.examhelper.shua.data.repo.StudyRepository.normalizeText(it.text) ==
+            com.examhelper.shua.data.repo.StudyRepository.normalizeText(text)
+    }
+    return byText?.let { setOf(it.key.trim().uppercase()) } ?: emptySet()
+}
 
 @Composable
 private fun OptionLine(key: String, text: String, state: OptionState) {

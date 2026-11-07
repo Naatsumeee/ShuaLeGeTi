@@ -128,6 +128,24 @@ class StudyViewModel(
     /** 主轮总题数（错题子会话结束后要回到主轮完成页，得知道它是几题） */
     private var mainRoundTotal: Int = 0
 
+    /**
+     * 本轮内答过的题：题号 → (作答内容, 是否答对)。
+     *
+     * **刻意只存在内存里，不查数据库**。旧实现用 `latestAttempt()` 翻历史记录，
+     * 结果只要这题在以前的任何时候做过（哪怕隔了一个月、刷的是别的模式），
+     * 进来就是「已揭晓」—— 用户看到的就是「任何模式刷题都会直接显示解析」。
+     * 现在只有本轮真正答过的题才会还原；退出重进、开新一轮都从零开始。
+     * 背题模式（RECITE）不受影响，它本来就该直接展开解析。
+     */
+    private val roundAnswers: MutableMap<Long, Pair<String, Boolean?>> = mutableMapOf()
+
+    /** 新一轮开始：清掉本轮的作答记忆（题库/模式/筛选变化走这里） */
+    private fun beginNewRound() {
+        roundAnswers.clear()
+        roundWrongIds.clear()
+        mainRoundTotal = 0
+    }
+
     init {
         viewModelScope.launch {
             appSettings = settingsStore.settings.first()
@@ -152,19 +170,18 @@ class StudyViewModel(
             runCatching { studyRepo.clearRound(bankId, mode) }
         }
         questionShownAt = System.currentTimeMillis()
-        // 记住已作答结果：划回做过的题不再要求重答。
-        // freshAnswer = true 时不还原（错题本重刷/抽检要求重新作答），
-        // 否则一进来就是满屏解析，用户根本没机会答。
+        // 划回本轮已经答过的题时还原作答与解析；没答过的题一律干净态。
+        // 注意这里读的是**内存里的本轮记忆**，不是数据库历史 —— 后者会让
+        // 「以前做过的题」一进来就揭晓答案（用户报的「所有模式都直接显示解析」）。
         val q = session.question
-        val last = if (filter?.freshAnswer == true) null
-        else q?.let { runCatching { studyRepo.latestAttempt(it.id) }.getOrNull() }
-        val restored = last != null && last.userAnswer.isNotBlank()
+        val memo = q?.let { roundAnswers[it.id] }
+        val restored = memo != null
         val restoredLetters = when {
             !restored -> emptySet()
             q?.type == com.examhelper.shua.data.db.QuestionType.MULTIPLE ||
                 q?.type == com.examhelper.shua.data.db.QuestionType.SINGLE ||
                 q?.type == com.examhelper.shua.data.db.QuestionType.JUDGE ->
-                last!!.userAnswer.filter { it.isLetter() }.map { it.uppercaseChar().toString() }.toSet()
+                memo!!.first.filter { it.isLetter() }.map { it.uppercaseChar().toString() }.toSet()
             else -> emptySet()
         }
         _state.value = StudyUiState(
@@ -173,9 +190,9 @@ class StudyViewModel(
             mode = mode,
             session = session,
             answered = restored,
-            correct = last?.correct,
+            correct = memo?.second,
             selected = restoredLetters,
-            textInput = if (restored && restoredLetters.isEmpty()) last?.userAnswer.orEmpty() else "",
+            textInput = if (restored && restoredLetters.isEmpty()) memo?.first.orEmpty() else "",
             revealed = restored || mode == StudyMode.RECITE,
             favorite = session.question?.let { studyRepo.isFavorite(it.id) } ?: false,
             killed = session.question?.let { studyRepo.isKilled(it.id) } ?: false,
@@ -199,7 +216,6 @@ class StudyViewModel(
         val s = _state.value
         val q = s.session?.question ?: return
         if (s.answered) return
-        Haptics.tap()
         when (q.type) {
             com.examhelper.shua.data.db.QuestionType.SINGLE,
             com.examhelper.shua.data.db.QuestionType.JUDGE -> {
@@ -207,6 +223,9 @@ class StudyViewModel(
                 submitChoice(setOf(key))
             }
             com.examhelper.shua.data.db.QuestionType.MULTIPLE -> {
+                // 多选的「勾上/取消」给一记；提交时不再额外震（见 submitChoice），
+                // 两处都震就是用户说的「无论怎么点都震两下」。
+                Haptics.click()
                 _state.value = s.copy(
                     selected = if (key in s.selected) s.selected - key else s.selected + key
                 )
@@ -235,8 +254,11 @@ class StudyViewModel(
             revealed = true,
             selected = selected
         )
-        // 震动反馈：答对/答错微振动（设置里可关）
-        if (correct == true) Haptics.ok() else Haptics.ng()
+        // 记进本轮作答记忆：划回这道题时能看到答案与解析（退出重进即失效）
+        roundAnswers[q.id] = answerStr to correct
+        // 震动只给一记：选项点击和判对错不叠加，否则用户听到的就是「震两下」。
+        // 答对/答错用不同手感，但仍然只有一次触发。
+        Haptics.click()
         // 记进「本轮错题」：完成页据此提供「刷本轮错题」入口
         if (correct == false) roundWrongIds.add(q.id)
         if (hasAnswer) {
@@ -278,7 +300,8 @@ class StudyViewModel(
             runCatching { studyRepo.touchProgress(bankId, mode) }
             _state.value = _state.value.copy(answered = true, correct = correct)
             if (!correct) roundWrongIds.add(q.id)
-            if (correct) Haptics.ok() else Haptics.ng()
+            // 震动只给一记（与选择题一致），选对选错不额外加震
+            Haptics.click()
             if (mode == StudyMode.SPEED) beginCountdown(appSettings.speedModeSeconds)
         }
     }
@@ -286,7 +309,8 @@ class StudyViewModel(
     fun next() {
         countdownJob?.cancel()
         val s = _state.value
-        Haptics.tick()
+        // 震动由调用方（StudyScreen 的按钮 / 滑动动画）统一给一记，
+        // 这里不再震 —— 两面都调就会出现「点一次震两下」。
         if (s.session?.finished != true) {
             viewModelScope.launch {
                 studyRepo.advance(bankId, mode)
@@ -300,7 +324,6 @@ class StudyViewModel(
         val index = (_state.value.session?.indexInQueue ?: 1) - 2
         if (index < 0) return
         countdownJob?.cancel()
-        Haptics.tick()
         viewModelScope.launch {
             studyRepo.seek(bankId, mode, index)
             reload()
@@ -319,6 +342,8 @@ class StudyViewModel(
 
     fun resetRandom() {
         countdownJob?.cancel()
+        // 重新随机巩固同样算开新一轮
+        beginNewRound()
         viewModelScope.launch {
             studyRepo.resetRandom(bankId, questions.map { it.id })
             reload()
@@ -328,7 +353,9 @@ class StudyViewModel(
     fun restart() {
         countdownJob?.cancel()
         roundWrongFilter = null
-        roundWrongIds = mutableSetOf()
+        // 开新一轮：本轮作答记忆必须一起清掉，否则「从头再来」之后滑到旧题
+        // 还是直接摊着解析（用户报的「任何模式都直接显示解析」的另一半原因）。
+        beginNewRound()
         viewModelScope.launch {
             studyRepo.seek(bankId, mode, 0)
             reload()
@@ -346,7 +373,7 @@ class StudyViewModel(
         val ids = roundWrongIds.toSet()
         if (ids.isEmpty()) return
         countdownJob?.cancel()
-        Haptics.tap()
+        Haptics.click()
         roundWrongFilter = ids
         roundWrongIds = mutableSetOf()
         viewModelScope.launch {
@@ -413,7 +440,7 @@ class StudyViewModel(
         val q = s.session?.question ?: return
         if (s.deepSolving) return
         _state.value = s.copy(deepSolving = true, deepError = null, deepStream = "", deepReasoning = "")
-        Haptics.tap()
+        Haptics.click()
         viewModelScope.launch {
             val result = requestDeepSolveWithRetry(q)
             result.fold(
@@ -447,7 +474,7 @@ class StudyViewModel(
                                 _state.value.session
                             }
                         )
-                        Haptics.ok()
+                        Haptics.click()
                     }
                 },
                 onFailure = { e ->
@@ -641,12 +668,12 @@ class StudyViewModel(
         val s = _state.value
         // 收起永远允许（哪怕题目已经切换/卸载），否则面板会卡在屏幕上关不掉
         if (s.askOpen) {
-            Haptics.tap()
+            Haptics.click()
             _state.value = s.copy(askOpen = false, askError = null)
             return
         }
         if (s.session?.question == null) return
-        Haptics.tap()
+        Haptics.click()
         _state.value = s.copy(askOpen = true, askError = null)
         // 面板上写明这次走哪个模型：用户配了多个模型时不该靠猜
         if (s.askModelName == null) {
@@ -675,7 +702,7 @@ class StudyViewModel(
 
         val history = s.chat + ChatTurn("user", text)
         _state.value = s.copy(chat = history, asking = true, askError = null, askOpen = true, askStream = "")
-        Haptics.tap()
+        Haptics.click()
         // 记下提问时的题目 id：请求途中切题的话，回答不能落到新题目头上
         val askedForId = q.id
         viewModelScope.launch {
@@ -718,7 +745,7 @@ class StudyViewModel(
 
     /** 清空当前题目的追问记录 */
     fun clearAsk() {
-        Haptics.tap()
+        Haptics.click()
         _state.value = _state.value.copy(chat = emptyList(), askError = null)
     }
 

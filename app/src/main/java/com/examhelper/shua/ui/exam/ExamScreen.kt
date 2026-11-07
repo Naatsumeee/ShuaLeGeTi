@@ -210,8 +210,8 @@ fun ExamScreen(
                                         text = opt.text,
                                         selected = isSelected,
                                         onClick = {
-                                            // 选中 / 取消选中都给触感：测试模式以前完全没有震动
-                                            com.examhelper.shua.ui.sound.Haptics.tap()
+                                            // 只震一记：ViewModel 里不再重复调用
+                                            com.examhelper.shua.ui.sound.Haptics.click()
                                             vm.onOptionTap(opt.key)
                                         }
                                     )

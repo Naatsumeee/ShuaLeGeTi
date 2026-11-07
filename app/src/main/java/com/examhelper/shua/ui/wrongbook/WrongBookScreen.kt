@@ -2,6 +2,7 @@ package com.examhelper.shua.ui.wrongbook
 
 import android.app.Application
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Star
@@ -51,6 +53,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.AndroidViewModel
@@ -200,8 +203,8 @@ fun WrongBookScreen(
     var detail by remember { mutableStateOf<Question?>(null) }
     /** 章节筛选（null = 该题库全部章节） */
     var chapter by remember { mutableStateOf<String?>(null) }
-    /** 重刷/抽检时是否重新作答（默认 true：错题都是做过的题，不该一进来就是解析） */
-    var rebrushFresh by remember { mutableStateOf(true) }
+    /** 「忽略整本」二次确认 */
+    var ignoreConfirm by remember { mutableStateOf(false) }
     val extra = shuaColors
 
     // 切 tab / 切题库时章节选择失效，避免停在上一组不存在的章节上
@@ -259,65 +262,6 @@ fun WrongBookScreen(
             }
         }
 
-        // 题库筛选
-        if (lists.bankNames.isNotEmpty()) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(
-                    selected = selectedBank == null,
-                    onClick = { vm.selectBank(null) },
-                    label = { Text("全部题库", style = MaterialTheme.typography.labelMedium) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                    ),
-                    border = FilterChipDefaults.filterChipBorder(
-                        enabled = true,
-                        selected = selectedBank == null,
-                        borderColor = extra.creamLine,
-                        selectedBorderColor = extra.terracotta.copy(alpha = 0.4f)
-                    )
-                )
-                lists.bankNames.forEach { (id, name) ->
-                    FilterChip(
-                        selected = selectedBank == id,
-                        onClick = { vm.selectBank(id) },
-                        label = { Text(name.take(10), maxLines = 1, style = MaterialTheme.typography.labelMedium) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                        ),
-                        border = FilterChipDefaults.filterChipBorder(
-                            enabled = true,
-                            selected = selectedBank == id,
-                            borderColor = extra.creamLine,
-                            selectedBorderColor = extra.terracotta.copy(alpha = 0.4f)
-                        )
-                    )
-                }
-                // 整本忽略：一次清掉该题库的全部错题记录（收藏/斩题不受影响）
-                if (selectedBank != null) {
-                    FilterChip(
-                        selected = false,
-                        onClick = { vm.ignoreBank(selectedBank!!) },
-                        label = { Text("忽略整本", style = MaterialTheme.typography.labelMedium) },
-                        colors = FilterChipDefaults.filterChipColors(labelColor = extra.sage),
-                        border = FilterChipDefaults.filterChipBorder(
-                            enabled = true,
-                            selected = false,
-                            borderColor = extra.sage.copy(alpha = 0.4f)
-                        )
-                    )
-                }
-            }
-        } else {
-            Spacer(Modifier.height(6.dp))
-        }
 
         val bankFilter: (Question?) -> Boolean = { q ->
             selectedBank == null || q?.bankId == selectedBank
@@ -336,49 +280,45 @@ fun WrongBookScreen(
         }
         val entries = if (chapter == null) tabEntries else tabEntries.filter { it.second?.chapter == chapter }
 
+        // 筛选条：题库 / 章节 两个下拉菜单，替代原来两整排横向滚动的 chip
+        //（用户反馈那一块太松散、高度过大 —— 从约 200dp 压到约 62dp）。
+        if (lists.bankNames.isNotEmpty()) {
+            val bankEntries: List<Pair<Long?, String>> =
+                listOf<Pair<Long?, String>>(null to "全部题库") +
+                    lists.bankNames.entries.sortedBy { it.value }.map { it.key to it.value }
+            Row(
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                PickerPill(
+                    label = "题库",
+                    value = selectedBank?.let { lists.bankNames[it] } ?: "全部题库",
+                    modifier = Modifier.weight(1f),
+                    options = bankEntries.map { (id, name) -> name to (id == selectedBank) },
+                    onSelect = { i -> vm.selectBank(bankEntries[i].first) }
+                )
+                PickerPill(
+                    label = "章节",
+                    value = chapter ?: "全部章节",
+                    enabled = chapters.isNotEmpty(),
+                    modifier = Modifier.weight(1f),
+                    options = (listOf<String?>(null) + chapters).map { c -> (c ?: "全部章节") to (c == chapter) },
+                    onSelect = { i -> chapter = if (i == 0) null else chapters[i - 1] }
+                )
+            }
+        }
         // 重刷 / 抽检入口：需要先选定题库（否则不知道在哪个库里重刷）
         if (tabEntries.isNotEmpty() && selectedBank != null) {
             val scopeBank = selectedBank!!
             val scopeChapters = listOfNotNull(chapter)
-            // 作答模式：错题都是做过的题，默认「重新作答」——
-            // 旧实现把历史作答还原出来，一进去就是满屏解析，根本没法重做。
             val rebrushFilter = StudyFilter(
-                chapters = scopeChapters, status = "WRONG", freshAnswer = rebrushFresh
+                chapters = scopeChapters, status = "WRONG", freshAnswer = true
             ).fingerprint()
             val sampleFilter = StudyFilter(
-                chapters = scopeChapters, status = "WRONG", freshAnswer = rebrushFresh
+                chapters = scopeChapters, status = "WRONG", freshAnswer = true
             ).fingerprint()
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "作答",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline
-                )
-                FilterChip(
-                    selected = rebrushFresh,
-                    onClick = { rebrushFresh = true },
-                    label = { Text("重新作答", style = MaterialTheme.typography.labelSmall) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                )
-                FilterChip(
-                    selected = !rebrushFresh,
-                    onClick = { rebrushFresh = false },
-                    label = { Text("直接看解析", style = MaterialTheme.typography.labelSmall) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                )
-            }
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Button(
@@ -393,55 +333,22 @@ fun WrongBookScreen(
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = extra.terracotta)
                 ) { Text("随机抽检", style = MaterialTheme.typography.labelLarge) }
             }
-            Text(
-                if (chapter == null) "范围：整个题库的错题" else "范围：章节「${chapter!!.take(14)}」的错题",
-                Modifier.padding(horizontal = 18.dp, vertical = 2.dp),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline
-            )
-        }
-
-        if (chapters.isNotEmpty()) {
+            // 范围提示 +「忽略整本」独占一行（用户要求：不要再和题库/章节筛选挤一排）。
+            // 整本忽略会删掉该库全部错题记录，属破坏性操作，加二次确认。
             Row(
-                Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                Modifier.fillMaxWidth().padding(start = 18.dp, end = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                FilterChip(
-                    selected = chapter == null,
-                    onClick = { chapter = null },
-                    label = { Text("全部章节", style = MaterialTheme.typography.labelMedium) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                    ),
-                    border = FilterChipDefaults.filterChipBorder(
-                        enabled = true,
-                        selected = chapter == null,
-                        borderColor = extra.creamLine,
-                        selectedBorderColor = extra.terracotta.copy(alpha = 0.4f)
-                    )
+                Text(
+                    if (chapter == null) "范围：整个题库的错题" else "范围：章节「${chapter!!.take(14)}」的错题",
+                    Modifier.weight(1f),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
-                chapters.forEach { c ->
-                    FilterChip(
-                        selected = chapter == c,
-                        onClick = { chapter = if (chapter == c) null else c },
-                        label = {
-                            Text(c.take(12), maxLines = 1, style = MaterialTheme.typography.labelMedium)
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                        ),
-                        border = FilterChipDefaults.filterChipBorder(
-                            enabled = true,
-                            selected = chapter == c,
-                            borderColor = extra.creamLine,
-                            selectedBorderColor = extra.terracotta.copy(alpha = 0.4f)
-                        )
-                    )
+                TextButton(onClick = { ignoreConfirm = true }) {
+                    Text("忽略整本", style = MaterialTheme.typography.labelMedium, color = extra.sage)
                 }
             }
         }
@@ -581,6 +488,29 @@ fun WrongBookScreen(
         }
     }
 
+    if (ignoreConfirm) {
+        val bankName = selectedBank?.let { lists.bankNames[it] } ?: "该题库"
+        AlertDialog(
+            onDismissRequest = { ignoreConfirm = false },
+            title = { Text("忽略整本？", style = serifTitle(17.sp, FontWeight.Medium)) },
+            text = {
+                Text(
+                    "将清空「" + bankName + "」在错题本里的全部记录（收藏、斩题不受影响）。此操作不可撤销。",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    selectedBank?.let { vm.ignoreBank(it) }
+                    ignoreConfirm = false
+                }) { Text("确认忽略", color = extra.sage) }
+            },
+            dismissButton = {
+                TextButton(onClick = { ignoreConfirm = false }) { Text("取消") }
+            }
+        )
+    }
+
     detail?.let { q ->
         AlertDialog(
             onDismissRequest = { detail = null },
@@ -631,5 +561,77 @@ fun WrongBookScreen(
             },
             dismissButton = { TextButton(onClick = { detail = null }) { Text("关闭") } }
         )
+    }
+}
+
+
+/**
+ * 紧凑下拉筛选器：胶囊里放「小标签 + 当前值 + 箭头」，点开是菜单。
+ * 错题本原来用两整排 FilterChip（题库一排、章节一排，都要横向滚动），
+ * 小屏上把这区撑到近 200dp 且两排左右参差；改成两个等宽下拉既对齐也矮一半。
+ */
+@Composable
+private fun PickerPill(
+    label: String,
+    value: String,
+    options: List<Pair<String, Boolean>>,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true
+) {
+    var open by remember { mutableStateOf(false) }
+    val extra = shuaColors
+    Box(modifier) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(13.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .border(1.dp, extra.creamLine, RoundedCornerShape(13.dp))
+                .clickable(enabled = enabled) { open = true }
+                .padding(horizontal = 12.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                    color = MaterialTheme.colorScheme.outline,
+                    maxLines = 1
+                )
+                Text(
+                    value,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (enabled) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.outline,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Icon(
+                Icons.Filled.ExpandMore,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.outline
+            )
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            options.forEachIndexed { i, (text, selected) ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = if (selected) extra.terracotta else MaterialTheme.colorScheme.onSurface
+                        )
+                    },
+                    onClick = {
+                        open = false
+                        onSelect(i)
+                    }
+                )
+            }
+        }
     }
 }
