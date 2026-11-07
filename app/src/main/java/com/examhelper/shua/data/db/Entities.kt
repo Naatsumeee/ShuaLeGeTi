@@ -136,7 +136,9 @@ data class WrongRecord(
     val wrongCount: Int = 1,
     val lastWrongAt: Long = System.currentTimeMillis(),
     /** 之后答对可标记为已掌握 */
-    val mastered: Boolean = false
+    val mastered: Boolean = false,
+    /** 重点标记：错题本里可单独成组复刷（不依赖是否还在未掌握列表里） */
+    val flagged: Boolean = false
 )
 
 /** 收藏 */

@@ -174,6 +174,51 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                                         }
                                     }
                                 }
+                                // 震动时长：短 / 标准 / 长
+                                Row(
+                                    Modifier.fillMaxWidth().padding(top = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        "震动时长",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    MonoText(
+                                        when (ui.hapticDuration) {
+                                            1 -> "短"
+                                            3 -> "长"
+                                            else -> "标准"
+                                        },
+                                        color = extra.terracotta
+                                    )
+                                }
+                                Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                                    listOf(1 to "短", 2 to "标准", 3 to "长").forEach { (level, label) ->
+                                        val active = ui.hapticDuration == level
+                                        Box(
+                                            Modifier
+                                                .weight(1f)
+                                                .padding(horizontal = 3.dp)
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(
+                                                    if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                                                    else MaterialTheme.colorScheme.surfaceVariant
+                                                )
+                                                .clickable { vm.setHapticDuration(level) }
+                                                .padding(vertical = 9.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                label,
+                                                style = MaterialTheme.typography.labelLarge,
+                                                color = if (active) MaterialTheme.colorScheme.primary
+                                                else MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                         DividerLine()

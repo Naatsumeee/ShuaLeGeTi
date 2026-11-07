@@ -197,15 +197,21 @@ class LlmQuestionParser(
     fun QuestionDto.toParsed(): ParsedQuestion {
         val (opts, ans) = OptionNormalizer.normalize(options, answer)
         val (sopts, _) = OptionNormalizer.normalize(sharedOptions, null)
+        val qType = mapType(type)
+        // 判断题：模型经常只回 {"type":"JUDGE","answer":"对"} 而不给 options，
+        // 落库后做题页就没有可点的行。这里补齐「正确/错误」并把答案对齐到 A/B。
+        val (finalOpts, finalAns) = com.examhelper.shua.data.model.JudgeOptions.normalize(
+            qType, opts, ans
+        )
         return ParsedQuestion(
             chapter = chapter?.takeIf { it.isNotBlank() },
-            type = mapType(type),
+            type = qType,
             subtype = subtype?.trim()?.uppercase()?.takeIf { it.isNotBlank() },
             stem = stem.trim(),
             sharedStem = sharedStem?.trim()?.takeIf { it.isNotBlank() },
             sharedOptions = sopts.toMutableList(),
-            options = opts.toMutableList(),
-            answer = ans,
+            options = finalOpts.toMutableList(),
+            answer = finalAns,
             analysis = analysis?.trim()?.takeIf { it.isNotBlank() && it != "null" },
             sourcePage = page
         )

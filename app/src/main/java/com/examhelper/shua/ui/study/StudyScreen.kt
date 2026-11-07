@@ -68,9 +68,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -184,21 +187,57 @@ fun StudyScreen(
                     val q = if (frozen) snapCur else session?.question
                     val livePrev = if (frozen) snapPrev else session?.prevQuestion
                     val liveNext = if (frozen) snapNext else session?.nextQuestion
-                    // 冻结期间 state 还是上一题的作答态（选中/判分/解析），直接拿去画新题
-                    // 会闪一下"新题带着旧答案"。这里给快照题一份干净的作答态。
-                    val bodyState = if (frozen) state.copy(
-                        answered = false,
-                        correct = null,
-                        selected = emptySet(),
-                        textInput = "",
-                        revealed = state.mode == StudyMode.RECITE,
-                        deepSolved = q?.deepSolved ?: false,
-                        deepSolving = false,
-                        deepError = null,
-                        chat = emptyList(),
-                        asking = false,
-                        askError = null
-                    ) else state
+
+                    // 每道题的作答快照。
+                    //
+                    // 为什么需要它：翻页动画中途会把「当前卡片」换成相邻题，
+                    // 如果那时用的是统一清空过的「未作答态」，那么滑回一道已经做过的题时
+                    // 解析会先消失、等 reload() 回来再突然出现 —— 用户看到的
+                    // 「上一题已经显示的解答在动画中会丢失」就是这个。
+                    // 这里按题目 id 记住作答结果，动画期间按 id 还原。
+                    val answerMemo = remember { mutableStateMapOf<Long, StudyUiState>() }
+                    val liveQ = session?.question
+                    LaunchedEffect(
+                        liveQ?.id, state.answered, state.revealed, state.selected,
+                        state.textInput, state.correct, state.deepSolved, state.deepStream
+                    ) {
+                        if (liveQ != null && (state.answered || state.revealed)) {
+                            answerMemo[liveQ.id] = state
+                        }
+                    }
+
+                    // 为某道题构造渲染用的状态：有快照就按快照还原，没有才是干净态
+                    fun stateFor(target: Question?): StudyUiState {
+                        val memo = target?.let { answerMemo[it.id] }
+                        return if (memo != null) state.copy(
+                            answered = memo.answered,
+                            correct = memo.correct,
+                            selected = memo.selected,
+                            textInput = memo.textInput,
+                            revealed = memo.revealed,
+                            deepSolved = memo.deepSolved,
+                            deepStream = memo.deepStream,
+                            deepError = memo.deepError,
+                            deepSolving = false,
+                            chat = emptyList(),
+                            asking = false,
+                            askError = null
+                        ) else state.copy(
+                            answered = false,
+                            correct = null,
+                            selected = emptySet(),
+                            textInput = "",
+                            revealed = state.mode == StudyMode.RECITE,
+                            deepSolved = target?.deepSolved ?: false,
+                            deepSolving = false,
+                            deepError = null,
+                            deepStream = "",
+                            chat = emptyList(),
+                            asking = false,
+                            askError = null
+                        )
+                    }
+                    val bodyState = if (frozen) stateFor(q) else state
 
                     // ---- 细进度条 + 题号 ----
                     Row(
@@ -275,6 +314,46 @@ fun StudyScreen(
                     }
                     val canPrev = livePrev != null && state.mode != StudyMode.RANDOM
                     val canNext = liveNext != null
+
+                    // 按钮翻页也要走同一套滑动动画。
+                    //
+                    // 旧实现里「上一题 / 下一题」是直接调 vm.prev()/vm.next()，
+                    // 内容瞬间替换、没有任何过渡；用户感知就是「点按钮丢动画」。
+                    // 这里把按钮也接到跟手动画的同一条路径上：先滑出当前卡，
+                    // 滑出完成的那一帧换内容，视觉上就和手势滑动完全一致。
+                    val flipScope = rememberCoroutineScope()
+                    fun flipForward() {
+                        if (frozen) return
+                        val cur = session?.question
+                        val nxt = liveNext ?: return
+                        flipScope.launch {
+                            Animatable(drag).animateTo(
+                                -w, tween(150, easing = FastOutLinearInEasing)
+                            ) { drag = value }
+                            snapCur = nxt
+                            snapPrev = cur
+                            snapNext = null
+                            frozen = true
+                            drag = 0f
+                            vm.next()
+                        }
+                    }
+                    fun flipBackward() {
+                        if (frozen) return
+                        val cur = session?.question
+                        val prv = livePrev ?: return
+                        flipScope.launch {
+                            Animatable(drag).animateTo(
+                                w, tween(150, easing = FastOutLinearInEasing)
+                            ) { drag = value }
+                            snapCur = prv
+                            snapPrev = null
+                            snapNext = cur
+                            frozen = true
+                            drag = 0f
+                            vm.prev()
+                        }
+                    }
 
                     Box(
                         Modifier
@@ -363,12 +442,12 @@ fun StudyScreen(
                     ) {
                         if (canPrev) {
                             PeekSlot(x = drag - w) {
-                                livePrev?.let { PeekPage(it, state.mode, vm, compact) }
+                                livePrev?.let { PeekPage(it, state.mode, vm, compact, stateFor(it)) }
                             }
                         }
                         if (canNext) {
                             PeekSlot(x = drag + w) {
-                                liveNext?.let { PeekPage(it, state.mode, vm, compact) }
+                                liveNext?.let { PeekPage(it, state.mode, vm, compact, stateFor(it)) }
                             }
                         }
                         // 当前题：不透明底色 + 随位移柔和升起的阴影，拖动时压在邻卡之上形成遮罩。
@@ -408,7 +487,11 @@ fun StudyScreen(
                     }
 
                     // ---- 底部答题控制（固定）----
-                    BottomControls(state = state, vm = vm, onBack = onBack, compact = compact)
+                    BottomControls(
+                        state = state, vm = vm, onBack = onBack, compact = compact,
+                        onFlipPrev = ::flipBackward,
+                        onFlipNext = ::flipForward
+                    )
                 }
             }
         }
@@ -526,9 +609,14 @@ private fun PeekPage(
     q: Question,
     mode: StudyMode,
     vm: StudyViewModel,
-    compact: Boolean
+    compact: Boolean,
+    // 邻卡要还原成"这道题自己的作答态"（做过就有答案和解析），
+    // 而不是统一抹干净的未作答态，否则滑过去会看到解析凭空消失又出现
+    state: StudyUiState = peekState(mode, q)
 ) {
-    val clean = remember(q.id, q.deepSolved, mode) { peekState(mode, q) }
+    val clean = remember(q.id, state.answered, state.revealed, state.selected, state.textInput, state.deepSolved, state.deepStream, mode) {
+        state.copy(deepSolving = false, chat = emptyList(), asking = false, askError = null)
+    }
     // 修饰符顺序与真卡严格一致：先 verticalScroll 再 padding（内边距属于滚动内容），
     // 这样两张卡的可用宽度、首行基线与行距完全相同，滑入落地时不会"缩一下再长开"。
     Column(
@@ -588,7 +676,13 @@ private fun QuestionBody(
     // 邻卡预览时置 false：只借它的排版，不允许任何点击改到当前题的状态
     interactive: Boolean = true
 ) {
-    val options = JsonCodec.decodeOptions(q.optionsJson)
+    // 判断题即使库里没存选项，也要强行造出「正确 / 错误」两行 ——
+    // 否则整个选项区是空的，用户根本点不了。这里读库时统一兜底，
+    // 老题库（修复前导入的）同样受益，不需要重导。
+    val rawOptions = JsonCodec.decodeOptions(q.optionsJson)
+    val options = if (q.type == QuestionType.JUDGE) {
+        com.examhelper.shua.data.model.JudgeOptions.normalize(q.type, rawOptions, q.answer).first
+    } else rawOptions
     val extra = shuaColors
 
     // A3 共用题干（限高，避免长病例把选项顶出屏）
@@ -660,7 +754,7 @@ private fun QuestionBody(
                 val isWrongPick = state.answered && selected && !isAnswer
                 OptionRow(
                     key = opt.key,
-                    text = if (q.type == QuestionType.JUDGE && opt.text.length <= 2) judgeLabel(opt.text) else opt.text,
+                    text = opt.text,
                     selected = selected,
                     revealed = state.revealed,
                     isAnswer = isAnswer,
@@ -1137,7 +1231,10 @@ private fun BottomControls(
     state: StudyUiState,
     vm: StudyViewModel,
     onBack: () -> Unit,
-    compact: Boolean
+    compact: Boolean,
+    // 翻页走卡片带动画；为空时退化为直接切题（速刷自动跳题等无动画场景）
+    onFlipPrev: (() -> Unit)? = null,
+    onFlipNext: (() -> Unit)? = null
 ) {
     val extra = shuaColors
     GlassSurface(
@@ -1198,7 +1295,10 @@ private fun BottomControls(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (state.mode != StudyMode.RANDOM) {
                     TextButton(
-                        onClick = vm::prev,
+                        onClick = {
+                            com.examhelper.shua.ui.sound.Haptics.tick()
+                            onFlipPrev?.invoke() ?: vm.prev()
+                        },
                         enabled = (state.session?.indexInQueue ?: 1) > 1,
                         modifier = Modifier
                             .weight(if (compact) 0.8f else 1f)
@@ -1212,7 +1312,10 @@ private fun BottomControls(
                 }
                 val canNext = state.answered || state.revealed || state.mode == StudyMode.RECITE
                 Button(
-                    onClick = vm::next,
+                    onClick = {
+                        com.examhelper.shua.ui.sound.Haptics.tick()
+                        onFlipNext?.invoke() ?: vm.next()
+                    },
                     enabled = canNext,
                     modifier = Modifier
                         .weight(if (state.mode == StudyMode.RANDOM) 1f else 1.4f)
@@ -1291,7 +1394,10 @@ private fun FinishedView(
                 Spacer(Modifier.height(4.dp))
                 // 主按钮：返回（用户要求着重的是"返回"，不是"从头再来"）
                 Button(
-                    onClick = if (wrongOnly) onExitWrong else onBack,
+                    onClick = {
+                        com.examhelper.shua.ui.sound.Haptics.done()
+                        if (wrongOnly) onExitWrong() else onBack()
+                    },
                     modifier = Modifier.fillMaxWidth().heightIn(min = 46.dp),
                     shape = RoundedCornerShape(13.dp),
                     colors = ButtonDefaults.buttonColors(
@@ -1303,7 +1409,10 @@ private fun FinishedView(
                 }
                 if (!wrongOnly && wrongCount > 0) {
                     OutlinedButton(
-                        onClick = onBrushWrong,
+                        onClick = {
+                            com.examhelper.shua.ui.sound.Haptics.done()
+                            onBrushWrong()
+                        },
                         modifier = Modifier.fillMaxWidth().heightIn(min = 46.dp),
                         shape = RoundedCornerShape(13.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = extra.terracottaDeep),
@@ -1316,7 +1425,13 @@ private fun FinishedView(
                     }
                 }
                 if (!wrongOnly) {
-                    TextButton(onClick = onRestart, modifier = Modifier.fillMaxWidth()) {
+                    TextButton(
+                        onClick = {
+                            com.examhelper.shua.ui.sound.Haptics.done()
+                            onRestart()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
                         Text(
                             if (mode == StudyMode.RANDOM) "重新随机巩固" else "从头再来",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1327,12 +1442,6 @@ private fun FinishedView(
             }
         }
     }
-}
-
-private fun judgeLabel(text: String): String = when (text.trim()) {
-    "对", "正确", "√", "T", "是" -> "对"
-    "错", "错误", "×", "F", "否" -> "错"
-    else -> text
 }
 
 /** 选择题答案附内容预览，字母错位时用户可直接核对内容 */

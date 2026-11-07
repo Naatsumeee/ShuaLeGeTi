@@ -36,6 +36,8 @@ class StudyRepository(
 
     fun observeWrongBook() = recordDao.observeWrongBook()
     fun observeMasteredWrong() = recordDao.observeMasteredWrong()
+    /** 重点标记的错题：错题本里单独成组复刷 */
+    fun observeFlaggedWrong() = recordDao.observeFlaggedWrong()
     fun observeFavorites() = recordDao.observeFavorites()
     fun observeTodayStats() = recordDao.observeAttemptCountSince(startOfToday())
     fun observeTotalStats() = recordDao.observeTotalAttempts()
@@ -353,6 +355,16 @@ class StudyRepository(
 
     suspend fun removeWrong(questionId: Long) = recordDao.removeWrong(questionId)
 
+    /** 重点标记开关（只对已在错题本里的题有意义） */
+    suspend fun toggleFlag(questionId: Long): Boolean {
+        val cur = recordDao.getWrong(questionId)?.flagged ?: false
+        recordDao.setFlagged(questionId, !cur)
+        return !cur
+    }
+
+    /** 整本忽略：把某题库的错题记录一次清空 */
+    suspend fun ignoreWrongBank(bankId: Long) = recordDao.deleteWrongByBank(bankId)
+
     /** 按筛选条件过滤题库题目 */
     suspend fun filteredQuestions(bankId: Long, filter: com.examhelper.shua.data.model.StudyFilter?): List<Question> {
         val all = bankRepo.getQuestions(bankId)
@@ -413,6 +425,23 @@ class StudyRepository(
          */
         fun judgeAnswer(question: Question, userAnswer: String): Boolean {
             val expectedRaw = question.answer?.trim()?.takeIf { it.isNotBlank() } ?: return false
+
+            // 判断题单独一条通道：库里可能只有「答案：对」而完全没有选项
+            // （修复前导入的老题库），走通用字母逻辑必然判错。这里先用
+            // JudgeOptions 把选项与答案都归一成 A/B，再比较。
+            if (question.type == com.examhelper.shua.data.db.QuestionType.JUDGE) {
+                val (opts, ans) = com.examhelper.shua.data.model.JudgeOptions.normalize(
+                    question.type, JsonCodec.decodeOptions(question.optionsJson), expectedRaw
+                )
+                val expected = com.examhelper.shua.data.model.JudgeOptions.letterFor(ans)
+                    ?: com.examhelper.shua.data.model.JudgeOptions.letterFor(expectedRaw)
+                val actual = com.examhelper.shua.data.model.JudgeOptions.letterFor(userAnswer)
+                    ?: opts.firstOrNull {
+                        normalizeText(it.text) == normalizeText(userAnswer)
+                    }?.key
+                if (expected != null && actual != null) return expected == actual
+            }
+
             val options = JsonCodec.decodeOptions(question.optionsJson)
 
             val expected = resolveToLetters(expectedRaw, options) ?: expectedRaw.uppercase()

@@ -689,9 +689,17 @@ object TextQuestionParser {
             else -> QuestionType.SINGLE
         }
 
-        if (q.type == QuestionType.JUDGE && q.options.isEmpty()) {
-            q.options += QuestionOption("A", "对")
-            q.options += QuestionOption("B", "错")
+        if (q.type == QuestionType.JUDGE) {
+            // 判断题永远给两行固定选项，答案归一成 A/B。
+            // 旧实现只在 options.isEmpty() 时补，且补的是「对/错」；
+            // 现在统一走 JudgeOptions，选项文案是「正确/错误」，与题库里
+            // 常见的「（ ）」式判断题一致。
+            val (jopts, jans) = com.examhelper.shua.data.model.JudgeOptions.normalize(
+                q.type, q.options.toList(), q.answer
+            )
+            q.options.clear()
+            q.options.addAll(jopts)
+            q.answer = jans
         }
 
         // 医学题型子类型

@@ -42,6 +42,7 @@ import com.examhelper.shua.ui.exam.ExamReportScreen
 import com.examhelper.shua.ui.exam.ExamScreen
 import com.examhelper.shua.ui.generate.GenerateScreen
 import com.examhelper.shua.ui.import_.ImportScreen
+import com.examhelper.shua.ui.question.SingleQuestionScreen
 import com.examhelper.shua.ui.search.SearchScreen
 import com.examhelper.shua.ui.settings.SettingsScreen
 import com.examhelper.shua.ui.stats.StatsScreen
@@ -65,6 +66,13 @@ object Routes {
     const val STUDY = "study/{bankId}/{mode}?filter={filter}"
     const val EXAM = "exam/{bankId}?filter={filter}&count={count}"
     const val EXAM_REPORT = "exam_report/{runId}"
+    /**
+     * 单题查看页：测试报告与错题本共用。
+     *
+     * runId 为空表示「不是从测试报告进来的」，页面底部按钮显示「返回错题本」。
+     * 用 query 参数而不是路径段，是因为空字符串没法作为可选路径段。
+     */
+    const val SINGLE_QUESTION = "single_question/{questionId}?runId={runId}"
     const val EDITOR = "editor/{bankId}"
 
     fun importFile(jobId: String? = null) = "import_file" + (jobId?.let { "?jobId=$it" } ?: "")
@@ -74,6 +82,10 @@ object Routes {
         "study/$bankId/${mode.name}" + (filterJson?.let { "?filter=${Uri.encode(it)}" } ?: "")
     fun exam(bankId: Long, filterJson: String? = null, count: Int) =
         "exam/$bankId?count=$count" + (filterJson?.let { "&filter=${Uri.encode(it)}" } ?: "")
+
+    /** 单题查看页；runId 非空表示从测试报告进入（决定底部按钮文案） */
+    fun singleQuestion(questionId: Long, runId: String? = null) =
+        "single_question/$questionId" + (runId?.let { "?runId=${Uri.encode(it)}" } ?: "")
 }
 
 private data class Tab(val route: String, val label: String, val icon: ImageVector)
@@ -179,6 +191,10 @@ fun AppRoot(fontScale: Float = 1f) {
                             onOpenBank = { navController.navigate(Routes.bankDetail(it)) },
                             onStartStudy = { bankId, mode, filterJson ->
                                 navController.navigate(Routes.study(bankId, mode, filterJson))
+                            },
+                            // 点某道错题 → 单题详情（不传 runId，底部按钮是「返回错题本」）
+                            onOpenQuestion = { qid ->
+                                navController.navigate(Routes.singleQuestion(qid, null))
                             }
                         )
                     }
@@ -261,6 +277,20 @@ fun AppRoot(fontScale: Float = 1f) {
                         val runId = entry.arguments?.getString("runId") ?: return@composable
                         ExamReportScreen(
                             runId = runId,
+                            onBack = { navController.popBackStack() },
+                            // 点某一道题 → 单题详情（默认展开解析，底部按钮回报告）
+                            onOpenQuestion = { qid ->
+                                navController.navigate(Routes.singleQuestion(qid, runId))
+                            }
+                        )
+                    }
+                    composable(Routes.SINGLE_QUESTION) { entry ->
+                        val qid = entry.arguments?.getString("questionId")?.toLongOrNull() ?: return@composable
+                        val runId = entry.arguments?.getString("runId")?.takeIf { it.isNotBlank() }
+                        SingleQuestionScreen(
+                            questionId = qid,
+                            runId = runId,
+                            backLabel = if (runId != null) "返回测试报告" else "返回错题本",
                             onBack = { navController.popBackStack() }
                         )
                     }

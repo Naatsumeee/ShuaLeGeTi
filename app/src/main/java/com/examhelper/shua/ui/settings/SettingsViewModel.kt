@@ -41,6 +41,7 @@ class SettingsViewModel(
         val fontScale: Float = 1.0f,
         val hapticEnabled: Boolean = true,
         val hapticStrength: Int = 2,
+        val hapticDuration: Int = 1,
         val darkMode: Boolean? = null,
         val customParsePrompt: String = "",
         val customAnswerPrompt: String = ""
@@ -68,12 +69,14 @@ class SettingsViewModel(
                     fontScale = it.fontScale,
                     hapticEnabled = it.hapticEnabled,
                     hapticStrength = it.hapticStrength,
+                    hapticDuration = it.hapticDuration,
                     darkMode = it.darkMode,
                     customParsePrompt = it.customParsePrompt,
                     customAnswerPrompt = it.customAnswerPrompt
                 )
                 Haptics.setEnabled(it.hapticEnabled)
                 Haptics.setStrength(it.hapticStrength)
+                Haptics.setDuration(it.hapticDuration)
             }
         }
     }
@@ -97,7 +100,17 @@ class SettingsViewModel(
     fun setHapticStrength(v: Int) = viewModelScope.launch {
         settingsStore.setHapticStrength(v)
         Haptics.setStrength(v)
-        Haptics.tick() // 立即让用户感知强度
+        // 停 60ms 再震：连续两次震动若首尾相接，多数 ROM 会合并成一次，
+        // 用户根本分不出前后差异（这就是"调了强度没感觉"的观感来源之一）
+        kotlinx.coroutines.delay(60)
+        Haptics.tick()
+    }
+
+    fun setHapticDuration(v: Int) = viewModelScope.launch {
+        settingsStore.setHapticDuration(v)
+        Haptics.setDuration(v)
+        kotlinx.coroutines.delay(60)
+        Haptics.tick()
     }
 
     /** null = 跟随系统；true/false = 强制橄榄夜读 / 暖纸 */

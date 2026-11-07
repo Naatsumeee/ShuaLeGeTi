@@ -14,16 +14,27 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCut
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Flag
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -77,6 +88,12 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         val mastered: List<Pair<WrongRecord, Question?>> = emptyList(),
         val favorites: List<Pair<FavoriteRecord, Question?>> = emptyList(),
         val kills: List<Pair<com.examhelper.shua.data.db.KillRecord, Question?>> = emptyList(),
+        /** 重点标记的错题（单独成组复刷） */
+        val flagged: List<Pair<WrongRecord, Question?>> = emptyList(),
+        /** 收藏题目 id 集合（给每题的菜单显示「取消收藏 / 收藏」） */
+        val favoriteIds: Set<Long> = emptySet(),
+        /** 斩题 id 集合（菜单显示「斩题 / 恢复」） */
+        val killedIds: Set<Long> = emptySet(),
         /** bankId -> 题库名（出现的题库） */
         val bankNames: Map<Long, String> = emptyMap()
     ) {
@@ -112,14 +129,27 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             studyRepo.observeFavorites().collect { records ->
                 val questions = questionDao.getByIds(records.map { it.questionId }).associateBy { it.id }
-                _lists.value = _lists.value.copy(favorites = records.map { it to questions[it.questionId] })
+                _lists.value = _lists.value.copy(
+                    favorites = records.map { it to questions[it.questionId] },
+                    favoriteIds = records.map { it.questionId }.toSet()
+                )
                 refreshBankNames()
             }
         }
         viewModelScope.launch {
             studyRepo.observeKills().collect { records ->
                 val questions = questionDao.getByIds(records.map { it.questionId }).associateBy { it.id }
-                _lists.value = _lists.value.copy(kills = records.map { it to questions[it.questionId] })
+                _lists.value = _lists.value.copy(
+                    kills = records.map { it to questions[it.questionId] },
+                    killedIds = records.map { it.questionId }.toSet()
+                )
+                refreshBankNames()
+            }
+        }
+        viewModelScope.launch {
+            studyRepo.observeFlaggedWrong().collect { records ->
+                val questions = questionDao.getByIds(records.map { it.questionId }).associateBy { it.id }
+                _lists.value = _lists.value.copy(flagged = records.map { it to questions[it.questionId] })
                 refreshBankNames()
             }
         }
@@ -140,6 +170,18 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     fun markMastered(questionId: Long) = viewModelScope.launch { studyRepo.markMastered(questionId) }
     fun removeWrong(questionId: Long) = viewModelScope.launch { studyRepo.removeWrong(questionId) }
     fun reviveKill(questionId: Long) = viewModelScope.launch { studyRepo.reviveKill(questionId) }
+
+    /** 重点标记：错题本里单独成组复刷 */
+    fun toggleFlag(questionId: Long) = viewModelScope.launch { studyRepo.toggleFlag(questionId) }
+
+    /** 收藏/取消收藏（错题本菜单里直接切，不必回做题页） */
+    fun toggleFavorite(question: Question) = viewModelScope.launch { studyRepo.toggleFavorite(question) }
+
+    /** 斩题/恢复（斩掉的题从错题本列表里消失，进斩题墙） */
+    fun toggleKill(question: Question) = viewModelScope.launch { studyRepo.toggleKill(question) }
+
+    /** 整本忽略：一次清掉该题库的全部错题记录 */
+    fun ignoreBank(bankId: Long) = viewModelScope.launch { studyRepo.ignoreWrongBank(bankId) }
 }
 
 @Composable
@@ -147,7 +189,9 @@ fun WrongBookScreen(
     onOpenBank: (Long) -> Unit,
     contentPadding: PaddingValues = PaddingValues(0.dp),
     /** 错题重刷 / 随机抽检：复用题库刷题的同款做题页（study 路由 + 筛选指纹） */
-    onStartStudy: (bankId: Long, mode: StudyMode, filterJson: String) -> Unit = { _, _, _ -> }
+    onStartStudy: (bankId: Long, mode: StudyMode, filterJson: String) -> Unit = { _, _, _ -> },
+    /** 点某一道题 → 单题详情页（完整题干/选项/参考答案/解析） */
+    onOpenQuestion: ((questionId: Long) -> Unit)? = null
 ) {
     val vm: LibraryViewModel = viewModel()
     val lists by vm.lists.collectAsState()
@@ -156,6 +200,8 @@ fun WrongBookScreen(
     var detail by remember { mutableStateOf<Question?>(null) }
     /** 章节筛选（null = 该题库全部章节） */
     var chapter by remember { mutableStateOf<String?>(null) }
+    /** 重刷/抽检时是否重新作答（默认 true：错题都是做过的题，不该一进来就是解析） */
+    var rebrushFresh by remember { mutableStateOf(true) }
     val extra = shuaColors
 
     // 切 tab / 切题库时章节选择失效，避免停在上一组不存在的章节上
@@ -174,6 +220,7 @@ fun WrongBookScreen(
         val tabDefs = listOf(
             "未掌握" to lists.wrong.size,
             "已掌握" to lists.mastered.size,
+            "重点" to lists.flagged.size,
             "收藏" to lists.favorites.size,
             "斩题墙" to lists.kills.size
         )
@@ -253,6 +300,20 @@ fun WrongBookScreen(
                         )
                     )
                 }
+                // 整本忽略：一次清掉该题库的全部错题记录（收藏/斩题不受影响）
+                if (selectedBank != null) {
+                    FilterChip(
+                        selected = false,
+                        onClick = { vm.ignoreBank(selectedBank!!) },
+                        label = { Text("忽略整本", style = MaterialTheme.typography.labelMedium) },
+                        colors = FilterChipDefaults.filterChipColors(labelColor = extra.sage),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = true,
+                            selected = false,
+                            borderColor = extra.sage.copy(alpha = 0.4f)
+                        )
+                    )
+                }
             }
         } else {
             Spacer(Modifier.height(6.dp))
@@ -264,7 +325,8 @@ fun WrongBookScreen(
         val tabEntries = when (tab) {
             0 -> lists.wrong.filter { bankFilter(it.second) }
             1 -> lists.mastered.filter { bankFilter(it.second) }
-            2 -> lists.favorites.filter { bankFilter(it.second) }
+            2 -> lists.flagged.filter { bankFilter(it.second) }
+            3 -> lists.favorites.filter { bankFilter(it.second) }
             else -> lists.kills.filter { bankFilter(it.second) }
         }
 
@@ -278,8 +340,43 @@ fun WrongBookScreen(
         if (tabEntries.isNotEmpty() && selectedBank != null) {
             val scopeBank = selectedBank!!
             val scopeChapters = listOfNotNull(chapter)
-            val rebrushFilter = StudyFilter(chapters = scopeChapters, status = "WRONG").fingerprint()
-            val sampleFilter = StudyFilter(chapters = scopeChapters, status = "WRONG").fingerprint()
+            // 作答模式：错题都是做过的题，默认「重新作答」——
+            // 旧实现把历史作答还原出来，一进去就是满屏解析，根本没法重做。
+            val rebrushFilter = StudyFilter(
+                chapters = scopeChapters, status = "WRONG", freshAnswer = rebrushFresh
+            ).fingerprint()
+            val sampleFilter = StudyFilter(
+                chapters = scopeChapters, status = "WRONG", freshAnswer = rebrushFresh
+            ).fingerprint()
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "作答",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+                FilterChip(
+                    selected = rebrushFresh,
+                    onClick = { rebrushFresh = true },
+                    label = { Text("重新作答", style = MaterialTheme.typography.labelSmall) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                )
+                FilterChip(
+                    selected = !rebrushFresh,
+                    onClick = { rebrushFresh = false },
+                    label = { Text("直接看解析", style = MaterialTheme.typography.labelSmall) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                )
+            }
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -354,7 +451,8 @@ fun WrongBookScreen(
                     when (tab) {
                         0 -> "还没有错题，刷题去吧！"
                         1 -> "还没有已掌握的错题"
-                        2 -> "还没有收藏，做题时点右上角星标"
+                        2 -> "还没有标记重点的题 —— 在题目右上角菜单里点「标记重点」"
+                        3 -> "还没有收藏，做题时点右上角星标"
                         else -> "还没有斩过的题——做题时点剪刀图标斩掉已掌握的题"
                     },
                     Modifier.fillMaxWidth().padding(32.dp),
@@ -373,7 +471,10 @@ fun WrongBookScreen(
                     PaperCard(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(16.dp),
-                        onClick = { detail = q }
+                        // 点卡片进单题详情页看完整题目与解析；没有回调时退回原来的弹窗
+                        onClick = {
+                            if (onOpenQuestion != null) onOpenQuestion(q.id) else detail = q
+                        }
                     ) {
                         Column(Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -384,9 +485,86 @@ fun WrongBookScreen(
                                 }
                                 Spacer(Modifier.weight(1f))
                                 when (meta) {
+                                    is WrongRecord -> if (meta.flagged) {
+                                        SemanticChip("重点", ChipTone.Amber)
+                                        Spacer(Modifier.width(4.dp))
+                                    }
+                                    else -> {}
+                                }
+                                when (meta) {
                                     is WrongRecord -> SemanticChip("错 ${meta.wrongCount} 次", ChipTone.Sage)
                                     is FavoriteRecord -> SemanticChip("收藏", ChipTone.Amber)
                                     is com.examhelper.shua.data.db.KillRecord -> SemanticChip("已斩", ChipTone.Neutral)
+                                }
+                                // 每题的二级菜单：收藏 / 斩题 / 标记重点 / 从错题本删除
+                                Box {
+                                    var menuOpen by remember { mutableStateOf(false) }
+                                    Box(
+                                        Modifier
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .clickable { menuOpen = true }
+                                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.MoreVert,
+                                            contentDescription = "更多",
+                                            modifier = Modifier.size(17.dp),
+                                            tint = MaterialTheme.colorScheme.outline
+                                        )
+                                    }
+                                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                        val fav = q.id in lists.favoriteIds
+                                        DropdownMenuItem(
+                                            text = { Text(if (fav) "取消收藏" else "收藏") },
+                                            leadingIcon = {
+                                                Icon(
+                                                    if (fav) Icons.Filled.Star else Icons.Outlined.StarOutline,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(17.dp),
+                                                    tint = if (fav) extra.amber else MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            },
+                                            onClick = { menuOpen = false; vm.toggleFavorite(q) }
+                                        )
+                                        val killed = q.id in lists.killedIds
+                                        DropdownMenuItem(
+                                            text = { Text(if (killed) "取消斩题" else "斩题") },
+                                            leadingIcon = {
+                                                Icon(
+                                                    Icons.Filled.ContentCut,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(17.dp)
+                                                )
+                                            },
+                                            onClick = { menuOpen = false; vm.toggleKill(q) }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text(if ((meta as? WrongRecord)?.flagged == true) "取消重点" else "标记重点") },
+                                            leadingIcon = {
+                                                Icon(
+                                                    Icons.Filled.Flag,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(17.dp),
+                                                    tint = if ((meta as? WrongRecord)?.flagged == true) extra.amber
+                                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            },
+                                            enabled = meta is WrongRecord,
+                                            onClick = { menuOpen = false; vm.toggleFlag(q.id) }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("从错题本删除", color = extra.sage) },
+                                            leadingIcon = {
+                                                Icon(
+                                                    Icons.Filled.Delete,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(17.dp),
+                                                    tint = extra.sage
+                                                )
+                                            },
+                                            onClick = { menuOpen = false; vm.removeWrong(q.id) }
+                                        )
+                                    }
                                 }
                             }
                             // 硬截断会切断 LaTeX 命令，交给排版层按 2 行省略
@@ -434,7 +612,7 @@ fun WrongBookScreen(
             },
             confirmButton = {
                 Row {
-                    if (tab == 3) {
+                    if (tab == 4) {
                         TextButton(onClick = {
                             vm.reviveKill(q.id)
                             detail = null

@@ -152,9 +152,12 @@ class StudyViewModel(
             runCatching { studyRepo.clearRound(bankId, mode) }
         }
         questionShownAt = System.currentTimeMillis()
-        // 记住已作答结果：划回做过的题不再要求重答
+        // 记住已作答结果：划回做过的题不再要求重答。
+        // freshAnswer = true 时不还原（错题本重刷/抽检要求重新作答），
+        // 否则一进来就是满屏解析，用户根本没机会答。
         val q = session.question
-        val last = q?.let { runCatching { studyRepo.latestAttempt(it.id) }.getOrNull() }
+        val last = if (filter?.freshAnswer == true) null
+        else q?.let { runCatching { studyRepo.latestAttempt(it.id) }.getOrNull() }
         val restored = last != null && last.userAnswer.isNotBlank()
         val restoredLetters = when {
             !restored -> emptySet()

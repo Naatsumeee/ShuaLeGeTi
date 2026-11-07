@@ -80,7 +80,9 @@ class ExamReportViewModel(savedStateHandle: SavedStateHandle) : ViewModel() {
 fun ExamReportScreen(
     runId: String,
     onBack: () -> Unit,
-    onRedoWrong: ((bankId: Long) -> Unit)? = null
+    onRedoWrong: ((bankId: Long) -> Unit)? = null,
+    /** 点某一道题 → 打开单题详情页（默认展开解析，底部按钮返回本报告） */
+    onOpenQuestion: ((questionId: Long) -> Unit)? = null
 ) {
     val vm: ExamReportViewModel = viewModel()
     val report by vm.report.collectAsState()
@@ -217,7 +219,10 @@ fun ExamReportScreen(
                 }
             }
             items(list) { item ->
-                PaperCard(Modifier.fillMaxWidth()) {
+                PaperCard(
+                    Modifier.fillMaxWidth(),
+                    onClick = onOpenQuestion?.let { open -> { open(item.question.id) } }
+                ) {
                     Column(Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(
@@ -256,6 +261,13 @@ fun ExamReportScreen(
                                 text = it,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (onOpenQuestion != null) {
+                            Text(
+                                "点按查看完整题目与解析 ›",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = extra.terracottaDeep
                             )
                         }
                     }

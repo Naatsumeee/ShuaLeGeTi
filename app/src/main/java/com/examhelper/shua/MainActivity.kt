@@ -21,6 +21,7 @@ class MainActivity : ComponentActivity() {
             // 震动总开关跟设置同步（做题页在判分时同步读取）
             Haptics.setEnabled(settings.hapticEnabled)
             Haptics.setStrength(settings.hapticStrength)
+            Haptics.setDuration(settings.hapticDuration)
             ShuaTheme(darkTheme = settings.darkMode) {
                 AppRoot(fontScale = settings.fontScale)
             }

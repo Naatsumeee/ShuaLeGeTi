@@ -9,6 +9,7 @@ import com.examhelper.shua.data.db.QuestionType
 import com.examhelper.shua.data.db.RecordDao
 import com.examhelper.shua.data.db.ProgressDao
 import com.examhelper.shua.data.model.ChapterSummary
+import com.examhelper.shua.data.model.JudgeOptions
 import com.examhelper.shua.data.model.JsonCodec
 import com.examhelper.shua.data.model.ParsedQuestion
 import com.examhelper.shua.data.model.ShuaBankFile
@@ -39,24 +40,31 @@ class BankRepository(
 
     suspend fun countNoAnalysis(bankId: Long): Int = questionDao.countNoAnalysis(bankId)
 
-    private fun ParsedQuestion.toEntity(bankId: Long, order: Int): Question = Question(
-        bankId = bankId,
-        orderInBank = order,
-        chapter = chapter,
-        type = type,
-        subtype = subtype,
-        stem = stem,
-        sharedStem = sharedStem,
-        sharedOptionsJson = sharedOptions.takeIf { it.isNotEmpty() }?.let(JsonCodec::encodeOptions),
-        optionsJson = options.takeIf { it.isNotEmpty() }?.let(JsonCodec::encodeOptions),
-        answer = answer,
-        analysis = analysis,
-        sourcePage = sourcePage,
-        aiGenerated = aiGenerated,
-        confidence = confidence,
-        agreement = agreement,
-        dissentJson = dissent.takeIf { it.isNotEmpty() }?.let(JsonCodec::encodeDissent)
-    )
+    private fun ParsedQuestion.toEntity(bankId: Long, order: Int): Question {
+        // 判断题统一在这里补选项+对齐答案字母：所有导入路径（正则解析 / AI 解析 /
+        // JSON 导入）最后都会走到这里，放在这里一处就够，不必每个解析器各写一遍。
+        val (judgeOpts, judgeAns) = JudgeOptions.normalize(type, options, answer)
+        val finalOptions = if (type == QuestionType.JUDGE) judgeOpts else options
+        val finalAnswer = if (type == QuestionType.JUDGE) judgeAns else answer
+        return Question(
+            bankId = bankId,
+            orderInBank = order,
+            chapter = chapter,
+            type = type,
+            subtype = subtype,
+            stem = stem,
+            sharedStem = sharedStem,
+            sharedOptionsJson = sharedOptions.takeIf { it.isNotEmpty() }?.let(JsonCodec::encodeOptions),
+            optionsJson = finalOptions.takeIf { it.isNotEmpty() }?.let(JsonCodec::encodeOptions),
+            answer = finalAnswer,
+            analysis = analysis,
+            sourcePage = sourcePage,
+            aiGenerated = aiGenerated,
+            confidence = confidence,
+            agreement = agreement,
+            dissentJson = dissent.takeIf { it.isNotEmpty() }?.let(JsonCodec::encodeDissent)
+        )
+    }
 
     /** 由解析结果创建题库 */
     suspend fun createBank(name: String, sourceFileName: String?, parsed: List<ParsedQuestion>): Long {

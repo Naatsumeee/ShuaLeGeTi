@@ -186,6 +186,13 @@ interface RecordDao {
     @Query("SELECT * FROM wrong_records WHERE questionId = :questionId")
     suspend fun getWrong(questionId: Long): WrongRecord?
 
+    /** 重点标记的分组：按标记时间无存储，统一按最近做错时间排 */
+    @Query("SELECT * FROM wrong_records WHERE flagged = 1 ORDER BY lastWrongAt DESC")
+    fun observeFlaggedWrong(): Flow<List<WrongRecord>>
+
+    @Query("UPDATE wrong_records SET flagged = :flagged WHERE questionId = :questionId")
+    suspend fun setFlagged(questionId: Long, flagged: Boolean)
+
     @Query("UPDATE wrong_records SET mastered = 1 WHERE questionId = :questionId")
     suspend fun markMastered(questionId: Long)
 

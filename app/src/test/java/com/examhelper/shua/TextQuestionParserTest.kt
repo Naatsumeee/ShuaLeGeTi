@@ -69,7 +69,12 @@ class TextQuestionParserTest {
         """.trimIndent()
         val q = TextQuestionParser.parse(judge).first()
         assertEquals(QuestionType.JUDGE, q.type)
-        assertEquals("对", q.answer)
+        // 判断题统一归一到 A/B（A=正确 B=错误），并自动补齐两个选项。
+        // 展示层用 JudgeOptions.displayFor 把 A 渲染成「正确」，所以库里存字母是对的。
+        assertEquals("A", q.answer)
+        assertEquals(2, q.options.size)
+        assertEquals("正确", q.options[0].text)
+        assertEquals("错误", q.options[1].text)
     }
 
     @Test

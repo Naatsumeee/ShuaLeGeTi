@@ -1,9 +1,8 @@
 package com.examhelper.shua.ui.bank
 
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
+import com.examhelper.shua.ui.sound.twoStageClick
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -345,7 +344,7 @@ fun BankListScreen(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun BankCard(
     bank: QuestionBank,
@@ -362,8 +361,8 @@ private fun BankCard(
     PaperCard(
         modifier = Modifier
             .fillMaxWidth()
-            // 长按卡片直接弹二级菜单（右键/长按是移动端的「更多」惯用手势）
-            .combinedClickable(onClick = onClick, onLongClick = { menuOpen = true }),
+            // 长按卡片直接弹二级菜单：按下震一记不执行、松手再震一记才弹
+            .twoStageClick(onClick = onClick, onLongClick = { menuOpen = true }),
         shape = shape
     ) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {

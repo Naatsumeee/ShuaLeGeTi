@@ -192,7 +192,14 @@ fun ExamScreen(
 
                         q.sharedOptionsJson?.let { SharedOptionsCard(it) }
 
-                        val options = JsonCodec.decodeOptions(q.optionsJson)
+                        // 判断题兜底：老题库可能没存选项（只有「答案：对」），
+                        // 这里补出「正确 / 错误」两行，否则测试模式无法作答。
+                        val rawOptions = JsonCodec.decodeOptions(q.optionsJson)
+                        val options = if (q.type == QuestionType.JUDGE) {
+                            com.examhelper.shua.data.model.JudgeOptions
+                                .normalize(q.type, rawOptions, q.answer)
+                                .first
+                        } else rawOptions
                         val selected = state.selected[q.id] ?: emptySet()
                         when (q.type) {
                             QuestionType.SINGLE, QuestionType.MULTIPLE, QuestionType.JUDGE ->
@@ -202,7 +209,11 @@ fun ExamScreen(
                                         key = opt.key,
                                         text = opt.text,
                                         selected = isSelected,
-                                        onClick = { vm.onOptionTap(opt.key) }
+                                        onClick = {
+                                            // 选中 / 取消选中都给触感：测试模式以前完全没有震动
+                                            com.examhelper.shua.ui.sound.Haptics.tap()
+                                            vm.onOptionTap(opt.key)
+                                        }
                                     )
                                 }
 
@@ -229,7 +240,10 @@ fun ExamScreen(
                     Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             TextButton(
-                                onClick = vm::prev,
+                                onClick = {
+                                    com.examhelper.shua.ui.sound.Haptics.tick()
+                                    vm.prev()
+                                },
                                 enabled = state.index > 0,
                                 modifier = Modifier
                                     .weight(1f)
@@ -247,7 +261,10 @@ fun ExamScreen(
                                 ) { Text("交卷", style = MaterialTheme.typography.labelLarge) }
                             } else {
                                 Button(
-                                    onClick = vm::next,
+                                    onClick = {
+                                        com.examhelper.shua.ui.sound.Haptics.tick()
+                                        vm.next()
+                                    },
                                     modifier = Modifier.weight(1.4f).heightIn(min = 44.dp),
                                     shape = RoundedCornerShape(13.dp)
                                 ) { Text("下一题", style = MaterialTheme.typography.labelLarge) }
@@ -300,6 +317,7 @@ fun ExamScreen(
                                     }
                                 )
                                 .clickable {
+                                    com.examhelper.shua.ui.sound.Haptics.tick()
                                     vm.jumpTo(i)
                                     showSheet = false
                                 },
@@ -334,6 +352,7 @@ fun ExamScreen(
                 Button(
                     onClick = {
                         showConfirm = false
+                        com.examhelper.shua.ui.sound.Haptics.done()
                         vm.submit { runId -> onSubmitted(runId) }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
