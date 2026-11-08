@@ -32,6 +32,13 @@ class ShuaApp : Application() {
             val app = this
             Thread { com.examhelper.shua.data.storage.AppStorage.cleanupStale(app) }.start()
         }
+        // 进程被系统杀掉后，WorkManager 队列里那条导入任务也跟着没了，
+        // 但库里的 stage 还停在 INGEST/PARSE → 界面永远显示「解析中」。
+        // 启动时补排一次（已解析分块落盘，重排即断点续跑）。
+        runCatching {
+            val app = this
+            Thread { com.examhelper.shua.data.importjob.ImportPipelineWorker.reviveStale(app) }.start()
+        }
     }
 
     companion object {

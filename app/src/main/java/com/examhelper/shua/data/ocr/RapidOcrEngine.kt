@@ -23,24 +23,15 @@ class RapidOcrEngine(context: Context) : OcrProvider {
 
     private val appContext = context.applicationContext
 
-    private val engine by lazy {
-        com.benjaminwan.ocrlibrary.OcrEngine(appContext).apply {
-            // 扫描试卷场景参数。
-            //
-            // boxThresh / unClipRatio 的取值依据（官方参数说明）：
-            // · box_thresh「存在漏检时，调低该值」——试卷里 A~E 五个选项常被整块漏掉，
-            //   调低到 0.2 用少量误检换召回，多认几个噪声字比漏掉整个选项好；
-            // · unclip_ratio「出现框截断文字的情况，调大该值」——1.6 → 1.8 让文本框
-            //   多留一点边，避免紧贴的文字被切掉首尾。
-            // boxScoreThresh 仍是 0.5：它管的是「算不算文字」，再降会把污点当字。
-            padding = 50
-            boxScoreThresh = 0.5f
-            boxThresh = 0.2f
-            unClipRatio = 1.8f
-            doAngle = true
-            mostAngle = true
-        }
-    }
+    /**
+     * 引擎实例进程内共享。
+     *
+     * 每次 `OcrEngine(...)` 构造都会走一遍 JNI init：重载三个 ONNX 模型 + 重建字典。
+     * 原来每导入一次题库就新建一个实例，代价是几百毫秒的加载，更严重的是
+     * 原生层 `CrnnNet::initModel` 过去不清空 `keys`，重复 init 会让字典翻倍、
+     * 识别结果整体错位成乱码（已在 CrnnNet.cpp 修掉，但这里也不再重复 init）。
+     */
+    private val engine by lazy { sharedEngine(appContext) }
 
     /**
      * 检测阶段的长边上限。**这是小字漏检的关键**：PDF 页面渲染出来约 1400×1980，
@@ -105,6 +96,36 @@ class RapidOcrEngine(context: Context) : OcrProvider {
             )
         } finally {
             output.recycle()
+        }
+    }
+
+    companion object {
+        @Volatile
+        private var engineInstance: com.benjaminwan.ocrlibrary.OcrEngine? = null
+
+        /**
+         * 进程内唯一的 OCR 引擎。构造一次要重载三个 ONNX 并建字典，
+         * 重复构造既慢，也会把原生层的字典反复追加（旧 bug）。
+         */
+        @Synchronized
+        private fun sharedEngine(context: Context): com.benjaminwan.ocrlibrary.OcrEngine {
+            engineInstance?.let { return it }
+            return com.benjaminwan.ocrlibrary.OcrEngine(context.applicationContext).apply {
+                // 扫描试卷场景参数。
+                //
+                // boxThresh / unClipRatio 的取值依据（官方参数说明）：
+                // · box_thresh「存在漏检时，调低该值」——试卷里 A~E 五个选项常被整块漏掉，
+                //   调低到 0.2 用少量误检换召回，多认几个噪声字比漏掉整个选项好；
+                // · unclip_ratio「出现框截断文字的情况，调大该值」——1.6 → 1.8 让文本框
+                //   多留一点边，避免紧贴的文字被切掉首尾。
+                // boxScoreThresh 仍是 0.5：它管的是「算不算文字」，再降会把污点当字。
+                padding = 50
+                boxScoreThresh = 0.5f
+                boxThresh = 0.2f
+                unClipRatio = 1.8f
+                doAngle = true
+                mostAngle = true
+            }.also { engineInstance = it }
         }
     }
 }

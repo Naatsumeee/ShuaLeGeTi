@@ -86,7 +86,10 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
             _state.value = _state.value.copy(
                 stage = when (job.stage) {
                     "DONE" -> Stage.PREVIEW
-                    "FAILED", "CANCELED" -> if (preview.isEmpty()) Stage.RUNNING else Stage.PREVIEW
+                    // 已取消且一个字都没解析出来 → 回到首页重选文件，
+                    // 不能显示成 RUNNING 让用户以为还在跑。
+                    "CANCELED" -> if (preview.isEmpty()) Stage.IDLE else Stage.PREVIEW
+                    "FAILED" -> if (preview.isEmpty()) Stage.RUNNING else Stage.PREVIEW
                     else -> Stage.RUNNING
                 },
                 jobId = jobId,
@@ -191,6 +194,9 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                         job.stage == "DONE" -> Stage.PREVIEW
                         job.stage == "INGEST" || job.stage == "PARSE" -> Stage.RUNNING
                         job.stage == "FAILED" -> if (preview.isEmpty()) Stage.RUNNING else Stage.PREVIEW
+                        // 任务被系统/通知栏取消：有已解析结果就当预览，否则回首页重选文件。
+                        // 旧实现让 CANCELED 落进 else 保留原 stage，界面会一直卡在「解析中」。
+                        job.stage == "CANCELED" -> if (preview.isEmpty()) Stage.IDLE else Stage.PREVIEW
                         else -> _state.value.stage
                     }
                 )
@@ -212,11 +218,27 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun cancelJob() {
+    /**
+     * 取消当前任务，然后回到导入首页。
+     *
+     * 早先版本只写 `stage = "CANCELED"` 就结束了：`observeJob()` 的 when 里
+     * CANCELED 落进 `else -> _state.value.stage`，界面于是永远停在「解析中」，
+     * 用户的感觉就是「点了取消没反应」。这里主动把 stage 拨回 IDLE，
+     * 并通过 [onCanceled] 让导航退回上一页。
+     */
+    fun cancelJob(onCanceled: (() -> Unit)? = null) {
         val jid = _state.value.jobId ?: return
         ImportPipelineWorker.cancel(getApplication(), jid)
         viewModelScope.launch {
-            jobDao.getById(jid)?.let { jobDao.upsert(it.copy(stage = "CANCELED", message = "已取消")) }
+            jobDao.getById(jid)?.let {
+                jobDao.upsert(it.copy(stage = "CANCELED", message = "已取消（进度已保存，可继续）"))
+            }
+            _state.value = UiState(
+                providersReady = _state.value.providersReady,
+                concurrency = _state.value.concurrency,
+                ocrEngine = _state.value.ocrEngine
+            )
+            onCanceled?.invoke()
         }
     }
 

@@ -117,11 +117,51 @@ object Prompts {
      * - 字段名必须与 ShuaBankFile / ShuaQuestionJson 完全一致
      * - 只能引用本 App 真实支持的字段与枚举值，不能臆造
      * - 直接给 JSON，用户存成 .json 就能用「导入 .json」导入，不必再走一遍解析
+     *
+     * 第一节「OCR 技术路线」是给能落地到本机执行的 Agent 用的：手机上跑 OCR 又慢
+     * 又容易被扫描件坑，电脑上一次装好、批量识别，再把结果交给模型整理，质量高得多。
+     * 网页版对话窗口碰不到本地文件，所以这一节必须写明「跑不了就跳过」。
      */
     val JSON_CONVERT = """
         你是一名题库整理助手。我会给你一段题目内容（可能是图片 OCR 的文本、手打笔记、从网页复制的杂乱文字，或一份试卷的照片转述）。请把它整理成一个【可以直接导入刷题 App 的 JSON 文件】。
 
-        # 输出格式（必须逐条遵守）
+        # 第一步：如果我能给你文件（PDF / 图片 / 扫描件），先在我电脑上把字识别出来
+
+        如果你能在这台电脑上执行命令（Claude Code、Cursor、Codex、Cline 这类 Agent 形态都算），按下面做；如果你只是网页对话窗口、碰不到我的本地文件，就跳过本节，等我粘贴文字。
+
+        环境是 Windows + Python 3.10 以上。装一套离线 OCR 就够，推荐 RapidOCR（PP-OCRv5 模型，pip 直接装，纯 CPU 能跑，不联网）：
+
+            pip install rapidocr onnxruntime pymupdf
+
+        扫描版 PDF 先渲染成 200 dpi 的图片再逐页识别：
+
+            python -c "import pymupdf,sys; d=pymupdf.open(sys.argv[1]); [p.get_pixmap(dpi=200).save('page_%03d.png' % (i+1)) for i,p in enumerate(d)]" 试卷.pdf
+
+        识别脚本，把每页结果按页写进一个 txt，页码用 [[PG:n]] 标出来（App 靠它定位题目来源页）：
+
+            from rapidocr import RapidOCR
+            import glob
+            engine = RapidOCR()
+            for f in sorted(glob.glob("page_*.png")):
+                res = engine(f)
+                lines = list(getattr(res, "txts", None) or [])
+                with open("ocr.txt", "a", encoding="utf-8") as out:
+                    out.write("[[PG:%d]]\n" % int(f[5:8]))
+                    out.write("\n".join(lines) + "\n")
+
+        （如果你的 rapidocr 是旧版包名 rapidocr_onnxruntime，调用方式是 result, elapse = engine(路径)，result 里每项是 [文本框, 文本, 置信度]，取第二项即可。）
+
+        几个必须交代的判断：
+        - 双栏试卷不能按自然阅读顺序直接拼。先按文本框的 x 坐标分成左栏 / 右栏，左栏从上到下读完再读右栏，否则左右两栏的字会交错成一团。
+        - 表格按文本框坐标还原成 Markdown 表格（含 | --- | 分隔行），不要拍平成一行。
+        - 页眉、页脚、页码、水印、印刷店名这类重复出现的行直接丢掉。
+        - 确实认不出的地方写【图】占位，不要编。
+
+        识别完把 ocr.txt 的内容整段发我（或者你自己接着做第二步）。
+
+        # 第二步：把文字整理成 JSON
+
+        ## 输出格式（必须逐条遵守）
 
         1. 只输出一个 JSON 对象，不要任何解释、前言、结语。可以包在 json 代码块里，也可以直接输出裸 JSON。
         2. 顶层结构固定为：
@@ -160,12 +200,13 @@ object Prompts {
         12. 图片里的表格可以用 Markdown 表格写在 stem 或 analysis 字符串里（含 | --- | --- | 分隔行）；完全无法识别的内容用【图】占位，不要瞎猜。
         13. 输出前请自己校验一遍：questions 是否非空、每题是否都有 stem 和 type、type 是否是六个合法值之一、JSON 是否括号闭合且无多余逗号。
 
-        # 需要你处理的情形
+        ## 需要你处理的情形
 
-        - 如果原文的答案是集中给在文末的（如「答案：1.B 2.C 3.A」），请按题号把答案回填到每道题的 answer 字段，不要把答案表原样留在最后。
+        - 如果原文的答案是集中给在文末的（如「答案：1.B 2.C 3.A」，或按题型分组写成「A1型：1.B 2.D」「X型：1.ABC 2.BD」），请按题号和题型把答案回填到每道题的 answer 字段，不要把答案表原样留在最后。注意不同题型往往各自从 1 开始编号，回填时要对上对应的那一组题，不要串组。
         - 如果原文有题号错乱、重复、跳号，按实际顺序重排成连续编号。
         - 如果某道题的选项字母有重复（如两个 B），按实际出现顺序重新编号为 A、B、C、D，并相应调整答案字母。
-        - 同一章节的题目必须连在一起，不要因为原文分页/分栏把它们打散；chapter 字段要写全，不要只写「第三章」而丢掉前面的书名或科目。
+        - 同一章节的题目必须连在一起，不要因为原文分页/分栏把它们打散；chapter 字段要写全，不要只写「第三章」而丢掉前面的书名或科目。「一、名词解释」「二、A1型题」这类题型分组标题不是章节名，不要写进 chapter。
+        - 如果文件里有 [[PG:n]] 这样的页码标记，把每道题所在页的 n 填进 sourcePage，标记本身不要出现在题干里。
 
         下面是需要整理的题目内容：
 

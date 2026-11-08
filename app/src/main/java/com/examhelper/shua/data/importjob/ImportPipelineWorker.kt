@@ -12,6 +12,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
 import androidx.work.ForegroundInfo
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.examhelper.shua.R
@@ -88,6 +89,12 @@ class ImportPipelineWorker(
                     )
                 )
                 .setConstraints(Constraints.NONE)
+                // 必须 expedited：普通排队的 WorkRequest 由 JobScheduler 择机调度，
+                // 用户点完「开始解析」立刻回桌面时任务往往还没被拉起，
+                // 等它真正启动时应用已在后台 → startForeground 被系统拒绝
+                // （ForegroundServiceStartNotAllowedException）→ 没有前台服务保护，
+                // 进程一被冻住 OCR 就停在那里。expedited 会在应用仍处于前台时立即启动。
+                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
                 .build()
             WorkManager.getInstance(context)
                 .enqueueUniqueWork(jobId, ExistingWorkPolicy.KEEP, request)
@@ -96,6 +103,49 @@ class ImportPipelineWorker(
 
         fun cancel(context: Context, jobId: String) {
             WorkManager.getInstance(context).cancelUniqueWork(jobId)
+        }
+
+        /**
+         * 进程被杀 / 系统清理后自愈：把库里还停在 INGEST、PARSE 的任务重新排上。
+         *
+         * WorkManager 的队列会随进程一起没，但已解析的分块是落盘的，
+         * 重新入队后 worker 会发现 raw/parsed 已存在，直接从断点续跑。
+         * 只在确认 WorkManager 里已无该任务的活跃实例时才补，避免重复跑。
+         */
+        fun reviveStale(context: Context) {
+            val app = context.applicationContext
+            val dao = (app as? ShuaApp)?.container?.database?.importJobDao() ?: return
+            val wm = WorkManager.getInstance(app)
+            runCatching {
+                val jobs = kotlinx.coroutines.runBlocking { dao.activeJobs() }
+                for (job in jobs) {
+                    val alive = runCatching {
+                        wm.getWorkInfosForUniqueWork(job.id).get().any { !it.state.isFinished }
+                    }.getOrDefault(true) // 查不到就当作还活着，宁可不补也别重复跑
+                    if (alive) continue
+                    // 阶段 1 还没落盘且拿不到原始 URI 的没法续（权限与来源都已失效），
+                    // 标成失败让用户重新选文件，而不是让界面永远转圈。
+                    val raw = com.examhelper.shua.data.storage.AppStorage
+                        .importRawFile(app, job.id)
+                    if (!raw.exists()) {
+                        kotlinx.coroutines.runBlocking {
+                            dao.upsert(
+                                job.copy(
+                                    stage = "FAILED",
+                                    errorMessage = "任务被系统中断，请重新选择文件导入",
+                                    message = "任务被系统中断"
+                                )
+                            )
+                        }
+                        continue
+                    }
+                    enqueue(
+                        context = app, jobId = job.id, uri = null,
+                        bankName = job.bankName, sourceName = job.sourceName,
+                        parseMode = "ai", providerId = null, concurrency = 4
+                    )
+                }
+            }
         }
     }
 
@@ -115,7 +165,13 @@ class ImportPipelineWorker(
         val concurrency = inputData.getInt(KEY_CONCURRENCY, 4).coerceIn(1, 8)
 
         try {
-            runCatching { setForeground(foregroundInfo("准备导入…", 0, 0)) }
+            // 首次进入前台服务。失败通常意味着应用已经不在前台、系统拒绝拉起
+            // dataSync 服务；这时任务仍会继续跑，但失去保活保护，一旦被冻结就中断。
+            // 旧实现把它 runCatching 静默吞了 —— 用户看到的只是「卡住」，没有任何线索。
+            val fgOk = runCatching { setForeground(foregroundInfo("准备导入…", 0, 0)) }.isSuccess
+            if (!fgOk) {
+                updateJob(jobId) { it.copy(message = "后台保活未启动，切出应用可能暂停") }
+            }
 
             // ---------- 阶段 1：提取文本 ----------
             val raw = rawFile(jobId)

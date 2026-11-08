@@ -100,7 +100,13 @@ fun ImportScreen(
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            runCatching { context.contentResolver.takePersistableUriPermission(uri, 0) }
+            // flags 必须是 FLAG_GRANT_READ_URI_PERMISSION；传 0 拿不到持久读权限，
+            // 进程被系统回收后 WorkManager 再跑这个 uri 会 SecurityException。
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
             val name = queryName(context, uri)
             vm.filePicked(uri, name)
         }
@@ -220,15 +226,12 @@ fun ImportScreen(
                         if (showPcGuide) {
                             Spacer(Modifier.height(10.dp))
                             Text(
-                                "① 主路线：Umi-OCR（免费开源、解压即用、全程离线）\n" +
-                                    "「文档识别」页丢进 PDF/EPUB，直接出文字；「批量OCR」页丢进图片，可导出 " +
-                                    "txt / md / csv（表格存 csv 最稳）。识别前在文本后处理里选「多栏-按自然段换行」，" +
-                                    "双栏试卷的阅读顺序才对；页眉水印用「忽略区域」框掉。导出后把文本贴给任意 AI，" +
-                                    "配上面那段提示词让它产出 JSON。\n\n" +
-                                    "② 复杂页再加一道：小米 Xiaomi-OCR-0（0.8B 视觉模型）\n" +
-                                    "大表格、复杂公式、图文混排这一档它的还原度明显更高，但吃显存、纯 CPU " +
-                                    "每页也要 1.5~4 分钟，你这台 i5-8300U + 8GB 内存只适合挑几页重点跑，别当日常工具。\n\n" +
-                                    "③ 不建议：MinerU 一类需要 16GB 以上内存才跑得顺的整册流水线。",
+                                "扫描件在手机上 OCR 又慢又容易认错。更好的做法是：把上面那段提示词整段复制给" +
+                                    "电脑端的 AI（Claude Code、Cursor、Codex 这类能执行命令的都行），" +
+                                    "它会自己装好离线 OCR 环境、把 PDF 逐页识别出来，再整理成可导入的 JSON。" +
+                                    "你只需要把 JSON 存成文件，回到这里用「导入 .json」一步导进来。\n\n" +
+                                    "如果手上没有电脑，也可以自己用任意 OCR 软件把文字导出来（双栏要按左栏读完再读右栏），" +
+                                    "贴给 AI 配上同一段提示词，效果一样。",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -423,7 +426,11 @@ fun ImportScreen(
                                 }
                                 SecondaryAction("重试", Modifier.fillMaxWidth()) { vm.resumeJob() }
                             } else {
-                                SecondaryAction("取消任务", Modifier.fillMaxWidth()) { vm.cancelJob() }
+                                // 取消后不留在「解析中」：取消本身就表示不想再等，
+                                // 直接退回上一页（进度已落库，回来可继续）。
+                                SecondaryAction("取消任务", Modifier.fillMaxWidth()) {
+                                    vm.cancelJob { onDone() }
+                                }
                             }
                         }
                     }

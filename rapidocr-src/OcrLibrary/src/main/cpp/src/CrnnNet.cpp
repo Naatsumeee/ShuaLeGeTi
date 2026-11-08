@@ -60,6 +60,9 @@ char *readKeysFromAssets(AAssetManager *mgr, const std::string &keysName) {
 void CrnnNet::initModel(AAssetManager *mgr, const std::string &name, const std::string &keysName) {
     int dbModelDataLength = 0;
     void *dbModelData = getModelDataFromAssets(mgr, name.c_str(), dbModelDataLength);
+    if (session != nullptr) {
+        delete session;
+    }
     session = new Ort::Session(ortEnv, dbModelData, dbModelDataLength,
                                sessionOptions);
     free(dbModelData);
@@ -67,11 +70,24 @@ void CrnnNet::initModel(AAssetManager *mgr, const std::string &name, const std::
     outputNamesPtr = getOutputNames(session);
 
     //load keys
+    // 重要：keys 是成员变量，initModel 可能在同一进程里被调用多次（每次新建
+    // OcrEngine 都会走一遍）。旧代码只 emplace_back 从不清空，第二次初始化时
+    // 字典长度翻倍，keys[maxIndex] 整体错位一个字典项 —— 表现为「同一份文件
+    // 偶发成片乱码」。这里必须先清空。
+    keys.clear();
     char *buffer = readKeysFromAssets(mgr, keysName);
     if (buffer != NULL) {
         std::istringstream inStr(buffer);
         std::string line;
         while (getline(inStr, line)) {
+            // 某些字典文件行尾带 \r（Windows 换行），会多出一个不可见字符，
+            // 导致该行之后的索引全部偏移一位。
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            if (line.empty()) {
+                continue;
+            }
             keys.emplace_back(line);
         }
         free(buffer);

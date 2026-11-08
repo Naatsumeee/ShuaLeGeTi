@@ -338,6 +338,10 @@ interface ImportJobDao {
     @Query("SELECT * FROM import_jobs WHERE id = :id")
     fun observe(id: String): Flow<ImportJob?>
 
+    /** 还在进行中的任务（进程重启后自愈用） */
+    @Query("SELECT * FROM import_jobs WHERE stage IN ('INGEST', 'PARSE') ORDER BY createdAt DESC")
+    suspend fun activeJobs(): List<ImportJob>
+
     @Query("DELETE FROM import_jobs WHERE id = :id")
     suspend fun delete(id: String)
 }
