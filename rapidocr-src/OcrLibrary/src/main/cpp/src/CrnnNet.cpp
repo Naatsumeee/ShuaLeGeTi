@@ -6,6 +6,7 @@ CrnnNet::CrnnNet() {}
 
 CrnnNet::~CrnnNet() {
     delete session;
+    session = nullptr;
     inputNamesPtr.clear();
     outputNamesPtr.clear();
 }

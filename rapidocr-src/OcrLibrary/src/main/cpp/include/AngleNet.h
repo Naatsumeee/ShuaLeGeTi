@@ -20,7 +20,8 @@ public:
     std::vector<Angle> getAngles(std::vector<cv::Mat> &partImgs, bool doAngle, bool mostAngle);
 
 private:
-    Ort::Session *session;
+    // 必须显式初始化为 nullptr：旧代码留空、构造函数又是空的，if (session != nullptr) delete session; 读到的是随机值，首次 init 就 SIGSEGV（CrnnNet::initModel 崩过）。
+    Ort::Session *session = nullptr;
     Ort::Env ortEnv = Ort::Env(ORT_LOGGING_LEVEL_ERROR, "AngleNet");
     Ort::SessionOptions sessionOptions = Ort::SessionOptions();
     int numThread = 0;

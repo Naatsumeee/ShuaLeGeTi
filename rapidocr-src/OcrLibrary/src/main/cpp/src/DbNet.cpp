@@ -6,6 +6,7 @@ DbNet::DbNet() {}
 
 DbNet::~DbNet() {
     delete session;
+    session = nullptr;
     inputNamesPtr.clear();
     outputNamesPtr.clear();
 }
@@ -34,6 +35,12 @@ void DbNet::setNumThread(int numOfThread) {
 void DbNet::initModel(AAssetManager *mgr, const std::string &name) {
     int dbModelDataLength = 0;
     void *dbModelData = getModelDataFromAssets(mgr, name.c_str(), dbModelDataLength);
+    // 同一进程里这些网络也可能被重复 init（每 new 一次 OcrEngine 都会走），
+    // 先释放旧 session，否则每导入一次就多泄漏一组 ONNX 会话。
+    if (session != nullptr) {
+        delete session;
+        session = nullptr;
+    }
     session = new Ort::Session(ortEnv, dbModelData, dbModelDataLength, sessionOptions);
     free(dbModelData);
     inputNamesPtr = getInputNames(session);
