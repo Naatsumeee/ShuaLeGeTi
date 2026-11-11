@@ -1,4 +1,4 @@
-package com.examhelper.shua.data.db
+﻿package com.examhelper.shua.data.db
 
 import android.content.Context
 import androidx.room.Database
@@ -36,7 +36,7 @@ class Converters {
         ImportJob::class,
         GenerateJob::class
     ],
-    version = 10,
+    version = 11,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -50,7 +50,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun generateJobDao(): GenerateJobDao
 
     companion object {
-        /** v1 → v2：题型子类型/共用题干/共用选项、作答 runId/用时、斩题表、导入任务表、进度筛选指纹 */
+        /** v1 鈫?v2锛氶鍨嬪瓙绫诲瀷/鍏辩敤棰樺共/鍏辩敤閫夐」銆佷綔绛?runId/鐢ㄦ椂銆佹柀棰樿〃銆佸鍏ヤ换鍔¤〃銆佽繘搴︾瓫閫夋寚绾?*/
         private val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE questions ADD COLUMN subtype TEXT DEFAULT NULL")
@@ -87,14 +87,14 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        /** v2 → v3：题目页码 */
+        /** v2 鈫?v3锛氶鐩〉鐮?*/
         private val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE questions ADD COLUMN sourcePage INTEGER DEFAULT NULL")
             }
         }
 
-        /** v3 → v4：AI 原答案冲突字段 + 生成任务表 */
+        /** v3 鈫?v4锛欰I 鍘熺瓟妗堝啿绐佸瓧娈?+ 鐢熸垚浠诲姟琛?*/
         private val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE questions ADD COLUMN originalAnswer TEXT DEFAULT NULL")
@@ -118,7 +118,7 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        /** v4 → v5：AI 答案分离（aiAnswer/answerVerified）+ 深度解题标记 */
+        /** v4 鈫?v5锛欰I 绛旀鍒嗙锛坅iAnswer/answerVerified锛? 娣卞害瑙ｉ鏍囪 */
         private val MIGRATION_4_5 = object : Migration(4, 5) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE questions ADD COLUMN aiAnswer TEXT DEFAULT NULL")
@@ -127,7 +127,7 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        /** v5 → v6：导入解析也要统计 token 用量（成本不应只覆盖 AI 生成那一半） */
+        /** v5 鈫?v6锛氬鍏ヨВ鏋愪篃瑕佺粺璁?token 鐢ㄩ噺锛堟垚鏈笉搴斿彧瑕嗙洊 AI 鐢熸垚閭ｄ竴鍗婏級 */
         private val MIGRATION_5_6 = object : Migration(5, 6) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE import_jobs ADD COLUMN cacheHitTokens INTEGER NOT NULL DEFAULT 0")
@@ -137,8 +137,8 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
-         * v6 → v7：任务前后余额快照。
-         * 官方 `/user/balance` 的差值才是能对账的真实花费，本地 token 单价只是「参考成本」。
+         * v6 鈫?v7锛氫换鍔″墠鍚庝綑棰濆揩鐓с€?
+         * 瀹樻柟 `/user/balance` 鐨勫樊鍊兼墠鏄兘瀵硅处鐨勭湡瀹炶姳璐癸紝鏈湴 token 鍗曚环鍙槸銆屽弬鑰冩垚鏈€嶃€?
          */
         private val MIGRATION_6_7 = object : Migration(6, 7) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -152,10 +152,10 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
-         * v7 → v8：
-         * 1. AI 解析的实时输出尾巴（导入页「生成过程预览」用）。只存最近一小段文本，
-         *    不落完整输出 —— 一次导入可能几十万字符。
-         * 2. 题库的置顶与归档标记（首页长按菜单）。
+         * v7 鈫?v8锛?
+         * 1. AI 瑙ｆ瀽鐨勫疄鏃惰緭鍑哄熬宸达紙瀵煎叆椤点€岀敓鎴愯繃绋嬮瑙堛€嶇敤锛夈€傚彧瀛樻渶杩戜竴灏忔鏂囨湰锛?
+         *    涓嶈惤瀹屾暣杈撳嚭 鈥斺€?涓€娆″鍏ュ彲鑳藉嚑鍗佷竾瀛楃銆?
+         * 2. 棰樺簱鐨勭疆椤朵笌褰掓。鏍囪锛堥椤甸暱鎸夎彍鍗曪級銆?
          */
         private val MIGRATION_7_8 = object : Migration(7, 8) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -166,10 +166,10 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
-         * v8 → v9：错题本「重点标记」。
+         * v8 鈫?v9锛氶敊棰樻湰銆岄噸鐐规爣璁般€嶃€?
          *
-         * `flagged = 1` 的错题可以在错题本里单独成组复刷，与「是否已掌握」互不影响
-         * —— 已掌握的题也可能是重点，所以不能复用 `mastered`。
+         * `flagged = 1` 鐨勯敊棰樺彲浠ュ湪閿欓鏈噷鍗曠嫭鎴愮粍澶嶅埛锛屼笌銆屾槸鍚﹀凡鎺屾彙銆嶄簰涓嶅奖鍝?
+         * 鈥斺€?宸叉帉鎻＄殑棰樹篃鍙兘鏄噸鐐癸紝鎵€浠ヤ笉鑳藉鐢?`mastered`銆?
          */
         private val MIGRATION_8_9 = object : Migration(8, 9) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -178,14 +178,14 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
-         * v9 → v10：把历史题库里被写坏的章节名洗一遍。
+         * v9 鈫?v10锛氭妸鍘嗗彶棰樺簱閲岃鍐欏潖鐨勭珷鑺傚悕娲椾竴閬嶃€?
          *
-         * 「章节名带（一）名词解释」这个 bug 从 v1.0.0 就存在，只修解析器的话，
-         * 用户手机里**已经导入**的题库仍然是错的，必须重新导入才能好 —— 而重导一本
-         * 扫描件要 OCR 十几分钟。所以这里在升级时直接把库里的脏章节名就地洗掉：
-         * 题型分组/章内小节目录 → NULL（未分章），「章名（一）名词解释」→ 只留章名。
+         * 銆岀珷鑺傚悕甯︼紙涓€锛夊悕璇嶈В閲娿€嶈繖涓?bug 浠?v1.0.0 灏卞瓨鍦紝鍙慨瑙ｆ瀽鍣ㄧ殑璇濓紝
+         * 鐢ㄦ埛鎵嬫満閲?*宸茬粡瀵煎叆**鐨勯搴撲粛鐒舵槸閿欑殑锛屽繀椤婚噸鏂板鍏ユ墠鑳藉ソ 鈥斺€?鑰岄噸瀵间竴鏈?
+         * 鎵弿浠惰 OCR 鍗佸嚑鍒嗛挓銆傛墍浠ヨ繖閲屽湪鍗囩骇鏃剁洿鎺ユ妸搴撻噷鐨勮剰绔犺妭鍚嶅氨鍦版礂鎺夛細
+         * 棰樺瀷鍒嗙粍/绔犲唴灏忚妭鐩綍 鈫?NULL锛堟湭鍒嗙珷锛夛紝銆岀珷鍚嶏紙涓€锛夊悕璇嶈В閲娿€嶁啋 鍙暀绔犲悕銆?
          *
-         * 干净的名字原样不动，所以对有章号的正规题库零影响。
+         * 骞插噣鐨勫悕瀛楀師鏍蜂笉鍔紝鎵€浠ュ鏈夌珷鍙风殑姝ｈ棰樺簱闆跺奖鍝嶃€?
          */
         private val MIGRATION_9_10 = object : Migration(9, 10) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -215,6 +215,50 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v10 鈫?v11锛氱珷鑺傚悕绗簩娆℃竻娲?鈥斺€?杩欎竴娆¤澶勭悊銆屽綊涓€銆嶃€?
+         *
+         * v10 鍙仛浜嗐€屽墺棰樺瀷鏍囩銆嶏紝鑰屼笖閭ｄ竴鐗堢殑 `cleanChapter` 鏈変釜鏇翠弗閲嶇殑缂洪櫡锛?
+         * `绗叚绔?绾跨矑浣撻仐浼犮€怉1鍨嬮銆慲 浼氳鍓ユ垚銆岀鍏珷銆嶏紝**绔犲悕鏁翠釜涓㈡帀**銆?
+         * 鍙﹀鍚屼竴绔犲湪搴撻噷鍙兘瀛樺湪澶氱鍐欐硶锛坄绗琗绔?AAAA` / `绗琗绔燻 / `AAAA`锛夛紝
+         * 绔犺妭鍒楄〃閲屽氨浼氬苟鍒楀嚭鐜板ソ鍑犳潯鐪嬭捣鏉ユ槸鍚屼竴绔犵殑椤?鈥斺€?鐢ㄦ埛鎶ョ殑
+         * 銆岀X绔?AAAA 鍙樻垚 绗琗绔?/ AAAA / 绗琗绔?AAAA + 绗琗绔?閲嶅銆嶃€?
+         *
+         * 杩欓噷鎸?*棰樺簱**鍒嗙粍锛氬厛閫愭潯 `cleanChapter`锛堢幇鍦ㄤ細淇濅綇绔犲悕鏈綋锛夛紝
+         * 鍐嶇敤 `unifyChapterNames` 鎶婂悓涓€绔犵殑澶氱鍐欐硶鏀舵暃鍒颁竴涓鑼冨悕銆?
+         * 鍒嗛搴撴槸蹇呴』鐨勶細绗?1 绔犲拰绗?1 绔犳槸涓嶅悓棰樺簱鐨勪袱绔狅紝涓嶈兘璺ㄥ簱鍚堝苟銆?
+         */
+        private val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val byBank = mutableMapOf<Long, MutableList<Pair<Long, String>>>()
+                db.query(
+                    "SELECT id, bankId, chapter FROM questions " +
+                        "WHERE chapter IS NOT NULL AND TRIM(chapter) != ''"
+                ).use { c ->
+                    while (c.moveToNext()) {
+                        byBank.getOrPut(c.getLong(1)) { mutableListOf() }
+                            .add(c.getLong(0) to (c.getString(2) ?: continue))
+                    }
+                }
+                byBank.forEach { (_, rows) ->
+                    // 鈶?閫愭潯娓呮礂
+                    val cleaned = rows.map { (id, raw) ->
+                        id to com.examhelper.shua.data.parse.HeadingClassifier.cleanChapter(raw)
+                    }
+                    // 鈶?鍚屼竴棰樺簱鍐呭綊涓€
+                    val mapping = com.examhelper.shua.data.parse.HeadingClassifier
+                        .unifyChapterNames(cleaned.mapNotNull { it.second })
+                    cleaned.forEach { (id, name) ->
+                        val finalName = name?.let { mapping[it] ?: it }
+                        db.execSQL(
+                            "UPDATE questions SET chapter = ? WHERE id = ?",
+                            arrayOf(finalName, id)
+                        )
+                    }
+                }
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -228,7 +272,7 @@ abstract class AppDatabase : RoomDatabase() {
                     .addMigrations(
                         MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
                         MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
-                        MIGRATION_9_10
+                        MIGRATION_9_10, MIGRATION_10_11
                     )
                     .fallbackToDestructiveMigration()
                     .build()

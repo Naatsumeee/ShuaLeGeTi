@@ -93,7 +93,25 @@ object TextQuestionParser {
 
         val withChapters = fillMissingChapterNumbers(questions)
         applyAnswers(withChapters, answerTables)
-        return withChapters
+        return unifyChapterNames(withChapters)
+    }
+
+    /**
+     * 同一章的多种写法归一到同一个字符串。
+     *
+     * 修的是用户报的「第X章 AAAA 导入后变成 第X章 / AAAA / 第X章 AAAA + 第X章 重复」：
+     * 同一章在不同位置被解析成不同字符串，章节列表里就出现好几条看起来像同一章的项。
+     * 判定逻辑在 [HeadingClassifier.unifyChapterNames]，这里只负责把它套到题目上。
+     */
+    private fun unifyChapterNames(questions: List<ParsedQuestion>): List<ParsedQuestion> {
+        val mapping = HeadingClassifier.unifyChapterNames(
+            questions.mapNotNull { it.chapter?.takeIf { c -> c.isNotBlank() } }
+        )
+        if (mapping.isEmpty()) return questions
+        questions.forEach { q ->
+            q.chapter?.let { c -> mapping[c]?.let { q.chapter = it } }
+        }
+        return questions
     }
 
     private fun chapterNumberOf(name: String?): Int? = chapterNumber(name.orEmpty())
@@ -373,7 +391,10 @@ object TextQuestionParser {
                 skipObjectiveSection = false
                 val no = chm.groupValues[1]
                 val unit = chm.groupValues[2]
-                val title = chm.groupValues[3].trim()
+                // 章名本体先过一遍题型标签清洗：OCR 常把章节标题和题型分组读进同一行
+                // （「第六章 线粒体遗传【A1型题】」「第九章 单基因病 一、单项选择题」）。
+                // 不清的话这行会原样落库成章节名，题库里就出现「第X章 AAAA【A1型题】」。
+                val title = HeadingClassifier.stripTypeLabels(chm.groupValues[3].trim())
                 val prefix = "第$no$unit"
                 hasChapterHeading = true
                 if (title.isBlank()) {
@@ -389,7 +410,9 @@ object TextQuestionParser {
                         pendingChapterPrefix = null
                         currentSection = "$prefix $title"
                     } else {
-                        // 同一章重复出现：若已有标题是残缺的（只有章号），用这行的完整标题补全
+                        // 同一章重复出现：若已有标题是残缺的（只有章号），用这行的完整标题补全。
+                        // 老实现只比对长度，于是「第一章」后面紧跟页眉的
+                        // 「第一章 一、A1型题」也会被判成残缺 → 覆盖成带题型标签的名字。
                         val existing = currentSection.orEmpty()
                         if (existing.length <= prefix.length + 1) currentSection = "$prefix $title"
                     }
@@ -401,7 +424,12 @@ object TextQuestionParser {
             val pendingPrefix = pendingChapterPrefix
             if (pendingPrefix != null) {
                 pendingChapterPrefix = null
-                if (!looksLikeQuestionOrSection(line)) {
+                // 本行不能是题目/选项/答案，**也不能是题型分组或章内小节标题**。
+                // 漏掉后一条时，「第一章」单独一行、下一行是「一、A1型题」的场景会拼成
+                // 「第一章 一、A1型题」—— 用户看到的「章节名带题型标签」就是这么来的。
+                val isHeadingLine = sectionRegex.matches(line) ||
+                    HeadingClassifier.isTypeHeading(HeadingClassifier.stripOrdinal(line))
+                if (!isHeadingLine && !looksLikeQuestionOrSection(line)) {
                     currentSection = "$pendingPrefix $line"
                     appendingTo = 0
                     continue

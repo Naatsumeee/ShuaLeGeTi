@@ -116,4 +116,82 @@ class HeadingClassifierTest {
             HeadingClassifier.cleanChapter("第十二章 课后习题")
         )
     }
+
+    // ---------- 章名本体必须留住（用户报的「第X章 AAAA 变成只有 第X章」）----------
+
+    @Test
+    fun `紧贴章名的题型标签只剥标签不剥章名`() {
+        // 老实现只按「序号 + 题型」找切点，切不掉无序号尾巴，于是掉进
+        // 「章号 + 题型 → 只留章号」分支，把「线粒体遗传」整个章名丢掉
+        assertEquals("第六章 线粒体遗传", HeadingClassifier.cleanChapter("第六章 线粒体遗传【A1型题】"))
+        assertEquals("第六章 线粒体遗传", HeadingClassifier.cleanChapter("第六章 线粒体遗传 A1型题"))
+        assertEquals("第六章 线粒体遗传", HeadingClassifier.cleanChapter("第六章 线粒体遗传选择题"))
+        assertEquals("第九章 单基因病", HeadingClassifier.cleanChapter("第九章 单基因病【X型题】"))
+        assertEquals("第二章 染色体病", HeadingClassifier.cleanChapter("第二章 染色体病　名词解释"))
+        // 多种写法叠加也要归一
+        assertEquals(
+            "第一章 绪论",
+            HeadingClassifier.cleanChapter("第一章 绪论【A1型题】（一）名词解释")
+        )
+    }
+
+    @Test
+    fun `题型标签剥离不能把纯题型标题剥成空`() {
+        // 「名词解释」剥完什么都不剩 → 必须保持原判（null），不能变成空串
+        assertNull(HeadingClassifier.cleanChapter("名词解释"))
+        assertNull(HeadingClassifier.cleanChapter("选择题"))
+        assertTrue(HeadingClassifier.isPureTypeHeading("名词解释"))
+    }
+
+    // ---------- 同一章的多种写法必须归一 ----------
+
+    @Test
+    fun `只有章号的写法归到完整章名`() {
+        assertEquals(
+            mapOf("第一章" to "第一章 绪论"),
+            HeadingClassifier.unifyChapterNames(listOf("第一章", "第一章 绪论"))
+        )
+        assertEquals(
+            mapOf("第十二章" to "第十二章 课后习题"),
+            HeadingClassifier.unifyChapterNames(listOf("第十二章 课后习题", "第十二章"))
+        )
+    }
+
+    @Test
+    fun `没有章号的写法归到同号章`() {
+        assertEquals(
+            mapOf("线粒体遗传" to "第六章 线粒体遗传"),
+            HeadingClassifier.unifyChapterNames(listOf("第六章 线粒体遗传", "线粒体遗传"))
+        )
+        assertEquals(
+            mapOf("第九章" to "第九章 单基因病", "单基因病" to "第九章 单基因病"),
+            HeadingClassifier.unifyChapterNames(listOf("第九章 单基因病", "单基因病", "第九章"))
+        )
+    }
+
+    @Test
+    fun `真正的不同章节不会被合并`() {
+        assertTrue(HeadingClassifier.unifyChapterNames(listOf("第一章 绪论", "第二章 细胞")).isEmpty())
+        assertTrue(
+            HeadingClassifier.unifyChapterNames(
+                listOf("第六章 线粒体遗传", "第七章 人类染色体")
+            ).isEmpty()
+        )
+        // 章名相近但是不同章 → 靠章号区分，不能按名字相似度硬并
+        assertTrue(
+            HeadingClassifier.unifyChapterNames(
+                listOf("第十一章 线粒体病", "第六章 线粒体遗传")
+            ).isEmpty()
+        )
+    }
+
+    @Test
+    fun `章名本体与章号解析`() {
+        assertEquals(6, HeadingClassifier.chapterNumberOf("第六章 线粒体遗传"))
+        assertEquals(10, HeadingClassifier.chapterNumberOf("第十章 多基因病"))
+        assertEquals(12, HeadingClassifier.chapterNumberOf("第12章 染色体病"))
+        assertNull(HeadingClassifier.chapterNumberOf("绪论"))
+        assertEquals("线粒体遗传", HeadingClassifier.chapterBodyOf("第六章 线粒体遗传"))
+        assertEquals("绪论", HeadingClassifier.chapterBodyOf("第一章　绪论"))
+    }
 }

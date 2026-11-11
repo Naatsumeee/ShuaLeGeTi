@@ -75,12 +75,149 @@ object HeadingClassifier {
     fun hasChapterNumber(title: String?): Boolean =
         title != null && chapterPrefixRe.containsMatchIn(title)
 
+    /** 取章号（阿拉伯或中文数字）；取不到返回 null */
+    fun chapterNumberOf(title: String?): Int? {
+        if (title == null) return null
+        val m = chapterPrefixRe.find(title) ?: return null
+        return parseChineseNumber(m.groupValues[1])
+    }
+
+    /** 去掉章号前缀后的章名本体（用于判断「线粒体遗传」和「第六章 线粒体遗传」是不是同一章） */
+    fun chapterBodyOf(title: String?): String {
+        if (title == null) return ""
+        val m = chapterPrefixRe.find(title.trim()) ?: return title.trim()
+        return title.trim().substring(m.range.last + 1).trim()
+    }
+
+    /** 中文/阿拉伯数字 → Int；单字「十」必须认，否则「第十章」取不到章号 */
+    private fun parseChineseNumber(raw: String): Int? {
+        val t = raw.trim()
+        t.toIntOrNull()?.let { return it }
+        if (t.isEmpty()) return null
+        val digits = mapOf(
+            '零' to 0, '一' to 1, '二' to 2, '三' to 3, '四' to 4,
+            '五' to 5, '六' to 6, '七' to 7, '八' to 8, '九' to 9
+        )
+        if (t == "十") return 10
+        if (t.length == 2 && t[0] == '十') return 10 + (digits[t[1]] ?: return null)
+        if (t.length == 2 && t[1] == '十') return (digits[t[0]] ?: return null) * 10
+        if (t.length == 3 && t[1] == '十') {
+            return (digits[t[0]] ?: return null) * 10 + (digits[t[2]] ?: return null)
+        }
+        return if (t.length == 1) digits[t[0]] else null
+    }
+
+    /**
+     * 把同一章的多种写法归一到同一个名字。
+     *
+     * 用户报的四种形态其实是一件事的三个侧面 —— **同一章在不同位置被解析成了不同字符串**，
+     * 于是章节列表里同时出现：
+     *
+     * | 形态 | 来源 |
+     * |---|---|
+     * | `第X章 AAAA` | 章标题完整读到（正常） |
+     * | `第X章` | 章名那行没读到 / 被题型标签污染后剥成空 |
+     * | `AAAA` | 章号那句和章名分在两处，只有名字带过来 |
+     * | `第X章` + `第X章 AAAA` 并存 | 页眉重复出现，前一处只读到章号、后一处读到全名 |
+     *
+     * 归一规则（只用章号 + 章名本体做判据，不猜语义）：
+     * 1. 每个章号选一个「最完整」的写法（带章号、章名本体最长）作 canonical；
+     * 2. 只有章号的 `第X章` → 归到该章号的 canonical；
+     * 3. 没有章号的 `AAAA`，如果章名本体等于/被包含于某个 canonical 的本体 → 归过去；
+     * 4. 认不出的原样保留（宁可不合并，也不能把两章并成一章）。
+     *
+     * 返回 `旧名 → 新名` 的映射，只包含真正需要改的项。
+     */
+    fun unifyChapterNames(names: List<String>): Map<String, String> {
+        val cleaned = names.mapNotNull { it.takeIf { n -> n.isNotBlank() } }.distinct()
+        if (cleaned.size <= 1) return emptyMap()
+
+        // ① 每个章号选 canonical：带章号、本体最长
+        val canonicalByNo = HashMap<Int, String>()
+        for (n in cleaned) {
+            val no = chapterNumberOf(n) ?: continue
+            val body = chapterBodyOf(n)
+            val cur = canonicalByNo[no]
+            if (cur == null || body.length > chapterBodyOf(cur).length) canonicalByNo[no] = n
+        }
+        // ② 本体 → canonical（用于接住没有章号的写法）
+        val byBody = HashMap<String, String>()
+        for ((_, canon) in canonicalByNo) {
+            val body = bodyKey(chapterBodyOf(canon))
+            if (body.length >= 2) byBody.putIfAbsent(body, canon)
+        }
+
+        val out = HashMap<String, String>()
+        for (n in cleaned) {
+            val no = chapterNumberOf(n)
+            if (no != null) {
+                val canon = canonicalByNo[no] ?: continue
+                if (canon != n) out[n] = canon
+                continue
+            }
+            // 没有章号：按章名本体找同一章
+            val key = bodyKey(n)
+            if (key.length < 2) continue
+            val hit = byBody[key]
+                ?: byBody.entries.firstOrNull { (b, _) ->
+                    b.length >= 2 && key.length >= 2 && (b.contains(key) || key.contains(b))
+                }?.value
+            if (hit != null && hit != n) out[n] = hit
+        }
+        return out
+    }
+
+    /** 比对用的章名键：去空白、标点、全角空格，统一小写 */
+    private fun bodyKey(s: String): String =
+        s.filter { it.isLetterOrDigit() }.lowercase()
+
     /** 序号片段：「（一）」「一、」「1.」——用来把「绪论（一）名词解释」切成两截 */
     private val ordinalCutRe = Regex(
         """[（(]\s*[一二三四五六七八九十百\d]{1,3}\s*[)）]""" +
             """|[一二三四五六七八九十百]{1,3}\s*[、.．]""" +
             """|\d{1,2}\s*[、.．)）]"""
     )
+
+    /** 方括号包住的题型标签：`【A1型题】`、`［B1型题］` */
+    private val bracketTypeRe = Regex("""[【\[［]\s*([^】\]］]{1,14})\s*[】\]］]""")
+
+    /**
+     * 把标题尾部/头部的题型标签剥掉，**保留章名本体**。
+     *
+     * 与 [stripTypeTail] 的分工：那个只管「序号 + 题型」这种分段式尾巴
+     * （`第一章 绪论（一）名词解释`）；这里处理的是**紧贴在章名后面、没有序号**的
+     * 形式（`第六章 线粒体遗传【A1型题】`、`第六章 线粒体遗传 A1型题`、
+     * `第六章 线粒体遗传选择题`）。
+     *
+     * 老实现只按 `ordinalCutRe` 找切点，切不掉无序号尾巴，于是掉进
+     * `cleanChapter` 的「章号 + 题型 → 只留章号」分支，把「线粒体遗传」整个章名
+     * 丢了 —— 用户看到的「第X章 AAAA 变成只有第X章」就是这么来的。
+     * 反过来，这类尾巴在 parser 里没被剥掉时，又会出现
+     * 「第X章 AAAA【A1型题】」原样落库。
+     */
+    fun stripTypeLabels(raw: String): String {
+        var s = raw.trim()
+        // 整串本身就是题型分组（「一、单项选择题」「（一）名词解释」「名词解释」）时
+        // 一个字都不能剥：剥完剩下的「单项」「（一）」既不是章名，又会让下游的
+        // 「纯题型 → null」判定失效。这类标题该原样交给 isTypeHeading 去判。
+        if (chapterPrefixRe.find(s) == null && isTypeHeading(s)) return s
+        // ① 方括号里的题型标签，任意位置
+        s = bracketTypeRe.replace(s) { m ->
+            if (isTypeHeading(m.groupValues[1])) " " else m.value
+        }
+        // ② 尾部无序号、紧贴章名的题型词（`线粒体遗传选择题` / `线粒体遗传 A1型题`）
+        //    从最长关键词开始试，避免「选择题」先命中把「多项选择题」切成「多项」
+        for (kw in typeKeywords.sortedByDescending { it.length }) {
+            if (!s.endsWith(kw)) continue
+            val head = s.dropLast(kw.length).trim()
+            // 剥完必须还剩至少 2 个实义字符，否则「名词解释」这类会被剥成空串
+            if (bodyKey(stripOrdinal(head)).length >= 2) {
+                s = head
+                break
+            }
+        }
+        return s.replace(Regex("""\s{2,}"""), " ").trim()
+    }
 
     /**
      * 找到「真标题 + 题型尾巴」的分界位置；找不到返回 -1。
@@ -113,7 +250,9 @@ object HeadingClassifier {
             if (cut <= 0) break
             s = s.substring(0, cut).trim()
         }
-        return s
+        // 分段式尾巴（`（一）名词解释`）切完，再处理紧贴章名、没序号的形式
+        // （`第六章 线粒体遗传【A1型题】` / `…线粒体遗传 A1型题`）。
+        return stripTypeLabels(s)
     }
 
     /**
@@ -140,20 +279,27 @@ object HeadingClassifier {
     /**
      * 章节名清洗（落库前的最后一道闸）。
      *
-     * - 先削掉尾部拼进来的题型分组：「第一章 绪论（一）名词解释」→「第一章 绪论」
-     * - 纯题型标题 → null（宁可显示「未分章」，也不能让「（一）名词解释」当章节）
-     * - 「第三章 名词解释」这种「章号 + 题型尾巴」→ 保留「第三章」
-     * - 其余原样（顺带去掉 Markdown 井号）
+     * 顺序很重要，每一步都有实测踩过的坑：
+     * 1. 先削掉尾部拼进来的题型分组/题型标签 →「第一章 绪论（一）名词解释」、
+     *    「第六章 线粒体遗传【A1型题】」、「第六章 线粒体遗传 A1型题」都归一到章名本体；
+     * 2. 剩下的是纯题型标题 → null（宁可「未分章」，也不能让「（一）名词解释」当章节）；
+     * 3. 「第三章 名词解释」这种**章名本体就是题型词**的 → 只留「第三章」；
+     * 4. 其余原样（顺带去掉 Markdown 井号）。
+     *
+     * 第 1 步与第 3 步的边界是这个方法的全部难点：**必须先剥尾巴，再判断章名本体**。
+     * 反过来的话「第六章 线粒体遗传【A1型题】」会被判成「章名本体是题型词」，
+     * 输出「第六章」—— 章名整个丢掉。用户报的「第X章 AAAA 变成只有第X章」就是它。
      */
     fun cleanChapter(raw: String?): String? {
         val base = raw?.trim()?.trimStart('#')?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         val s = stripTypeTail(base).ifEmpty { base }
         val prefix = chapterPrefixRe.find(s)
         if (prefix != null) {
-            // 「第三章 名词解释」：只剩章号，说明章名本体其实就是题型标签 → 只留「第三章」
+            // 剥完只剩章号本身（原本就是个「第三章」标题，或者章名确实就是题型词）
             val rest = s.substring(prefix.range.last + 1).trim()
-            if (rest.isEmpty()) return s
-            if (isTypeHeading(rest)) return prefix.value.trim()
+            if (rest.isEmpty()) return prefix.value.trim()
+            // 兜底：万一还有题型词残留（长度不足 2 的畸形输入），只留章号
+            if (isTypeHeading(rest) && rest.length <= 4) return prefix.value.trim()
             return s
         }
         if (isNonChapterHeading(s)) return null
