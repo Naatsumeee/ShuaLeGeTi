@@ -27,6 +27,8 @@ class LlmQuestionParser(
     data class QuestionDto(
         val type: String = "single",
         val subtype: String? = null,
+        /** 原文题号（`1.` 里的 1）。章末答案表是按题号索引的，丢了它就无法回填 */
+        val number: Int? = null,
         val stem: String = "",
         val sharedStem: String? = null,
         val sharedOptions: List<QuestionOption> = emptyList(),
@@ -208,6 +210,7 @@ class LlmQuestionParser(
             type = qType,
             subtype = subtype?.trim()?.uppercase()?.takeIf { it.isNotBlank() },
             stem = stem.trim(),
+            sourceNumber = number ?: leadingNumber(stem),
             sharedStem = sharedStem?.trim()?.takeIf { it.isNotBlank() },
             sharedOptions = sopts.toMutableList(),
             options = finalOpts.toMutableList(),
@@ -430,12 +433,11 @@ class LlmQuestionParser(
         /**
          * 用文末答案表回填缺失答案。
          *
-         * 旧实现直接 `table[i + 1]`，一旦题号在章节内重新计数、或有题目在收口时被合并，
-         * 就会整列错位（1 号题的答案填到 2 号题上）。现在：
-         * 1. 题干自带题号的，按题号填；
-         * 2. 只有当答案表的键恰好是 `1..n` 时才退回按下标填（此时下标可信）；
-         * 3. 填之前校验答案字母确实是本题选项之一，否则跳过（留空让人工补，
-         *    总比填一个错答案好）。
+         * 具体判据全部交给 [AnswerBinder]，这里只负责把泛型题目桥接成它的
+         * [AnswerBinder.Item]。早期实现自己维护 `题号 → 答案` 的 Map 并退回
+         * `table[i + 1]`（`i` 是**全书**下标），而答案表是每章各自从 1 编号的，
+         * 第 7 章第 1 题被当成全书第 35 题 —— 整章一条答案都配不上。这就是
+         * 「AI 导入答案覆盖率极低（116/347）」的根因。
          */
         private fun <T> applyAnswerTable(
             list: MutableList<T>,
@@ -444,55 +446,29 @@ class LlmQuestionParser(
             optionsOf: (T) -> List<QuestionOption>,
             answerOf: (T) -> String?,
             withAnswer: (T, String) -> T,
-            chapterOf: (T) -> String? = { null }
+            chapterOf: (T) -> String? = { null },
+            numberOf: (T) -> Int? = { null },
+            sharedOptionsOf: (T) -> List<QuestionOption> = { emptyList() },
+            objectiveTypeOf: (T) -> Boolean = { optionsOf(it).size >= 2 }
         ) {
             if (list.none { answerOf(it).isNullOrBlank() }) return
-
-            // 按章切段：题号在每章内重新计数，全书一张表会串章。
-            // 每段各自建表，题目按自己的章号取对应段的表；取不到再退回全文表。
-            val byChapter: Map<Int?, Map<Int, String>> = splitByChapter(rawText)
-                .associate { (no, span) -> no to parseAnswerTable(span) }
-            val merged = mutableMapOf<Int, String>()
-            // null 段（章标题之前的内容）先放，各章段后放：全书兜底表只要有数就行，
-            // 真正的精确匹配走 scoped（按章的表）。
-            for ((no, tbl) in byChapter) {
-                if (no == null) tbl.forEach { (k, v) -> merged.putIfAbsent(k, v) }
+            val items = list.map { it ->
+                AnswerBinder.Item(
+                    chapter = chapterOf(it),
+                    stem = stemOf(it),
+                    // 共用备选答案（B1/B2 型）的选项挂在 sharedOptions 上，
+                    // 漏了它们这些题会被判成主观题，答案永远配不上。
+                    optionKeys = (optionsOf(it) + sharedOptionsOf(it))
+                        .map { o -> o.key }.toSet(),
+                    number = numberOf(it),
+                    // 题型是客观题就占着答案表的题号，哪怕 OCR 把选项整块吃掉 ——
+                    // 否则它会从序号里消失，后面所有题集体前移一位。
+                    objectiveType = objectiveTypeOf(it)
+                )
             }
-            for ((no, tbl) in byChapter) {
-                if (no != null) tbl.forEach { (k, v) -> merged.putIfAbsent(k, v) }
-            }
-            val wholeTable: Map<Int, String> = merged
-            if (byChapter.values.all { it.isEmpty() }) return
-
-            for (i in list.indices) {
-                if (!answerOf(list[i]).isNullOrBlank()) continue
-                val opts = optionsOf(list[i])
-                val num = leadingNumber(stemOf(list[i]))
-                val chNo = chapterNumberOf(chapterOf(list[i]))
-
-                // 优先用本章的表；本章没有该题号再退回全文表
-                val scoped: Map<Int, String> = chNo?.let { byChapter[it] } ?: emptyMap()
-                val guessed: String? = when {
-                    num != null && scoped[num] != null -> scoped[num]
-                    num != null && wholeTable[num] != null -> wholeTable[num]
-                    num == null && scoped.isNotEmpty() -> scoped[i + 1]
-                    num == null && wholeTable.isNotEmpty() -> wholeTable[i + 1]
-                    else -> null
-                }
-                if (guessed == null) continue
-
-                // 选项护栏：答案字母必须是本题选项之一
-                if (opts.size >= 2) {
-                    val letters = opts.map { it.key.trim().uppercase() }.filter { it.isNotEmpty() }.toSet()
-                    val ok = guessed.split(Regex("""[\s,，、/]+"""))
-                        .filter { it.isNotEmpty() }
-                        .all { token ->
-                            val u = token.trim().uppercase()
-                            u in letters || u in setOf("对", "错", "正确", "错误", "T", "F")
-                        }
-                    if (!ok) continue
-                }
-                list[i] = withAnswer(list[i], guessed)
+            val bound = AnswerBinder.bind(rawText, items)
+            for ((i, ans) in bound) {
+                if (answerOf(list[i]).isNullOrBlank()) list[i] = withAnswer(list[i], ans)
             }
         }
 
@@ -534,7 +510,13 @@ class LlmQuestionParser(
                 optionsOf = { it.options },
                 answerOf = { it.answer },
                 withAnswer = { q, ans -> q.copy(answer = ans) },
-                chapterOf = { it.chapter }
+                chapterOf = { it.chapter },
+                numberOf = { it.sourceNumber },
+                sharedOptionsOf = { it.sharedOptions },
+                objectiveTypeOf = {
+                    it.type == QuestionType.SINGLE || it.type == QuestionType.MULTIPLE ||
+                        it.type == QuestionType.JUDGE
+                }
             )
             return list
         }
@@ -574,7 +556,13 @@ class LlmQuestionParser(
                 optionsOf = { it.options },
                 answerOf = { it.answer },
                 withAnswer = { l, ans -> l.copy(answer = ans) },
-                chapterOf = { it.chapter }
+                chapterOf = { it.chapter },
+                numberOf = { it.number },
+                sharedOptionsOf = { it.sharedOptions },
+                objectiveTypeOf = {
+                    val t = runCatching { QuestionType.valueOf(it.type) }.getOrNull()
+                    t == QuestionType.SINGLE || t == QuestionType.MULTIPLE || t == QuestionType.JUDGE
+                }
             )
             return list
         }

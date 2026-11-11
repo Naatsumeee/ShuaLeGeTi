@@ -74,8 +74,24 @@ object AnswerSheet {
      * 实测 `31.E32.C3` 这种行：最后那个 `3` 是被 OCR 截断的下一题题号。
      * 若严格要求「除答案对外只剩标点」，整行会被丢弃、31 和 32 全丢 ——
      * 所以允许尾部残留少量数字，已解析出的对仍然采纳。
+     *
+     * **必须显式带上 `\u3000`（全角空格）**：Java/Kotlin 正则的 `\s` 只覆盖
+     * ASCII 空白，不含全角空格。而中文试卷的答案区几乎都用全角空格分隔
+     * （`1.B　2.D　3.A`）。漏了它整行被判「有实义残留」→ 落到主观题分支 →
+     * 得到一条 `1 → "B　2.D　3.A"` 的伪数据（实测踩过）。
      */
-    private val fillerRe = Regex("""[\s“”"'‘’、,，;；.。()（）/|\d]+""")
+    private val fillerRe = Regex("""[\s\u3000\u2002-\u200b“”"'‘’、,，;；.。()（）/|\d]+""")
+
+    /**
+     * 题型分组前缀：`A1型：`、`【A1型题】`、`X型:`、`（一）名词解释`、`一、选择题`。
+     *
+     * 真实试卷与「把题库整理成文档」的工具都爱按题型分组写答案
+     * （`A1型：1.B 2.D 3.A`）。早期实现要求「整行去掉答案对后只剩标点」，
+     * 这个前缀会让整行不满足条件、整组答案全丢。
+     */
+    private val typeLabelRe = Regex(
+        """^\s*(?:【[^】]{1,14}】|[（(][^)）]{1,14}[)）]|[一二三四五六七八九十]+\s*[、.．]\s*[^0-9]{0,14}|[A-Za-z]{0,2}\d{0,2}\s*型?题?\s*[：:]|[\u4e00-\u9fa5]{2,8}\s*[：:])\s*"""
+    )
 
     /** 主观题答案正文：`1．纯质性（homoplasmy):是指…`、`2.简述…` */
     private val subjectiveRe = Regex("""^\s*(\d{1,4})\s*[.、．:：)）]\s*(\S.{6,})$""")
@@ -123,8 +139,13 @@ object AnswerSheet {
         }
 
         while (i < lines.size) {
-            val line = lines[i].trim()
-            if (line.isEmpty() || sectionRe.matches(line)) {
+            // 先剥掉题型分组前缀（`A1型：` / `【A1型题】` / `（一）名词解释`）。
+            // 只在「剥完之后还能被下面的规则识别」时才用剥过的串，否则保留原行 ——
+            // 否则 `（一）名词解释` 这种纯小标题会被剥成空串、连带把下一行也吞掉。
+            val rawLine = lines[i].trim()
+            val stripped = typeLabelRe.replaceFirst(rawLine, "").trim()
+            val line = if (stripped.isNotEmpty() && stripped != rawLine) stripped else rawLine
+            if (line.isEmpty() || sectionRe.matches(line) || sectionRe.matches(rawLine)) {
                 i++
                 continue
             }

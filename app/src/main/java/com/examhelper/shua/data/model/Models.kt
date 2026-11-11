@@ -89,6 +89,14 @@ data class ParsedLine(
     val chapter: String? = null,
     val type: String = "SINGLE",
     val subtype: String? = null,
+    /**
+     * 原文题号。
+     *
+     * 章末集中答案区是按题号索引的（每章各自从 1 编号），而 AI 解析产出的
+     * 题干常被剥掉题号 —— 没有这个字段，[com.examhelper.shua.data.parse.AnswerBinder]
+     * 只能按出现顺序猜题号，遇到答案表跳号就会整列错位。
+     */
+    val number: Int? = null,
     val stem: String,
     val sharedStem: String? = null,
     val sharedOptions: List<QuestionOption> = emptyList(),

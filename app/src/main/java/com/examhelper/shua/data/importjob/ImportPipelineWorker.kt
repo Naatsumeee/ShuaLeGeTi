@@ -224,6 +224,7 @@ class ImportPipelineWorker(
                             ParsedLine(
                                 chunkIndex = 0, indexInChunk = i,
                                 chapter = q.chapter, type = q.type.name, subtype = q.subtype,
+                                number = q.sourceNumber,
                                 stem = q.stem, sharedStem = q.sharedStem,
                                 sharedOptions = q.sharedOptions, options = q.options,
                                 answer = q.answer, analysis = q.analysis, page = q.sourcePage
@@ -339,6 +340,10 @@ class ImportPipelineWorker(
                                 chapter = ChunkPlanner.resolveChapter(section, dto.chapter),
                                 type = LlmQuestionParser.mapType(dto.type).name,
                                 subtype = dto.subtype, stem = dto.stem,
+                                // 原文题号：章末集中答案表按题号索引，没有它就只能按顺序猜，
+                                // 遇到答案表跳号会整列错位（答案覆盖率极低的根因之一）
+                                number = dto.number ?: com.examhelper.shua.data.parse.AnswerBinder
+                                    .leadingNumberOf(dto.stem),
                                 sharedStem = dto.sharedStem, sharedOptions = dto.sharedOptions,
                                 options = dto.options, answer = dto.answer, analysis = dto.analysis,
                                 page = dto.page
