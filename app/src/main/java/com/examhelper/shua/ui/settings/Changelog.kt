@@ -20,9 +20,38 @@ data class NoteItem(val kind: Kind, val text: String) {
 
 val RELEASE_NOTES: List<ReleaseNote> = listOf(
     ReleaseNote(
+        version = "1.1.0",
+        date = "2026-11-11",
+        current = true,
+        items = listOf(
+            NoteItem(NoteItem.Kind.NEW, "判断题成了独立题型：原文没写「A 正确 / B 错误」也会自动补齐两项，答案写成「对/错/√/×/T/F」都能识别，不会再出现「没有可点的选项、答不了」"),
+            NoteItem(NoteItem.Kind.NEW, "新增单题详情页：测试报告和错题本里点任意题目都能进，完整题干、共用材料、选项、参考答案与解析一次看全，解析默认展开"),
+            NoteItem(NoteItem.Kind.NEW, "正确答案标绿修好了：多选题会标出全部正确项，判断题也能正确标出「正确/错误」"),
+            NoteItem(NoteItem.Kind.NEW, "错题本新增「重点」分组：题目右上角菜单可标记重点，重点题能单独拿出来复刷"),
+            NoteItem(NoteItem.Kind.NEW, "错题本每道题新增「⋯」菜单：收藏、斩题、标记重点、从错题本删除"),
+            NoteItem(NoteItem.Kind.NEW, "设置页新增「深度解题 / 补全解析 · 思考强度」四档（Off / Low / High / Max），默认 Low；调高更会推演，但更慢更贵"),
+            NoteItem(NoteItem.Kind.NEW, "设置页「账户余额」下方新增「用量情况」：可查近 7 天 / 30 天的实际消费与本地估算，并拆出缓存命中、未命中、输出 token"),
+            NoteItem(NoteItem.Kind.IMPROVE, "导入解析快得多：PDF 整本只解析一次、渲染器跨页复用，并支持逐页落盘——跑一半被杀掉不用从头再来"),
+            NoteItem(NoteItem.Kind.IMPROVE, "导入解析更省钱：解析默认不开启思考模式（同样内容以前会把输出预算烧光、几乎解析不出题），提示词也精简了约三成"),
+            NoteItem(NoteItem.Kind.IMPROVE, "缓存命中统计不再误导：新增区分「还没有数据」和「真的 0%」；断点续传也不会再把已累计的用量冲掉"),
+            NoteItem(NoteItem.Kind.IMPROVE, "震动强度和时长彻底分开：强度只管轻重、时长只管长短，默认都是 2；拖动滑块时每一档都有实时预览"),
+            NoteItem(NoteItem.Kind.IMPROVE, "错题本的题库 / 章节筛选改成下拉，占位从三排压到一行；「忽略整本」独立成一行，不再和筛选挤在一起"),
+            NoteItem(NoteItem.Kind.IMPROVE, "底部导航切换更顺，滑动胶囊不再掉帧"),
+            NoteItem(NoteItem.Kind.FIX, "修复章节名被弄坏：不会再出现只剩「第X章」、只剩章名、或同时冒出「第X章」和「第X章 名字」两条的情况。已导入的题库升级后会自动修好，不用重导"),
+            NoteItem(NoteItem.Kind.FIX, "修复 AI 导入答案识别不全：章末答案表现在按题号精确对应，同一本扫描件的答案覆盖率从约三成提升到八成以上（离线解析仍维持九成九）"),
+            NoteItem(NoteItem.Kind.FIX, "修复题库卡片右上角「更多」按钮会误进入题库、菜单点了没反应"),
+            NoteItem(NoteItem.Kind.FIX, "修复导入任务点「取消」后界面卡在「解析中」、不自动返回"),
+            NoteItem(NoteItem.Kind.FIX, "修复切后台 / 锁屏后导入任务中断：现在锁屏也会继续跑完"),
+            NoteItem(NoteItem.Kind.FIX, "修复同一份 PDF 偶发导入出成片乱码"),
+            NoteItem(NoteItem.Kind.FIX, "修复刷题时以前答过的题一进来就直接摊着解析、不等你作答"),
+            NoteItem(NoteItem.Kind.FIX, "修复「上一题 / 下一题」按钮动画消失、连点没反应"),
+            NoteItem(NoteItem.Kind.FIX, "修复偶发的启动崩溃"),
+        )
+    ),
+    ReleaseNote(
         version = "1.0.12",
         date = "2026-11-04",
-        current = true,
+        current = false,
         items = listOf(
             NoteItem(NoteItem.Kind.FIX, "彻底修复章末集中答案识别不出：扫描件每章末的「三、参考答案」现在会被单独识别成答案表，不再被当成题目"),
             NoteItem(NoteItem.Kind.FIX, "答案表支持三种排版：每行一对「1.A」、题号与答案被拆到两行、以及一行挤了多道「1.E 2.B 3.D」"),

@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -14,9 +16,25 @@ android {
         applicationId = "com.examhelper.shua"
         minSdk = 26
         targetSdk = 35
-        versionCode = 13
-        versionName = "1.0.12"
+        versionCode = 14
+        versionName = "1.1.0"
     }
+
+    // 正式签名：从仓库根目录的 keystore.properties 读取（该文件与 release.jks 都在 .gitignore 里）。
+    //
+    // 为什么用外部文件而不是硬编码：signingConfigs 会把密码写进构建脚本，一旦提交就永久留在 git 历史里。
+    //
+    // 没配时优雅降级到 debug 签名，保证克隆下来 `./gradlew assembleRelease` 仍能出包
+    // （只是那个包不能覆盖已装的正版）。要出正式包，在根目录放：
+    //   storeFile=release.jks
+    //   storePassword=...
+    //   keyAlias=shualegeti
+    //   keyPassword=...
+    val keystoreProps = Properties().apply {
+        val f = rootProject.file("keystore.properties")
+        if (f.exists()) f.inputStream().use { load(it) }
+    }
+    val hasReleaseKey = keystoreProps.getProperty("storePassword").isNullOrBlank().not()
 
     // ABI 分包：控制单包体积（模型 + 双 OCR 原生库较大）
     //
@@ -37,11 +55,26 @@ android {
         }
     }
 
+    signingConfigs {
+        if (hasReleaseKey) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            // 暂用 debug 签名便于分发，上架前换正式签名
-            signingConfig = signingConfigs.getByName("debug")
+            // 有正式 keystore 就用它；没有则退回 debug 签名（包能出，但不能覆盖已装正版）
+            signingConfig = if (hasReleaseKey) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }

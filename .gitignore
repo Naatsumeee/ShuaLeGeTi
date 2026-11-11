@@ -25,6 +25,9 @@ output.json
 local.properties
 *.keystore
 *.jks
+# 正式签名的密码表（storeFile / storePassword / keyAlias / keyPassword）
+# 只放本机，配合根目录 release.jks 使用；两者都绝不能提交
+keystore.properties
 .env
 .env.*
 
