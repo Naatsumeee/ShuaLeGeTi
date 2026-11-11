@@ -25,6 +25,31 @@ data class ChatMessage(
     @SerialName("reasoning_content") val reasoningContent: String? = null
 )
 
+/**
+ * 思考强度（DeepSeek 官方口径，2026-11 文档核实）。
+ *
+ * `reasoning_effort` 只有 `none / low / high / max` 四个值：
+ * - `none` 关闭思考模式；
+ * - **`medium` 会被官方映射成 `high`**，所以这里不提供 medium 档 ——
+ *   给用户一个「看着更低、实际一样贵」的选项比不给更糟；
+ * - 官方默认是 `high`（不传 `reasoning_effort` 就默认开思考）。
+ *
+ * 这一条是实测出来的，不是猜的：同一段 5613 字的分块文本，
+ * 不传参数（默认 high）时 8192 输出预算**被思考全额吃光**、`finish=length`、
+ * 一道题都没解析出来；关掉思考后同样输入只需 6132 token 就 `finish=stop`、出 46 题。
+ */
+enum class ReasoningEffort(val apiValue: String, val label: String) {
+    NONE("none", "Off"),
+    LOW("low", "Low"),
+    HIGH("high", "High"),
+    MAX("max", "Max");
+
+    companion object {
+        fun fromName(raw: String?): ReasoningEffort =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: LOW
+    }
+}
+
 @Serializable
 data class ChatCompletionRequest(
     val model: String,
@@ -32,6 +57,13 @@ data class ChatCompletionRequest(
     val temperature: Double? = null,
     @SerialName("response_format") val responseFormat: ResponseFormat? = null,
     @SerialName("max_tokens") val maxTokens: Int? = null,
+    /**
+     * 思考强度。`null` = 不传该字段（保持端点默认行为）。
+     *
+     * 必须能单独省略：不支持的端点（Ollama / 部分中转）收到未知字段有的会 400，
+     * 所以调用方拿不到明确支持时就该传 null，让 [LlmClient] 的重试逻辑兜住。
+     */
+    @SerialName("reasoning_effort") val reasoningEffort: String? = null,
     val stream: Boolean = false,
     /** 流式请求顺带要用量统计；不支持的端点会忽略它 */
     @SerialName("stream_options") val streamOptions: StreamOptions? = null
@@ -187,7 +219,8 @@ class LlmClient(
         userPrompt: String,
         jsonMode: Boolean = false,
         temperature: Double? = provider.temperature.toDouble(),
-        maxTokens: Int? = null
+        maxTokens: Int? = null,
+        reasoningEffort: ReasoningEffort? = null
     ): ChatResult = chatWithMessages(
         provider = provider,
         messages = listOf(
@@ -196,7 +229,8 @@ class LlmClient(
         ),
         jsonMode = jsonMode,
         temperature = temperature,
-        maxTokens = maxTokens
+        maxTokens = maxTokens,
+        reasoningEffort = reasoningEffort
     )
 
     /**
@@ -208,13 +242,22 @@ class LlmClient(
         messages: List<ChatMessage>,
         jsonMode: Boolean = false,
         temperature: Double? = provider.temperature.toDouble(),
-        maxTokens: Int? = null
+        maxTokens: Int? = null,
+        reasoningEffort: ReasoningEffort? = null
     ): ChatResult = withContext(Dispatchers.IO) {
-        runCatching { chatOnce(provider, messages, jsonMode, temperature, maxTokens) }
+        runCatching { chatOnce(provider, messages, jsonMode, temperature, maxTokens, reasoningEffort) }
             .recoverCatching {
-                // 部分兼容端点不支持 response_format / max_tokens，去掉后重试一次
-                if (it is LlmException) chatOnce(provider, messages, false, temperature, null)
-                else throw it
+                // 两级降级，顺序不能反：
+                // 先去掉 reasoning_effort —— 不认这个字段的端点（Ollama、部分中转）
+                // 会直接 400。它是最"新"的参数，也最可能不被支持。
+                if (it is LlmException) {
+                    runCatching { chatOnce(provider, messages, jsonMode, temperature, maxTokens, null) }
+                        // 再退一步：去掉 response_format / max_tokens（老端点只认最朴素的请求）
+                        .recoverCatching {
+                            if (it is LlmException) chatOnce(provider, messages, false, temperature, null, null)
+                            else throw it
+                        }.getOrThrow()
+                } else throw it
             }
             .getOrThrow()
     }
@@ -234,6 +277,7 @@ class LlmClient(
         jsonMode: Boolean = false,
         temperature: Double? = provider.temperature.toDouble(),
         maxTokens: Int? = null,
+        reasoningEffort: ReasoningEffort? = null,
         onReasoning: (String) -> Unit = {},
         onDelta: (String) -> Unit = {}
     ): ChatResult = chatStreamMessages(
@@ -245,6 +289,7 @@ class LlmClient(
         jsonMode = jsonMode,
         temperature = temperature,
         maxTokens = maxTokens,
+        reasoningEffort = reasoningEffort,
         onReasoning = onReasoning,
         onDelta = onDelta
     )
@@ -255,6 +300,7 @@ class LlmClient(
         jsonMode: Boolean = false,
         temperature: Double? = provider.temperature.toDouble(),
         maxTokens: Int? = null,
+        reasoningEffort: ReasoningEffort? = null,
         onReasoning: (String) -> Unit = {},
         onDelta: (String) -> Unit = {}
     ): ChatResult = withContext(Dispatchers.IO) {
@@ -263,15 +309,19 @@ class LlmClient(
         var emitted = false
         val trackDelta: (String) -> Unit = { d -> emitted = true; onDelta(d) }
         runCatching {
-            streamOnce(provider, messages, jsonMode, temperature, maxTokens, onReasoning, trackDelta)
-        }.recoverCatching {
+            streamOnce(provider, messages, jsonMode, temperature, maxTokens, reasoningEffort, onReasoning, trackDelta)
+        }.recoverCatching { first ->
             // 部分兼容端点不认 response_format / max_tokens / stream_options，
-            // 去掉这些可选字段再试一次（仍保留 stream，流式是本次的核心诉求）
-            if (it is LlmException && !emitted) {
-                streamOnce(provider, messages, false, temperature, null, onReasoning, trackDelta)
-            } else {
-                throw it
+            // 去掉这些可选字段再试一次（仍保留 stream，流式是本次的核心诉求）。
+            if (first !is LlmException || emitted) throw first
+            // 第一级：只去掉 reasoning_effort（新参数，最可能不被支持）
+            val second = runCatching {
+                streamOnce(provider, messages, jsonMode, temperature, maxTokens, null, onReasoning, trackDelta)
             }
+            if (second.isSuccess) return@recoverCatching second.getOrThrow()
+            // 第二级：连 response_format / max_tokens 一起去掉
+            if (emitted) throw first
+            streamOnce(provider, messages, false, temperature, null, null, onReasoning, trackDelta)
         }.getOrThrow()
     }
 
@@ -281,6 +331,7 @@ class LlmClient(
         jsonMode: Boolean,
         temperature: Double?,
         maxTokens: Int?,
+        reasoningEffort: ReasoningEffort?,
         onReasoning: (String) -> Unit,
         onDelta: (String) -> Unit
     ): ChatResult {
@@ -290,6 +341,7 @@ class LlmClient(
             temperature = temperature,
             responseFormat = if (jsonMode) ChatCompletionRequest.ResponseFormat() else null,
             maxTokens = maxTokens,
+            reasoningEffort = reasoningEffort?.apiValue,
             stream = true,
             streamOptions = StreamOptions()
         )
@@ -370,14 +422,16 @@ class LlmClient(
         messages: List<ChatMessage>,
         jsonMode: Boolean,
         temperature: Double?,
-        maxTokens: Int?
+        maxTokens: Int?,
+        reasoningEffort: ReasoningEffort? = null
     ): ChatResult {
         val body = ChatCompletionRequest(
             model = provider.model,
             messages = messages,
             temperature = temperature,
             responseFormat = if (jsonMode) ChatCompletionRequest.ResponseFormat() else null,
-            maxTokens = maxTokens
+            maxTokens = maxTokens,
+            reasoningEffort = reasoningEffort?.apiValue
         )
         val url = provider.baseUrl.trimEnd('/') + "/chat/completions"
         val request = Request.Builder()

@@ -1,4 +1,4 @@
-package com.examhelper.shua.ui.settings
+﻿package com.examhelper.shua.ui.settings
 
 import android.app.Application
 import android.content.Intent
@@ -44,7 +44,8 @@ class SettingsViewModel(
         val hapticDuration: Int = 1,
         val darkMode: Boolean? = null,
         val customParsePrompt: String = "",
-        val customAnswerPrompt: String = ""
+        val customAnswerPrompt: String = "",
+        val reasoningEffort: com.examhelper.shua.data.llm.ReasoningEffort = com.examhelper.shua.data.llm.ReasoningEffort.LOW
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -72,7 +73,8 @@ class SettingsViewModel(
                     hapticDuration = it.hapticDuration,
                     darkMode = it.darkMode,
                     customParsePrompt = it.customParsePrompt,
-                    customAnswerPrompt = it.customAnswerPrompt
+                    customAnswerPrompt = it.customAnswerPrompt,
+                    reasoningEffort = it.reasoningEffort
                 )
                 Haptics.setEnabled(it.hapticEnabled)
                 Haptics.setStrength(it.hapticStrength)
@@ -88,6 +90,10 @@ class SettingsViewModel(
     fun setFontScale(v: Float) = viewModelScope.launch { settingsStore.setFontScale(v) }
     fun setCustomParsePrompt(v: String) = viewModelScope.launch { settingsStore.setCustomParsePrompt(v) }
     fun setCustomAnswerPrompt(v: String) = viewModelScope.launch { settingsStore.setCustomAnswerPrompt(v) }
+
+    /** 深度解题 / 补全解析的思考强度（导入解析固定 Off，不读这里） */
+    fun setReasoningEffort(v: com.examhelper.shua.data.llm.ReasoningEffort) =
+        viewModelScope.launch { settingsStore.setReasoningEffort(v) }
 
     // ---- 震动 / 暗黑模式 ----
 

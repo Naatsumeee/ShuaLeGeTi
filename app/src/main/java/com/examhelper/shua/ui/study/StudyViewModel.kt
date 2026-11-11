@@ -581,6 +581,9 @@ class StudyViewModel(
             userPrompt = prompt,
             jsonMode = false,
             maxTokens = DEEP_SOLVE_MAX_TOKENS,
+            // 深度解题是唯一「值得花思考」的场景：要推演病例、排除干扰项。
+            // 强度读设置页（默认 Low）；关掉的话长解析更容易写全，但推理深度会降。
+            reasoningEffort = appSettings.reasoningEffort,
             onReasoning = { delta ->
                 reasoningBuf.append(delta)
                 push()
@@ -789,6 +792,9 @@ class StudyViewModel(
             messages = messages,
             jsonMode = false,
             maxTokens = 1500,
+            // 追问 AI 是简短问答，跟深度解题同档（默认 Low）。
+            // 1500 的输出预算经不起 high 的思考开销，开了反而容易答到一半就截断。
+            reasoningEffort = appSettings.reasoningEffort,
             onDelta = onDelta
         ).content.trim()
     }

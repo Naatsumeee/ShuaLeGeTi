@@ -72,7 +72,15 @@ data class AggregatedVerdict(
  */
 class AnswerGenerator(
     private val client: LlmClient = LlmClient(),
-    private val systemPrompt: String = Prompts.ANSWER_DEFAULT
+    private val systemPrompt: String = Prompts.ANSWER_DEFAULT,
+    /**
+     * 补全解析 / 生成答案的思考强度，由调用方从设置页传入（默认 Low）。
+     *
+     * 这里**不该用官方默认的 high**：批量作答一次 12 题、`max_tokens` 只有 3000，
+     * high 的思考开销很容易把预算吃掉，表现是整批返回空、题意全丢。
+     */
+    private val reasoningEffort: com.examhelper.shua.data.llm.ReasoningEffort? =
+        com.examhelper.shua.data.llm.ReasoningEffort.LOW
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -96,7 +104,8 @@ class AnswerGenerator(
             userPrompt = buildBatchPrompt(questions),
             jsonMode = true,
             temperature = 0.1,
-            maxTokens = 3000
+            maxTokens = 3000,
+            reasoningEffort = reasoningEffort
         )
         val content = result.content
         val cleaned = LlmQuestionParser.stripCodeFence(content)

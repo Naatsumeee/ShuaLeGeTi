@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.examhelper.shua.data.llm.ReasoningEffort
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -35,6 +36,17 @@ data class AppSettings(
     /** 自定义系统提示词（空 = 默认） */
     val customParsePrompt: String = "",
     val customAnswerPrompt: String = "",
+    /**
+     * 深度解题 / 补全解析的思考强度。
+     *
+     * 默认 [ReasoningEffort.LOW] 而不是官方默认的 high：实测 high 会把
+     * max_tokens 预算整段吃掉（一次 5613 字的分块，思考烧光 8192 输出预算、
+     * 一道题都没解析出来），low 才是「想一点但不至于烧穿」的档。
+     *
+     * 导入解析**故意不读这个设置**：那是结构化抽取，思考只会白烧钱，
+     * 见 [com.examhelper.shua.data.parse.LlmQuestionParser.PARSE_REASONING]。
+     */
+    val reasoningEffort: ReasoningEffort = ReasoningEffort.LOW,
     val onboarded: Boolean = false
 )
 
@@ -51,6 +63,7 @@ class SettingsStore(private val context: Context) {
         val DARK_MODE = stringPreferencesKey("dark_mode") // "system" / "on" / "off"
         val CUSTOM_PARSE_PROMPT = stringPreferencesKey("custom_parse_prompt")
         val CUSTOM_ANSWER_PROMPT = stringPreferencesKey("custom_answer_prompt")
+        val REASONING_EFFORT = stringPreferencesKey("reasoning_effort")
         val ONBOARDED = booleanPreferencesKey("onboarded")
     }
 
@@ -71,6 +84,7 @@ class SettingsStore(private val context: Context) {
             },
             customParsePrompt = p[Keys.CUSTOM_PARSE_PROMPT] ?: "",
             customAnswerPrompt = p[Keys.CUSTOM_ANSWER_PROMPT] ?: "",
+            reasoningEffort = ReasoningEffort.fromName(p[Keys.REASONING_EFFORT]),
             onboarded = p[Keys.ONBOARDED] ?: false
         )
     }
@@ -92,4 +106,6 @@ class SettingsStore(private val context: Context) {
     }
     suspend fun setCustomParsePrompt(v: String) = context.dataStore.edit { it[Keys.CUSTOM_PARSE_PROMPT] = v.take(8000) }
     suspend fun setCustomAnswerPrompt(v: String) = context.dataStore.edit { it[Keys.CUSTOM_ANSWER_PROMPT] = v.take(8000) }
+    suspend fun setReasoningEffort(v: ReasoningEffort) =
+        context.dataStore.edit { it[Keys.REASONING_EFFORT] = v.name }
 }

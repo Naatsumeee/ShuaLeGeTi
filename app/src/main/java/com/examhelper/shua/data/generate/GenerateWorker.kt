@@ -112,6 +112,9 @@ class GenerateWorker(
             val others = if (sanSheng) providers.filter { it.id != primary.id } else emptyList()
 
             val customPrompt = container.settings.settings.first().customAnswerPrompt
+            // 补全解析 / 生成答案的思考强度：读设置页（默认 Low）。
+            // 不用官方默认的 high —— 一批 12 题只有 3000 输出预算，high 会把预算吃掉。
+            val answerEffort = container.settings.settings.first().reasoningEffort
             // 极简解析模式用独立提示词（用户自定义提示词优先）
             val scope = inputData.getString(KEY_SCOPE)
                 ?: if (forceAll) GenerateScope.ALL else GenerateScope.MISSING
@@ -120,7 +123,8 @@ class GenerateWorker(
                 else com.examhelper.shua.data.llm.Prompts.ANSWER_DEFAULT
             val generator = AnswerGenerator(
                 container.llmClient,
-                customPrompt.ifBlank { defaultPrompt }
+                customPrompt.ifBlank { defaultPrompt },
+                answerEffort
             )
 
             // 断点续传 + 生成范围：

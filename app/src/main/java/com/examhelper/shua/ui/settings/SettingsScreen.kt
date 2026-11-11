@@ -1,4 +1,4 @@
-package com.examhelper.shua.ui.settings
+﻿package com.examhelper.shua.ui.settings
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -53,6 +53,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -414,6 +415,31 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                                 steps = 6
                             )
                         }
+                        DividerLine()
+                        // 思考强度：只影响「深度解题」「补全解析」，导入解析固定关。
+                        //
+                        // 档位按 DeepSeek 官方口径给 none/low/high/max —— 没有 medium，
+                        // 官方把 medium 映射成 high，给了反而让人误以为选了更省的档。
+                        Column(Modifier.padding(14.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "深度解题 / 补全解析 · 思考强度",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                MonoText(ui.reasoningEffort.label, color = extra.terracotta)
+                            }
+                            Text(
+                                "越高越会推演但也越慢越贵。导入解析固定关闭思考（结构化抽取用不上，白烧输出预算）",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            ReasonEffortSelector(
+                                current = ui.reasoningEffort,
+                                onSelect = vm::setReasoningEffort
+                            )
+                        }
                     }
                 }
             }
@@ -585,6 +611,63 @@ private fun HapticSliderRow(
             )
         )
     }
+}
+
+/**
+ * 思考强度选择器：四档横排 chip。
+ *
+ * 只给 DeepSeek 真实支持的 none/low/high/max 四档 —— 官方文档明确
+ * `medium` 会被映射成 `high`，多给一档等于让用户以为选了个更省的选项。
+ */
+@Composable
+private fun ReasonEffortSelector(
+    current: com.examhelper.shua.data.llm.ReasoningEffort,
+    onSelect: (com.examhelper.shua.data.llm.ReasoningEffort) -> Unit
+) {
+    val extra = shuaColors
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        com.examhelper.shua.data.llm.ReasoningEffort.entries.forEach { e ->
+            val on = e == current
+            Box(
+                Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(11.dp))
+                    .background(
+                        if (on) extra.terracotta.copy(alpha = 0.16f)
+                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                    )
+                    .border(
+                        1.dp,
+                        if (on) extra.terracotta.copy(alpha = 0.55f) else Color.Transparent,
+                        RoundedCornerShape(11.dp)
+                    )
+                    .clickable {
+                        com.examhelper.shua.ui.sound.Haptics.tap()
+                        onSelect(e)
+                    }
+                    .padding(vertical = 9.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    e.label,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (on) extra.terracottaDeep else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+    Text(
+        "Off 最快最省；High/Max 适合病例分析类深解题，但输出预算有限时容易写不全",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.outline,
+        modifier = Modifier.padding(top = 6.dp)
+    )
 }
 
 @Composable

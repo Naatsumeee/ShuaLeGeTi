@@ -110,6 +110,7 @@ class LlmQuestionParser(
                 jsonMode = true,
                 temperature = 0.1,
                 maxTokens = PARSE_MAX_TOKENS,
+                reasoningEffort = PARSE_REASONING,
                 onDelta = onDelta
             )
         } else {
@@ -119,7 +120,8 @@ class LlmQuestionParser(
                 userPrompt = chunk,
                 jsonMode = true,
                 temperature = 0.1,
-                maxTokens = PARSE_MAX_TOKENS
+                maxTokens = PARSE_MAX_TOKENS,
+                reasoningEffort = PARSE_REASONING
             )
         }
         val parsed = decodeQuestions(result.content)
@@ -230,8 +232,31 @@ class LlmQuestionParser(
          * 一个 6000 字的中文分块转成「题干 + 选项 + 解析」的 JSON 后经常超过这个数，
          * JSON 被从中间截断 → 整体反序列化失败 → 整块题目全部丢失。
          * 第一块题量最大、最容易撞线，表现就是「首批次 AI 解析极易失败」。
+         *
+         * **现在这个值是按真实素材量出来的，不是拍的**：`.shots/app_raw13.txt`
+         * （47 页扫描件 OCR 全文）一段 5613 字的分块，关掉思考后完整解析
+         * （`finish_reason = stop`）需要 **6132** 输出 token；8667 字要 9747；
+         * 9759 字要 9827。取 12000 对当前所有 chunk 尺寸都有冗余，
+         * 以后把 CHUNK_SIZE 放到 12000 也不用再改这里。
+         *
+         * 之前设 8192 时，因为服务端默认**开着思考模式**（`reasoning_effort`
+         * 缺省即 high），8192 会被思考全额吃光、`finish=length`、**一道题都出不来**。
          */
-        const val PARSE_MAX_TOKENS = 8192
+        const val PARSE_MAX_TOKENS = 12000
+
+        /**
+         * 导入解析**固定关闭思考**，不受设置页的强度下拉影响。
+         *
+         * 依据是实测：
+         * - 同一段 5613 字文本，不传参数（默认 high）→ 8192 预算全被思考吃掉，**0 题**；
+         * - 传 low → 只剩 7 题（思考占 5398 token）；
+         * - 传 none → 19 秒、6132 token、**46 题**、`finish=stop`。
+         *
+         * 解析是结构化抽取，思考不会提高准确率，只会把输出预算烧掉。
+         * 所以这一项**不给用户改**，设置页那两个下拉只管深度解题与补全解析。
+         */
+        val PARSE_REASONING: com.examhelper.shua.data.llm.ReasoningEffort =
+            com.examhelper.shua.data.llm.ReasoningEffort.NONE
 
         /** 分块解析无产出时的二分重试上限（防止病态输入无限递归） */
         private const val MAX_SPLIT_DEPTH = 2
