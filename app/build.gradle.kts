@@ -97,6 +97,37 @@ android {
     }
 }
 
+/**
+ * Release APK 统一命名：`Shualegeti-<abi>-<version>.apk`，例如 `Shualegeti-arm64-v8a-1.1.0.apk`。
+ *
+ * 为什么只改 release、不改 debug：`启动模拟器.bat` 按 `app-<abi>-debug.apk` 找包装机，
+ * 改 debug 名会把这个脚本弄坏。分发产物才需要跟着版本号走，调试卷不需要。
+ *
+ * 说明：这里用的是 `AppExtension.applicationVariants` + `BaseVariantOutputImpl`（内部 API）。
+ * AGP 8 的 `androidComponents` 新 API 里的 VariantOutput 是不可变的，没有 setter，
+ * 想自定义文件名目前只能走这条老路。`filters` 里取 ABI 用的是 `filterType.toString()`
+ * 而不是枚举相等，是为了在 AGP 换了该类型实现时不至于编译失败。
+ */
+run {
+    val androidExt = project.extensions.getByName("android")
+        as com.android.build.gradle.AppExtension
+    // 必须用 configureEach 而不是 all：DomainObjectSet 同时是 Set，
+    // Kotlin 会把 `.all {}` 解析成标准库的 Iterable.all(predicate)（要求返回 Boolean），
+    // 编译期就报 "inferred type is Unit but Boolean was expected"。
+    androidExt.applicationVariants.configureEach {
+        if (buildType.name != "release") return@configureEach
+        val vn = versionName
+        outputs.configureEach {
+            @Suppress("DEPRECATION")
+            val impl = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+            val abi = impl.filters
+                .firstOrNull { it.filterType.toString().equals("ABI", ignoreCase = true) }
+                ?.identifier ?: "universal"
+            impl.outputFileName = "Shualegeti-$abi-$vn.apk"
+        }
+    }
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

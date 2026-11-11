@@ -1,4 +1,4 @@
-# AGENTS.md — 刷了个题 (ShuaGeLeTi) 项目记忆
+﻿# AGENTS.md — 刷了个题 (ShuaGeLeTi) 项目记忆
 
 > 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-11（v1.0.12 后续未发版改动，versionCode 仍为 13）。
 
@@ -97,8 +97,8 @@ RapidOCR 识别一页分两步：**先版面分析，再识别文字**。模型�
 - ML Kit `text-recognition-chinese:16.0.1` 上游尚无 16KB 对齐版本（用户设备警告里可能残留它，等 Google 更新后升版本号即可）
 - 中转 API 可能不透传缓存字段 → token 命中显示 0；已做 OpenAI `prompt_tokens_details.cached_tokens` 回退解析
 - DeepSeek 模型名现为 deepseek-flash / deepseek-v4-pro（旧 deepseek-chat 已下线）
-- APK 体积：debug 全 ABI ~190MB；v1.0.0 起启用 **ABI splits**，release 用 debug 签名（未配置正式签名）
-- **只发 arm64-v8a**（v1.0.11 之后，`app/build.gradle.kts` 的 `splits.abi.include` 默认 `listOf("arm64-v8a")`）：v7a 是 2017 年前 32 位老机、x86_64 只有模拟器/Chromebook，真实手机用户接近 0，却让 Release 多 156MB。**要给模拟器或老机出包时用命令行覆盖，不要改代码**：`./gradlew assembleDebug -PabiOverride=arm64-v8a,x86_64`（逗号分隔）。根目录只保留 `app-arm64-v8a-{debug,release}.apk`；`启动模拟器.bat` 按设备 ABI 选包，模拟器需先带 override 构建 x86_64 包。
+- APK 体积：debug 全 ABI ~190MB；v1.0.0 起启用 **ABI splits**，release 自 v1.1.0 起用**正式签名**（根目录 `release.jks` + `keystore.properties`，均在 .gitignore；密码表缺失时构建会优雅回退 debug 签名）
+- **只发 arm64-v8a**（v1.0.11 之后，`app/build.gradle.kts` 的 `splits.abi.include` 默认 `listOf("arm64-v8a")`）：v7a 是 2017 年前 32 位老机、x86_64 只有模拟器/Chromebook，真实手机用户接近 0，却让 Release 多 156MB。**要给模拟器或老机出包时用命令行覆盖，不要改代码**：`./gradlew assembleDebug -PabiOverride=arm64-v8a,x86_64`（逗号分隔）。**Release 产物统一命名为 `Shualegeti-<abi>-<version>.apk`**（如 `Shualegeti-arm64-v8a-1.1.0.apk`），由 `app/build.gradle.kts` 末尾的 `applicationVariants.configureEach` 设置 `outputFileName`。**debug 包名保持 `app-<abi>-debug.apk` 不变** —— `启动模拟器.bat` 按这个名字找包装机。根目录同步放同名 release 包；模拟器需先带 override 构建 x86_64 包。
 - **APK 一律不入库**（v1.0.4 起）：`/app-*.apk` 已被 `.gitignore` 忽略，分发只走 GitHub Releases；但 `启动模拟器.bat` 仍读根目录 APK，所以本地构建后要手动 `cp app/build/outputs/apk/debug/app-<abi>-debug.apk .`
 - 样例题库在 `QuestionBankExample/`（gitignore，版权资料）；`app-debug*.apk` 也 gitignore
 - **仓库体积**：v1.0.9 时代仓库已有 167MB（GitHub 上），其中约 290MB 历史 blob 是早期误跟踪的 APK（x86_64/arm64/v7a 三包）与 `app/libs/OcrLibrary-1.3.0-release.aar`。这些已从工作区移除并写入 `.gitignore`，但**仍在历史里**——若要真正瘦身需 `git filter-repo` 重写历史 + 强推（会改变所有 commit hash）。**用户已决定「先不动历史，保持现状」，不要再提重写**。当前入库大文件只有内置模型与预编译 onnxruntime.so（合计 74.9MB，构建必需，不可删）
@@ -340,7 +340,7 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 
 ## 待办池（按价值排序）
 
-1. release 正式签名 + Play 上架准备（当前 debug 签名）
+1. Play 上架准备（正式签名已就绪：`release.jks` 证书 `CN=ShuaGeLeTi`，SHA-256 `43422064…`。**务必先备份 keystore 与密码**，丢失后无法再发更新）
 2. ML Kit 16KB 对齐版本跟进
 3. 解析预览单题编辑增强（题图支持）
 4. 云备份（暂缓）
