@@ -42,6 +42,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
@@ -166,7 +167,13 @@ fun LiquidDock(
             // 胶囊滑块（唯一的动画元素）
             Box(
                 Modifier
-                    .offset(x = with(density) { pillX.value.toDp() })
+                    // **位移必须走 graphicsLayer，不能用 offset(x = pillX.value.toDp())**。
+                    // offset 的参数在组合阶段读取 Animatable 的值，动画每一帧都会让整个
+                    // LiquidDock 重组一遍 —— 包括 4 个 tab 的 Icon/Text、两段渐变 Brush、
+                    // 三处 border。用户反馈的「底部悬浮导航栏切换时卡顿掉帧」就是这个：
+                    // 60fps 下每秒重组 60 次整棵 Dock 子树。
+                    // graphicsLayer 只在绘制阶段改图层矩阵，不触发重组也不触发重排。
+                    .graphicsLayer { translationX = pillX.value }
                     .padding(start = 4.dp, end = 4.dp, top = 6.dp, bottom = 6.dp)
                     .width(pillW)
                     .fillMaxHeight()
@@ -264,10 +271,19 @@ fun LiquidDock(
                             .padding(vertical = 2.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
+                        // 选中态的放大不能用 size(21/19dp)：改尺寸会触发父级重新测量，
+                        // 切 tab 时整排 Icon+Text 都要重排一次。放大改用 graphicsLayer
+                        // 缩放，只影响绘制、不参与测量，也不触发重组。
                         Icon(
                             tab.icon,
                             contentDescription = tab.label,
-                            modifier = Modifier.size(if (highlighted) 21.dp else 19.dp),
+                            modifier = Modifier
+                                .size(19.dp)
+                                .graphicsLayer {
+                                    val s = if (highlighted) 1.1f else 1f
+                                    scaleX = s
+                                    scaleY = s
+                                },
                             tint = if (highlighted) extra.terracottaDeep
                             else MaterialTheme.colorScheme.onSurfaceVariant
                         )
