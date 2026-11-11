@@ -1,4 +1,4 @@
-﻿package com.examhelper.shua.ui.settings
+package com.examhelper.shua.ui.settings
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -87,12 +87,15 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
     val ui by vm.ui.collectAsState()
     val test by vm.test.collectAsState()
     val bal by vm.balance.collectAsState()
+    val usage by vm.usage.collectAsState()
     val message by vm.message.collectAsState()
     var editing by remember { mutableStateOf<LlmProvider?>(null) }
     var showAdd by remember { mutableStateOf(false) }
     var confirmClearFav by remember { mutableStateOf(false) }
     var confirmResetProgress by remember { mutableStateOf(false) }
     var showPrompts by remember { mutableStateOf(false) }
+    /** 用量情况的时间窗口：7 / 30 天 */
+    var usageDays by remember { mutableIntStateOf(7) }
 
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(message) {
@@ -316,7 +319,7 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                             }
                         }
                         Text(
-                            bal.text ?: "点「查询」读取 DeepSeek 官方余额（仅 api.deepseek.com 支持）。生成任务结束后可对照这里的扣费，校验本地成本估算。",
+                            bal.text ?: "点「查询」读取 DeepSeek 官方余额（仅 api.deepseek.com 支持）。",
                             style = MaterialTheme.typography.labelSmall,
                             color = when (bal.ok) {
                                 true -> extra.terracotta
@@ -324,6 +327,135 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                                 else -> MaterialTheme.colorScheme.onSurfaceVariant
                             }
                         )
+                    }
+                }
+            }
+
+            // ================= 用量情况（近 7 / 30 天） =================
+            //
+            // DeepSeek 没有用量/账单查询接口（/user/usage、/user/bills、/billing 等实测全 404，
+            // 只有 /user/balance），所以「近 N 天消费」只能自己算，两条独立算法并列展示：
+            //   · 实际：窗口内余额下降量累加（充值回升跳过）—— 能对上官方账单
+            //   · 估算：本地记录的 token 按峰谷价累加 —— 立刻有数、可拆构成
+            // 两者差得远，本身就说明「端点没透传缓存字段」或「价目变了」。
+            item {
+                PaperCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "用量情况",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (usage.loading) {
+                                Text(
+                                    "统计中…",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else {
+                                Text(
+                                    "统计",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable { vm.loadUsage(usageDays) }
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+                        // 窗口切换：7 天 / 30 天
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            com.examhelper.shua.data.llm.UsageStats.WINDOWS.forEach { d ->
+                                val on = d == usageDays
+                                Box(
+                                    Modifier
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(
+                                            if (on) extra.terracotta.copy(alpha = 0.16f)
+                                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                                        )
+                                        .border(
+                                            1.dp,
+                                            if (on) extra.terracotta.copy(alpha = 0.5f) else Color.Transparent,
+                                            RoundedCornerShape(10.dp)
+                                        )
+                                        .clickable {
+                                            usageDays = d
+                                            vm.loadUsage(d)
+                                        }
+                                        .padding(horizontal = 14.dp, vertical = 7.dp)
+                                ) {
+                                    Text(
+                                        "近 $d 天",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                                        color = if (on) extra.terracottaDeep
+                                        else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+
+                        val w = usage.window
+                        when {
+                            usage.error != null -> Text(
+                                usage.error!!,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = extra.sage
+                            )
+                            w == null -> Text(
+                                "选一个窗口后点「统计」。首次使用需要积累几天余额快照才能算出实际消费；" +
+                                    "应用每次打开会采一次（每天最多一次），任务前后也会采。",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            else -> Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                Text(
+                                    w.actualSpent?.let {
+                                        "实际消费 ${com.examhelper.shua.data.generate.Cost.format(it)} ${w.currency}"
+                                    } ?: "实际消费 —（余额快照不足，需至少 2 次采样）",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    color = if (w.hasActual) extra.terracottaDeep
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    w.estimateSpent?.let {
+                                        "本地估算 ${com.examhelper.shua.data.generate.Cost.format(it)} 元"
+                                    } ?: "本地估算 —（该窗口内没有记录到用量的任务）",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = if (w.hasEstimate) extra.amber
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                if (w.taskCount > 0) {
+                                    Text(
+                                        "共 ${w.taskCount} 个任务 · ${com.examhelper.shua.data.generate.Cost.tokens(w.totalTokens)} token" +
+                                            "（命中 ${com.examhelper.shua.data.generate.Cost.tokens(w.hitTokens)} / " +
+                                            "未命中 ${com.examhelper.shua.data.generate.Cost.tokens(w.missTokens)} / " +
+                                            "输出 ${com.examhelper.shua.data.generate.Cost.tokens(w.outTokens)}）",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    val hr = com.examhelper.shua.data.generate.Cost.hitRateOrNull(
+                                        w.hitTokens, w.missTokens
+                                    )
+                                    Text(
+                                        "缓存命中 ${hr?.let { "$it%" } ?: "—"}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Text(
+                                    "「实际消费」= 窗口内余额下降量累加（充值的回升段跳过），可与官方账单对照；" +
+                                        "「本地估算」按记录的 token 与峰谷单价计算，端点不透传缓存字段时会偏高。",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.outline
+                                )
+                            }
+                        }
                     }
                 }
             }

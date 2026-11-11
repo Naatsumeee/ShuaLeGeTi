@@ -39,6 +39,28 @@ class ShuaApp : Application() {
             val app = this
             Thread { com.examhelper.shua.data.importjob.ImportPipelineWorker.reviveStale(app) }.start()
         }
+        // 余额快照（每天最多一次）：DeepSeek 没有用量查询接口，「近 N 天消费」只能靠
+        // 余额下降量反推。不在这里定期采样的话，快照会只散落在任务前后，
+        // 两三天没跑任务的窗口就完全算不出实际消费。
+        // 全程 runCatching + 后台线程：采样失败绝不能影响启动。
+        runCatching {
+            val app = this
+            Thread {
+                runCatching {
+                    val dao = app.container.database.balanceSnapshotDao()
+                    val provider = kotlinx.coroutines.runBlocking {
+                        app.container.database.providerDao().getPrimary()
+                    } ?: return@runCatching
+                    kotlinx.coroutines.runBlocking {
+                        com.examhelper.shua.data.llm.UsageStats.sample(
+                            app.container.balanceClient, dao, provider,
+                            minIntervalMs = com.examhelper.shua.data.llm.UsageStats.DAILY_SAMPLE_INTERVAL_MS
+                        )
+                        com.examhelper.shua.data.llm.UsageStats.purge(dao)
+                    }
+                }
+            }.start()
+        }
     }
 
     companion object {

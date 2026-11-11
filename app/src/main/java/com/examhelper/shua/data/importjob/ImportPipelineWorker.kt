@@ -276,24 +276,31 @@ class ImportPipelineWorker(
             }
             val pending = chunks.indices.filter { it !in doneChunks }
 
-            // 官方余额快照：开工前读一次。断点续传时沿用上一轮记录的开跑余额，
-            // 这样「本轮消耗」算的是整次导入，而不是最后这一段。
+            // 用量基数：断点续传时把**前几轮已经记下的**用量接过来。
+            //
+            // 旧实现直接在 DONE 时写 snapshotUsage()，而新建的 parser 计数器从 0 开始，
+            // 续跑一次就把之前累计的数字整个覆盖掉 —— 用户看到「用量越跑越少」。
+            // 现在统一写 base + 本轮增量。
             val existingJob = runCatching { jobDao().getById(jobId) }.getOrNull()
-            val balanceBefore = existingJob?.balanceBefore?.let {
-                com.examhelper.shua.data.llm.BalanceLedger.Snapshot(
-                    it, existingJob.balanceCurrency ?: "CNY"
+            val baseHit = existingJob?.cacheHitTokens ?: 0L
+            val baseMiss = existingJob?.cacheMissTokens ?: 0L
+            val baseOut = existingJob?.outputTokens ?: 0L
+
+            // 余额快照：喂给「用量情况」的窗口累计（不再用于任务级「实扣」，
+            // 那个数字因为计费延迟恒为 0，已废弃）
+            runCatching {
+                com.examhelper.shua.data.llm.UsageStats.sample(
+                    container.balanceClient,
+                    container.database.balanceSnapshotDao(),
+                    provider
                 )
-            } ?: runCatching {
-                com.examhelper.shua.data.llm.BalanceLedger.read(container.balanceClient, provider)
-            }.getOrNull()
+            }
 
             updateJob(jobId) {
                 it.copy(
                     stage = "PARSE", message = "AI 解析（${provider.name}）",
                     totalUnits = chunks.size, doneUnits = doneChunks.size,
-                    rawTextPath = raw.absolutePath, parsedPath = parsed.absolutePath,
-                    balanceBefore = balanceBefore?.amount,
-                    balanceCurrency = balanceBefore?.currency
+                    rawTextPath = raw.absolutePath, parsedPath = parsed.absolutePath
                 )
             }
             runCatching { setForeground(foregroundInfo("AI 解析中 ${doneChunks.size}/${chunks.size}", doneChunks.size, chunks.size)) }
@@ -379,9 +386,10 @@ class ImportPipelineWorker(
                         it.copy(
                             doneUnits = okCount,
                             parsedCount = parsedSoFar,
-                            cacheHitTokens = u.normalizedCacheHit().toLong(),
-                            cacheMissTokens = u.cacheMissTokens.toLong(),
-                            outputTokens = u.completionTokens.toLong(),
+                            // base + 本轮增量：断点续传不会把之前累计的用量冲掉
+                            cacheHitTokens = baseHit + u.normalizedCacheHit().toLong(),
+                            cacheMissTokens = baseMiss + u.cacheMissTokens.toLong(),
+                            outputTokens = baseOut + u.completionTokens.toLong(),
                             message = "AI 解析 ${provider.name}：完成 $okCount/${chunks.size} 段" +
                                 if (failCount > 0) "（失败 $failCount 段）" else ""
                         )
@@ -393,7 +401,17 @@ class ImportPipelineWorker(
             }
 
             if (isStopped) {
-                updateJob(jobId) { it.copy(stage = "CANCELED", message = "已取消（可继续）") }
+                updateJob(jobId) {
+                    val u = parser.snapshotUsage()
+                    it.copy(
+                        stage = "CANCELED",
+                        message = "已取消（可继续）",
+                        // 取消也要保住已花掉的用量，否则用户看不到这段消费
+                        cacheHitTokens = baseHit + u.normalizedCacheHit().toLong(),
+                        cacheMissTokens = baseMiss + u.cacheMissTokens.toLong(),
+                        outputTokens = baseOut + u.completionTokens.toLong()
+                    )
+                }
                 return Result.failure()
             }
 
@@ -413,10 +431,16 @@ class ImportPipelineWorker(
             if (okCount == 0 && chunks.isNotEmpty()) {
                 return fail(jobId, "AI 解析全部失败：${provider.name} 连接异常或返回不可解析")
             }
-            val balanceAfter = runCatching {
-                com.examhelper.shua.data.llm.BalanceLedger.readSettled(container.balanceClient, provider)
-            }.getOrNull()
-            val spent = Cost.spentByBalance(balanceBefore?.amount, balanceAfter?.amount)
+            // 收尾再采一次余额快照：这次采样意味着「任务结束时的余额」，
+            // 供「用量情况」的窗口累计使用（任务级「实扣」已废弃，原因见 Cost.spentByBalance）
+            runCatching {
+                com.examhelper.shua.data.llm.UsageStats.sample(
+                    container.balanceClient,
+                    container.database.balanceSnapshotDao(),
+                    provider,
+                    minIntervalMs = 0
+                )
+            }
             val costYuan = runCatching {
                 val u = parser.snapshotUsage()
                 Cost.yuan(u.normalizedCacheHit().toLong(), u.cacheMissTokens.toLong(),
@@ -430,24 +454,18 @@ class ImportPipelineWorker(
                 it.copy(
                     stage = "DONE", parsedCount = totalParsed,
                     streamTail = null,
-                    cacheHitTokens = u.normalizedCacheHit().toLong(),
-                    cacheMissTokens = u.cacheMissTokens.toLong(),
-                    outputTokens = u.completionTokens.toLong(),
-                    balanceBefore = balanceBefore?.amount,
-                    balanceAfter = balanceAfter?.amount,
-                    balanceCurrency = balanceAfter?.currency ?: balanceBefore?.currency,
+                    cacheHitTokens = baseHit + u.normalizedCacheHit().toLong(),
+                    cacheMissTokens = baseMiss + u.cacheMissTokens.toLong(),
+                    outputTokens = baseOut + u.completionTokens.toLong(),
                     message = "解析完成：$totalParsed 题" + if (failCount > 0) "（$failCount 段失败，可在预览后重新解析补齐）" else "" +
-                        costYuan?.let { " · 参考成本 ${Cost.format(it)} 元" }.orEmpty() +
-                        spent?.let { " · 实扣 ${Cost.format(it)} 元" }.orEmpty() +
-                        balanceAfter?.let { " · 余额 ${Cost.money(it.amount)} ${it.currency}" }.orEmpty()
+                        costYuan?.let { " · 参考成本 ${Cost.format(it)} 元" }.orEmpty()
                 )
             }
             notifyDone(jobId, bankName, totalParsed)
             return Result.success()
         } catch (e: kotlinx.coroutines.CancellationException) {
             updateJob(jobId) { it.copy(stage = "CANCELED", message = "已取消（进度已保存，可继续）") }
-            throw e
-        } catch (e: Exception) {
+            throw e        } catch (e: Exception) {
             return fail(jobId, e.message ?: e.javaClass.simpleName)
         }
     }

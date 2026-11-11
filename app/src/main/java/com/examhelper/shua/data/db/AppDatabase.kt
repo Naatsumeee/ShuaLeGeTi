@@ -1,4 +1,4 @@
-﻿package com.examhelper.shua.data.db
+package com.examhelper.shua.data.db
 
 import android.content.Context
 import androidx.room.Database
@@ -34,9 +34,10 @@ class Converters {
         KillRecord::class,
         LlmProvider::class,
         ImportJob::class,
-        GenerateJob::class
+        GenerateJob::class,
+        BalanceSnapshot::class
     ],
-    version = 11,
+    version = 12,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -48,6 +49,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun providerDao(): ProviderDao
     abstract fun importJobDao(): ImportJobDao
     abstract fun generateJobDao(): GenerateJobDao
+    abstract fun balanceSnapshotDao(): BalanceSnapshotDao
 
     companion object {
         /** v1 鈫?v2锛氶鍨嬪瓙绫诲瀷/鍏辩敤棰樺共/鍏辩敤閫夐」銆佷綔绛?runId/鐢ㄦ椂銆佹柀棰樿〃銆佸鍏ヤ换鍔¤〃銆佽繘搴︾瓫閫夋寚绾?*/
@@ -259,6 +261,32 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v11 → v12：新增 `balance_snapshots`（账户余额快照）。
+         *
+         * DeepSeek 没有用量/账单查询接口，所以「近 N 天消费」只能靠余额变化反推：
+         * 把窗口内相邻快照的下降量累加（上升视为充值，跳过）。
+         * 这张表就是那些快照 —— 应用打开时每天采一次，任务前后也采一次。
+         *
+         * 纯新增表，不触碰已有数据，老题库零影响。
+         */
+        private val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `balance_snapshots` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`providerId` INTEGER NOT NULL, " +
+                        "`amount` REAL NOT NULL, " +
+                        "`currency` TEXT NOT NULL, " +
+                        "`sampledAt` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_balance_snapshots_providerId_sampledAt` " +
+                        "ON `balance_snapshots` (`providerId`, `sampledAt`)"
+                )
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -272,7 +300,7 @@ abstract class AppDatabase : RoomDatabase() {
                     .addMigrations(
                         MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
                         MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
-                        MIGRATION_9_10, MIGRATION_10_11
+                        MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12
                     )
                     .fallbackToDestructiveMigration()
                     .build()

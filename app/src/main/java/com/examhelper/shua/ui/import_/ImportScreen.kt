@@ -371,50 +371,32 @@ fun ImportScreen(
                                     job.cacheHitTokens, job.cacheMissTokens, job.outputTokens,
                                     state.providerModel
                                 )
+                                val hitPct = com.examhelper.shua.data.generate.Cost.hitRateOrNull(
+                                    job.cacheHitTokens, job.cacheMissTokens
+                                )
                                 Text(
                                     "解析用量 ${com.examhelper.shua.data.generate.Cost.tokens(job.cacheHitTokens + job.cacheMissTokens + job.outputTokens)}" +
-                                        " / 缓存命中 ${com.examhelper.shua.data.generate.Cost.hitRate(job.cacheHitTokens, job.cacheMissTokens)}%" +
+                                        " / 缓存命中 ${hitPct?.let { "$it%" } ?: "—"}" +
                                         (cost?.let { " / 参考成本 ${com.examhelper.shua.data.generate.Cost.format(it)} 元" }
                                             ?: " / 未知模型不计价"),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = extra.amber
                                 )
-                                if (job.cacheHitTokens == 0L && job.cacheMissTokens > 10_000) {
+                                // 首次导入的前几块必然是 0 命中：前缀缓存要等第一次请求**完成**
+                                // 才建立，而分块是并发发出的，第一批（并发数这么多块）全部落空。
+                                // 这不是统计坏了，得说清楚，否则用户会以为功能失效。
+                                if (hitPct == 0) {
                                     Text(
-                                        "若已复用同一提示词前缀仍显示 0，多为中转端未透传缓存字段，实际计费可能低于此参考值。",
+                                        "首次解析时前缀缓存尚不存在，第一批并发分块必然全部未命中；" +
+                                            "同一提示词再次解析才会命中（命中价约为未命中的 1/50）。",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.outline
                                     )
                                 }
                             }
-                            // 官方余额对账：任务前后各读一次余额，差额就是本轮真实扣费
-                            val spentYuan = job?.let {
-                                com.examhelper.shua.data.generate.Cost.spentByBalance(
-                                    it.balanceBefore, it.balanceAfter
-                                )
-                            }
-                            if (job != null && (job.balanceAfter != null || job.balanceBefore != null)) {
-                                val cur = job.balanceCurrency ?: "CNY"
-                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    spentYuan?.let {
-                                        SemanticChip(
-                                            "实扣 ${com.examhelper.shua.data.generate.Cost.format(it)} $cur",
-                                            ChipTone.Brand
-                                        )
-                                    }
-                                    job.balanceAfter?.let {
-                                        SemanticChip(
-                                            "剩余 ${com.examhelper.shua.data.generate.Cost.money(it)} $cur",
-                                            ChipTone.Verdant
-                                        )
-                                    }
-                                }
-                                Text(
-                                    "「实扣」取 DeepSeek 官方余额差，与账单一致；「参考成本」按 token 单价估算，有差属正常。",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
-                            }
+                            // 「实扣」已删除：DeepSeek 计费有几分钟延迟，任务前后两次读余额
+                            // 几乎总是相等（实测 61.29 → 61.29 而实际消耗了 1.6 万 token），
+                            // 显示出来只会误导。要看实际消费请到设置页「用量情况」。
                             Text(
                                 "后台运行中，可以切出应用或锁屏，回来继续。",
                                 style = MaterialTheme.typography.labelSmall,

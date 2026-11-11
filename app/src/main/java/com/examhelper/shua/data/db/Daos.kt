@@ -344,6 +344,10 @@ interface ImportJobDao {
 
     @Query("DELETE FROM import_jobs WHERE id = :id")
     suspend fun delete(id: String)
+
+    /** 窗口内的导入任务（用量统计用） */
+    @Query("SELECT * FROM import_jobs WHERE createdAt >= :since")
+    suspend fun since(since: Long): List<ImportJob>
 }
 
 @Dao
@@ -356,4 +360,32 @@ interface GenerateJobDao {
 
     @Query("SELECT * FROM generate_jobs WHERE bankId = :bankId")
     suspend fun get(bankId: Long): GenerateJob?
+
+    /** 窗口内的生成任务（用量统计用，按 updatedAt 近似任务完成时间） */
+    @Query("SELECT * FROM generate_jobs WHERE updatedAt >= :since")
+    suspend fun since(since: Long): List<GenerateJob>
+}
+
+@Dao
+interface BalanceSnapshotDao {
+    @Insert
+    suspend fun insert(snapshot: BalanceSnapshot): Long
+
+    /** 该 provider 最近一次快照（判断是否需要再采一次） */
+    @Query("SELECT * FROM balance_snapshots WHERE providerId = :providerId ORDER BY sampledAt DESC LIMIT 1")
+    suspend fun latest(providerId: Long): BalanceSnapshot?
+
+    /**
+     * 窗口内快照。多取一条窗口起点之前的值 —— 只有「起点之前」和「窗口内第一条」
+     * 之间的差值才能覆盖窗口开头那段时间的消费。
+     */
+    @Query("SELECT * FROM balance_snapshots WHERE providerId = :providerId AND sampledAt >= :since ORDER BY sampledAt ASC")
+    suspend fun since(providerId: Long, since: Long): List<BalanceSnapshot>
+
+    @Query("SELECT * FROM balance_snapshots WHERE providerId = :providerId AND sampledAt < :before ORDER BY sampledAt DESC LIMIT 1")
+    suspend fun lastBefore(providerId: Long, before: Long): BalanceSnapshot?
+
+    /** 只留最近 [before] 之后的快照，避免无限增长 */
+    @Query("DELETE FROM balance_snapshots WHERE sampledAt < :before")
+    suspend fun purgeBefore(before: Long): Int
 }

@@ -159,17 +159,20 @@ class GenerateWorker(
                 )
             )
 
-            // 官方余额快照：开工前读一次，收工后再读一次，差额就是本轮真实扣费。
-            // 只对 DeepSeek 官方端点有效；中转站/失败一律 null，不影响任务本身。
-            val balanceBefore = runCatching {
-                BalanceLedger.read(container.balanceClient, primary)
-            }.getOrNull()
-            if (balanceBefore != null) {
-                dao.upsert(
-                    (dao.get(bankId) ?: GenerateJob(bankId = bankId)).copy(
-                        balanceBefore = balanceBefore.amount,
-                        balanceCurrency = balanceBefore.currency
-                    )
+            // 用量基数：断点续传时接过前几轮已记录的用量。
+            // 旧实现 DONE 时直接写本轮 usage，续跑一次就把累计数字覆盖掉。
+            val existingGen = runCatching { dao.get(bankId) }.getOrNull()
+            val baseHit = existingGen?.cacheHitTokens ?: 0L
+            val baseMiss = existingGen?.cacheMissTokens ?: 0L
+            val baseOut = existingGen?.outputTokens ?: 0L
+
+            // 余额快照：喂给「用量情况」的窗口累计。任务级「实扣」已废弃 ——
+            // DeepSeek 计费有几分钟延迟，任务前后两次读余额几乎总相等。
+            runCatching {
+                com.examhelper.shua.data.llm.UsageStats.sample(
+                    container.balanceClient,
+                    container.database.balanceSnapshotDao(),
+                    primary
                 )
             }
 
@@ -236,10 +239,11 @@ class GenerateWorker(
                         (dao.get(bankId) ?: GenerateJob(bankId = bankId)).copy(
                             stage = "RUNNING",
                             done = done, ok = ok, fail = fail,
-                            cacheHitTokens = usage.hit,
-                            cacheMissTokens = usage.miss,
-                            outputTokens = usage.out,
-                            message = "第 ${minOf(done / AnswerGenerator.BATCH_SIZE + 1, batches.size)}/${batches.size} 批 · 完成 $done/${targets.size} · 命中 ${Cost.hitRate(usage.hit, usage.miss)}%",
+                            cacheHitTokens = baseHit + usage.hit,
+                            cacheMissTokens = baseMiss + usage.miss,
+                            outputTokens = baseOut + usage.out,
+                            message = "第 ${minOf(done / AnswerGenerator.BATCH_SIZE + 1, batches.size)}/${batches.size} 批 · 完成 $done/${targets.size}" +
+                                (Cost.hitRateOrNull(usage.hit, usage.miss)?.let { " · 命中 $it%" } ?: ""),
                             updatedAt = System.currentTimeMillis()
                         )
                     )
@@ -259,23 +263,26 @@ class GenerateWorker(
             }
 
             val costYuan = Cost.yuan(usage.hit, usage.miss, usage.out, primary.model)
-            val balanceAfter = runCatching {
-                BalanceLedger.readSettled(container.balanceClient, primary)
-            }.getOrNull()
-            val spent = Cost.spentByBalance(balanceBefore?.amount, balanceAfter?.amount)
+            // 收工再采一次余额快照，供「用量情况」窗口累计（不再算任务级「实扣」）
+            runCatching {
+                com.examhelper.shua.data.llm.UsageStats.sample(
+                    container.balanceClient,
+                    container.database.balanceSnapshotDao(),
+                    primary,
+                    minIntervalMs = 0
+                )
+            }
+            val hitRateText = Cost.hitRateOrNull(usage.hit, usage.miss)
+                ?.let { " · 缓存命中 $it%" }
+                ?: " · 缓存命中 —（首轮无缓存可命中）"
             dao.upsert(
                 (dao.get(bankId) ?: GenerateJob(bankId = bankId)).copy(
                     stage = "DONE",
-                    cacheHitTokens = usage.hit,
-                    cacheMissTokens = usage.miss,
-                    outputTokens = usage.out,
-                    balanceBefore = balanceBefore?.amount,
-                    balanceAfter = balanceAfter?.amount,
-                    balanceCurrency = balanceAfter?.currency ?: balanceBefore?.currency,
-                    message = "完成：成功 $ok，失败 $fail · 缓存命中 ${Cost.hitRate(usage.hit, usage.miss)}%" +
-                        costYuan?.let { " · 参考成本 ${Cost.format(it)} 元" }.orEmpty() +
-                        spent?.let { " · 实扣 ${Cost.format(it)} 元" }.orEmpty() +
-                        balanceAfter?.let { " · 余额 ${Cost.money(it.amount)} ${it.currency}" }.orEmpty()
+                    cacheHitTokens = baseHit + usage.hit,
+                    cacheMissTokens = baseMiss + usage.miss,
+                    outputTokens = baseOut + usage.out,
+                    message = "完成：成功 $ok，失败 $fail$hitRateText" +
+                        costYuan?.let { " · 参考成本 ${Cost.format(it)} 元" }.orEmpty()
                 )
             )
             notifyDone(ok)

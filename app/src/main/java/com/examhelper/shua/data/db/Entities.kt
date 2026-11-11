@@ -1,4 +1,4 @@
-package com.examhelper.shua.data.db
+﻿package com.examhelper.shua.data.db
 
 import androidx.room.Entity
 import androidx.room.Index
@@ -174,9 +174,9 @@ data class GenerateJob(
     val cacheMissTokens: Long = 0,
     val outputTokens: Long = 0,
     /**
-     * 任务前后各查一次 DeepSeek 官方 `/user/balance`，两者之差 = 本轮真实扣费。
-     * 本地按 token 单价算的是「参考成本」，中转端点、并发计入、缓存字段丢失都会让它偏离；
-     * 余额差是官方账本上的数字（null = 端点不支持查余额 / 查询失败，不影响任务本身）。
+     * **已废弃，不再写入**：DeepSeek 计费有几分钟延迟，任务前后两次读余额几乎总相等，
+     * 差值恒为 0，据此显示的「实扣」纯属误导。列保留只为兼容旧库；
+     * 实际消费改由 `balance_snapshots` 的多天累计得出（见 UsageStats）。
      */
     val balanceBefore: Double? = null,
     val balanceAfter: Double? = null,
@@ -225,9 +225,7 @@ data class ImportJob(
     val cacheMissTokens: Long = 0,
     val outputTokens: Long = 0,
     /**
-     * 任务前后各查一次 DeepSeek 官方余额，差额就是本轮真实扣费。
-     * 本地按 token 单价算的「参考成本」在中转端点/并发计入不准时会有偏差，
-     * 余额差是唯一权威数字（null = 该端点不支持查余额 / 查询失败）。
+     * **已废弃，不再写入**（原因同 GenerateJob.balanceBefore）：计费延迟导致差值恒为 0。
      */
     val balanceBefore: Double? = null,
     val balanceAfter: Double? = null,
@@ -240,4 +238,30 @@ data class ImportJob(
     val errorMessage: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
+)
+
+/**
+ * 账户余额快照（DeepSeek 官方 `/user/balance`）。
+ *
+ * 为什么要单独存一张表：DeepSeek **没有**用量/账单查询接口（`/user/usage`、
+ * `/user/bills`、`/billing` 等全部 404，只有 `/user/balance`），所以「近 7/30 天
+ * 消费」只能用余额变化反推。
+ *
+ * 算法：窗口内按时间排序，把相邻两次快照的**下降量**累加；余额上升视为充值，整段跳过。
+ * 结算延迟只有几分钟，所以 7/30 天这种长窗口的累计结果和官方账单是对得上的。
+ *
+ * 采样时机：应用打开（每天最多一次）+ 每个任务开始/结束（30 分钟内不重复采样）。
+ * 采样越密，被「充值」掩盖掉的消费窗口越小。
+ */
+@Entity(
+    tableName = "balance_snapshots",
+    indices = [Index(value = ["providerId", "sampledAt"])]
+)
+data class BalanceSnapshot(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val providerId: Long,
+    /** 总可用余额（含赠送） */
+    val amount: Double,
+    val currency: String = "CNY",
+    val sampledAt: Long = System.currentTimeMillis()
 )

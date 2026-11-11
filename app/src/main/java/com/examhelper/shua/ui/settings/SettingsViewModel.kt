@@ -1,4 +1,4 @@
-﻿package com.examhelper.shua.ui.settings
+package com.examhelper.shua.ui.settings
 
 import android.app.Application
 import android.content.Intent
@@ -246,8 +246,55 @@ class SettingsViewModel(
         }
     }
 
-    /** 用系统浏览器打开项目页 / 反馈邮箱 */
-    fun openUrl(url: String) {
+    data class UsageState(
+        val loading: Boolean = false,
+        val window: com.examhelper.shua.data.llm.UsageStats.Window? = null,
+        val error: String? = null
+    )
+
+    private val _usage = MutableStateFlow(UsageState())
+    val usage: StateFlow<UsageState> = _usage
+
+    /**
+     * 统计近 [days] 天用量。
+     *
+     * 先补采一次余额快照（节流 30 分钟），这样「刚用完就来查」也能拿到最新的基准点，
+     * 不会因为缺一次采样而算不出实际消费。
+     */
+    fun loadUsage(days: Int) {
+        val list = providers.value
+        val provider = list.firstOrNull { it.isPrimary && it.enabled }
+            ?: list.firstOrNull { it.enabled }
+        if (provider == null) {
+            _usage.value = UsageState(error = "还没有启用任何模型")
+            return
+        }
+        _usage.value = UsageState(loading = true)
+        viewModelScope.launch {
+            // 补采一次快照（内部会节流，不会每次都真打接口）
+            runCatching {
+                com.examhelper.shua.data.llm.UsageStats.sample(
+                    balanceClient, db.balanceSnapshotDao(), provider
+                )
+            }
+            val window = runCatching {
+                com.examhelper.shua.data.llm.UsageStats.compute(
+                    snapshotDao = db.balanceSnapshotDao(),
+                    importDao = db.importJobDao(),
+                    generateDao = db.generateJobDao(),
+                    providerId = provider.id,
+                    days = days,
+                    model = provider.model
+                )
+            }
+            _usage.value = window.fold(
+                onSuccess = { UsageState(window = it) },
+                onFailure = { UsageState(error = "统计失败：${it.message?.take(80)}") }
+            )
+        }
+    }
+
+    /** 用系统浏览器打开项目页 / 反馈邮箱 */    fun openUrl(url: String) {
         runCatching {
             val ctx = getApplication<Application>()
             val intent = if (url.startsWith("mailto:")) {

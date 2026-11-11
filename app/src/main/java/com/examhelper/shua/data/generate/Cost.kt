@@ -131,13 +131,17 @@ object Cost {
     }
 
     /**
-     * 官方账本口径的本轮消耗 = 任务前余额 - 任务后余额。
+     * ~~官方账本口径的本轮消耗 = 任务前余额 - 任务后余额~~
      *
-     * 这是唯一能和 DeepSeek 实际扣费对上的数字：本地按 token 单价算的 [yuan] 会因为
-     * 中转端点不透传缓存字段、并发分批计入顺序等原因偏离真实账单。
-     * 任一余额缺失（端点不支持/查询失败）返回 null；余额倒挂（充值、赠送到期）
-     * 会被 coerceAtLeast 压成 0，宁可显示 0.00 也不显示负数。
+     * **已废弃，不要再用**：DeepSeek 的计费不是实时同步的，通常有几分钟延迟，
+     * 所以任务刚结束时前后两次读余额几乎总是相等（实测某任务前后都是 61.29，
+     * 但实际消耗了 7431 输入 + 8997 输出 token）。据此实现的「实扣」永远是 0，
+     * 比不显示更误导人。
+     *
+     * 要拿「实际消费」请用 [com.examhelper.shua.data.llm.UsageStats]：
+     * 它把**多天的余额下降量**累加起来，几分钟的延迟在长窗口里可以忽略。
      */
+    @Deprecated("余额差在任务粒度上恒为 0（计费有延迟），改用 UsageStats 的窗口累计")
     fun spentByBalance(before: Double?, after: Double?): Double? =
         if (before == null || after == null) null else (before - after).coerceAtLeast(0.0)
 
@@ -162,5 +166,17 @@ object Cost {
     fun hitRate(hit: Long, miss: Long): Int {
         val total = hit + miss
         return if (total <= 0) 0 else (hit * 100 / total).toInt()
+    }
+
+    /**
+     * 命中率，**没数据时返回 null**。
+     *
+     * [hitRate] 在 total == 0 时返回 0，于是「一个 token 都还没统计到」和
+     * 「确实一个都没命中」在界面上长得一模一样 —— 用户看到「缓存命中 0%」会以为
+     * 统计坏了。这里把两种情况分开：null 的调用方显示「—」并说明原因。
+     */
+    fun hitRateOrNull(hit: Long, miss: Long): Int? {
+        val total = hit + miss
+        return if (total <= 0) null else (hit * 100 / total).toInt()
     }
 }

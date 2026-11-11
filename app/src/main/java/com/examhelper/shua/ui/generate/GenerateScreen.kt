@@ -179,12 +179,12 @@ fun GenerateScreen(
                                     job.cacheHitTokens, job.cacheMissTokens, job.outputTokens,
                                     state.primaryModel
                                 )
-                                val rate = com.examhelper.shua.data.generate.Cost.hitRate(
+                                val rate = com.examhelper.shua.data.generate.Cost.hitRateOrNull(
                                     job.cacheHitTokens, job.cacheMissTokens
                                 )
                                 Text(
                                     "总 token ${com.examhelper.shua.data.generate.Cost.tokens(totalTok)}" +
-                                        " / 缓存命中 $rate%" +
+                                        " / 缓存命中 ${rate?.let { "$it%" } ?: "—"}" +
                                         (cost?.let { " / 参考成本 ${com.examhelper.shua.data.generate.Cost.format(it)} 元" }
                                             ?: " / 参考成本 未知模型不计价"),
                                     style = monoStyleSafe(),
@@ -195,42 +195,21 @@ fun GenerateScreen(
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.outline
                                 )
-                                // 命中恒 0 且未命中量很大 → 多半是中转没透传缓存字段，
-                                // 显示 0% 会误导成「一条都没缓存」，这里如实说明。
-                                if (job.cacheHitTokens == 0L && job.cacheMissTokens > 10_000) {
+                                // 0 命中要说清是「缓存还没建立」还是「端点不透传字段」，
+                                // 否则用户只会看到吓人的 0% 却不知道要不要处理。
+                                if (rate == 0) {
                                     Text(
-                                        "若确认已复用同一前缀仍显示 0，多为中转端未透传缓存字段，实际计费可能低于此参考值。",
+                                        "前缀缓存要等第一次请求**完成**后才建立，而分批是并发发出的，" +
+                                            "所以第一批（并发数那么多批）必然全部未命中；" +
+                                            "若后续批次仍恒为 0，多为中转端未透传缓存字段。",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.outline
                                     )
                                 }
                             }
-                            // ---- 官方余额对账：任务前后各读一次余额，差额就是真实扣费 ----
-                            val spent = com.examhelper.shua.data.generate.Cost.spentByBalance(
-                                job.balanceBefore, job.balanceAfter
-                            )
-                            if (job.balanceAfter != null || job.balanceBefore != null) {
-                                val cur = job.balanceCurrency ?: "CNY"
-                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    spent?.let {
-                                        SemanticChip(
-                                            "实扣 ${com.examhelper.shua.data.generate.Cost.format(it)} $cur",
-                                            ChipTone.Brand
-                                        )
-                                    }
-                                    job.balanceAfter?.let {
-                                        SemanticChip(
-                                            "剩余 ${com.examhelper.shua.data.generate.Cost.money(it)} $cur",
-                                            ChipTone.Verdant
-                                        )
-                                    }
-                                }
-                                Text(
-                                    "「实扣」= DeepSeek 官方余额差，与账单一致；「参考成本」是按 token 单价估算，两者有差属正常。",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
-                            }
+                            // 「实扣」已删除：DeepSeek 计费有几分钟延迟，任务前后两次读余额
+                            // 几乎总相等（实测 61.29 → 61.29），显示出来只会误导。
+                            // 实际消费请看设置页「用量情况」。
                             job.errorMessage?.let {
                                 Text(it, color = extra.sage, style = MaterialTheme.typography.bodySmall)
                             }
