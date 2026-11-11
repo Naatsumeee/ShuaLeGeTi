@@ -69,6 +69,16 @@ object AppStorage {
     fun importParsedFile(context: Context, jobId: String): File =
         File(importDir(context), "parsed_$jobId.jsonl")
 
+    /**
+     * OCR 逐页断点侧车文件：内容是「已完成到第几页」这个整数。
+     *
+     * 与 `raw_<jobId>.txt` 配合：raw 存已完成页的文本，本文件存已完成页数。
+     * 47 页扫描件要跑十几分钟，中途被系统杀掉时，早先的实现把 OCR 结果只放在
+     * 内存的 StringBuilder 里，一杀就全丢；现在逐页落盘，重启后从下一页继续。
+     */
+    fun importOcrProgressFile(context: Context, jobId: String): File =
+        File(importDir(context), "ocrp_$jobId.txt")
+
     /** PDF 落地文件：用完必须删除，命名带上时间戳避免并发覆盖 */
     fun newIngestPdf(context: Context): File =
         File(tempDir(context), "ingest_${System.currentTimeMillis()}_${counter()}.pdf")

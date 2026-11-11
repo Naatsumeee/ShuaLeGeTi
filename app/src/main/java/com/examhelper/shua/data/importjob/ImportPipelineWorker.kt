@@ -188,7 +188,24 @@ class ImportPipelineWorker(
                 } else {
                     com.examhelper.shua.data.ocr.RapidOcrEngine(applicationContext)
                 }
-                val text = DocumentIngestor(applicationContext, ocr).ingest(Uri.parse(uriStr)) { p ->
+                // 逐页落盘：47 页扫描件要跑十几分钟，进程被杀时不该整段作废。
+                // 续跑依据是 raw 文件里的「已完成页数」侧车文件（见 ocrProgressFile）。
+                val ingestor = DocumentIngestor(applicationContext, ocr)
+                val progressFile = com.examhelper.shua.data.storage.AppStorage
+                    .importOcrProgressFile(applicationContext, jobId)
+                val donePages = runCatching { progressFile.readText().trim().toInt() }.getOrDefault(0)
+                if (donePages > 0 && raw.exists()) {
+                    // 已落盘的页直接用，从下一页继续
+                    ingestor.resumeFrom = donePages + 1
+                    ingestor.resumePrefix = raw.readText()
+                }
+                ingestor.onPageDone = { page, partial ->
+                    runCatching {
+                        raw.writeText(partial)
+                        progressFile.writeText(page.toString())
+                    }
+                }
+                val text = ingestor.ingest(Uri.parse(uriStr)) { p ->
                     // OCR / 逐页读取阶段也要把进度写回数据库：
                     // 早先只更新前台通知，用户切回应用内看到的进度条一直停在 0
                     // （stage=INGEST 时 totalUnits 恒为 0），这就是「界面内看不到导入进度」的根因。
