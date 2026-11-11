@@ -1,6 +1,6 @@
 ﻿# AGENTS.md — 刷了个题 (ShuaGeLeTi) 项目记忆
 
-> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-11（v1.0.12 后续未发版改动，versionCode 仍为 13）。
+> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-11（**v1.1.0 已发布**，versionCode 14）。
 
 ## 项目一句话
 
@@ -97,7 +97,7 @@ RapidOCR 识别一页分两步：**先版面分析，再识别文字**。模型�
 - ML Kit `text-recognition-chinese:16.0.1` 上游尚无 16KB 对齐版本（用户设备警告里可能残留它，等 Google 更新后升版本号即可）
 - 中转 API 可能不透传缓存字段 → token 命中显示 0；已做 OpenAI `prompt_tokens_details.cached_tokens` 回退解析
 - DeepSeek 模型名现为 deepseek-flash / deepseek-v4-pro（旧 deepseek-chat 已下线）
-- APK 体积：debug 全 ABI ~190MB；v1.0.0 起启用 **ABI splits**，release 自 v1.1.0 起用**正式签名**（根目录 `release.jks` + `keystore.properties`，均在 .gitignore；密码表缺失时构建会优雅回退 debug 签名）
+- APK 体积（实测 v1.1.0）：**release arm64-v8a ≈ 81MB**、debug arm64-v8a ≈ 93MB（内置 PP-OCRv5 + PP-DocLayout-S 模型与 onnxruntime/opencv 原生库是大头）。v1.0.0 起启用 **ABI splits**，release 自 v1.1.0 起用**正式签名**（根目录 `release.jks` + `keystore.properties`，均在 .gitignore；密码表缺失时构建会优雅回退 debug 签名）
 - **只发 arm64-v8a**（v1.0.11 之后，`app/build.gradle.kts` 的 `splits.abi.include` 默认 `listOf("arm64-v8a")`）：v7a 是 2017 年前 32 位老机、x86_64 只有模拟器/Chromebook，真实手机用户接近 0，却让 Release 多 156MB。**要给模拟器或老机出包时用命令行覆盖，不要改代码**：`./gradlew assembleDebug -PabiOverride=arm64-v8a,x86_64`（逗号分隔）。**Release 产物统一命名为 `Shualegeti-<abi>-<version>.apk`**（如 `Shualegeti-arm64-v8a-1.1.0.apk`），由 `app/build.gradle.kts` 末尾的 `applicationVariants.configureEach` 设置 `outputFileName`。**debug 包名保持 `app-<abi>-debug.apk` 不变** —— `启动模拟器.bat` 按这个名字找包装机。根目录同步放同名 release 包；模拟器需先带 override 构建 x86_64 包。
 - **APK 一律不入库**（v1.0.4 起）：`/app-*.apk` 已被 `.gitignore` 忽略，分发只走 GitHub Releases；但 `启动模拟器.bat` 仍读根目录 APK，所以本地构建后要手动 `cp app/build/outputs/apk/debug/app-<abi>-debug.apk .`
 - 样例题库在 `QuestionBankExample/`（gitignore，版权资料）；`app-debug*.apk` 也 gitignore
@@ -117,12 +117,29 @@ RapidOCR 识别一页分两步：**先版面分析，再识别文字**。模型�
 
 ```bash
 export JAVA_HOME="/c/Program Files/Microsoft/jdk-17.0.20.101-hotspot"; export PATH="$JAVA_HOME/bin:$PATH"
-./gradlew assembleDebug testDebugUnitTest          # 构建+单测
+./gradlew assembleDebug testDebugUnitTest          # 构建 + 单测（205 项）
+./gradlew assembleRelease                          # → app/build/outputs/apk/release/Shualegeti-arm64-v8a-<版本>.apk
 ADB="/c/Users/xutia/AppData/Local/Android/Sdk/platform-tools/adb.exe"
-"$ADB" -s e87a3fe4 install -r app-debug-arm64-v8a.apk   # 装机（按 ABI 选包）
+"$ADB" -s e87a3fe4 install -r app-arm64-v8a-debug.apk   # 装机（debug 包，按 ABI 选包）
 TOKEN=$(printf "protocol=https\nhost=github.com\n\n" | git credential fill | grep '^password=' | cut -d= -f2-)
 GH_TOKEN=$TOKEN gh release list                    # GitHub API 操作
 ```
+
+### 发版流程（v1.1.0 走通的顺序）
+
+1. `app/build.gradle.kts` 改 `versionCode` / `versionName`（**每次发版都必须递增 versionCode**，否则装不上）
+2. `ui/settings/Changelog.kt` 顶部插一条 ReleaseNote：上一条 `current = false`，新条 `current = true`；
+   文案面向用户（写"能感知到什么"，不写实现）。**「共 N 个版本」是 `RELEASE_NOTES.size` 自动算的，不用改。**
+3. 全量单测通过 → `./gradlew assembleRelease`
+4. `apksigner verify --print-certs` 确认签名 DN 是 `CN=ShuaGeLeTi`（不是 `CN=Android Debug`）
+5. `aapt dump badging` 确认 versionCode / versionName
+6. commit → push main
+7. `git tag -a vX.Y.Z -m "..."` + push tag → `gh release create vX.Y.Z --verify-tag --title ... --notes-file ... <apk>`
+   （`--target <短SHA>` 会被 GitHub 拒绝为 `target_commitish is invalid`，所以先推 tag 再 `--verify-tag`）
+
+**换签名是不可回退的**：新 keystore 的证书指纹与旧包不同，Android 不允许覆盖安装。
+发版说明里必须写清"先导出数据 → 卸载 → 重装 → 导入"。
+
 
 ### 推送卡住的坑（**必看**）
 
@@ -160,6 +177,7 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 → **v1.0.10**（编码乱码专项：新增 `data/ingest/TextDecoder.kt` 按 BOM/UTF-8/UTF-16/GB18030 顺序探测解码；`NewStringUTF` 换自研 `newJStringUtf8` 修 4 字节 UTF-8；ChunkPlanner 硬切不切代理对；单栏不再套双栏启发式）。
 → **v1.0.11**（章节与答案识别：`chapterHeadingRegex` 保住「第X章」+ `pendingChapterPrefix` 拼接拆行章名 + `fillMissingChapterNumbers` 补齐序号；`sectionRegex` 命中题型标签时只在无章标题文件里当分组；答案表新增「每行一对」与「一行多对」两种裸格式并按章分表；成本修复 providerModel 未回写。首页标题栏加「导入」「问 AI」、空态居中大按钮、长按菜单（置顶/改名/归档/删除）+ 归档折叠区；AI 解析流式预览；默认引擎改 RapidOCR；DB v8 加 `import_jobs.streamTail` / `banks.pinned` / `banks.archived`）。
 → **v1.0.12**（答案区重做：新增 `data/parse/AnswerSheet.kt` 把「三、参考答案」整块从题目流里剥离并按章回填，支持整行一对/拆两行/一行多对/整段正文四种排版；`ParsedQuestion.sourceNumber` 记住题号；`parseChineseNumber` 认单字「十」；同章重复标题不再拼成「第十章 第十章」；「学习目标」小节跳过；名词解释按内容匹配、B1 型题取 `sharedOptions`、选项丢失时按题号兜底但排除问句。真实 47 页扫描件答案覆盖率 0% → 95%）。
+→ **v1.1.0**（判断题独立题型 + 选项自动补齐、单题详情页、错题本重点分组与每题菜单、思考强度四档、近 7/30 天用量情况；章节名保住本体并归一、AI 答案回填按题号精确绑定（覆盖率 33%→83%）、PDF 导入提速（整本一次解析 + 渲染器复用 + OCR 逐页落盘）、解析默认关思考（否则输出预算被烧光）、提示词压缩 28%；**改用正式签名**、Release APK 统一命名 `Shualegeti-<abi>-<version>.apk`、DB v12）。
 
 ## 首页题库列表（`ui/bank/BankListScreen.kt` + `BankViewModels.kt`，v1.0.11）
 
@@ -204,9 +222,10 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - 实测（医学遗传学部分2.pdf，47 页扫描件，App 端端到端）：v1.0.12 首发版 332/347（95%）→ 本版 **345/346（99.7%）**，八章分别 40/40、34/34、50/50、82/83、25/25、41/41、39/39、34/34；章节名含题型标签 0 条、stem 残留题号 0 条。唯一无答案的那题是 OCR 把选项 α/β/δ/γ/ψ 与答案表 E 对不上，**留空比填错安全**。
 - **versionCode 13 / versionName 1.0.12**：用户明确要求「重发 1.0.12 而不是发 1.0.13」，所以版本名保持不变、versionCode 递增以保证覆盖升级。远程 tag `v1.0.12` 已用 `gh api -X PATCH repos/.../git/refs/tags/v1.0.12 -F force=true` 移到 merge 提交（Git 本地删标签的操作被 CC Safety Net 的规则拦截，改用 GitHub API 更新 ref）。
 
-## v1.0.12 之后的未发版改动（2026-11-07 ~ 11-11）
+## v1.1.0 内容（2026-11-07 ~ 11-11，已发布）
 
-> 这段全部**没有发 release、没有改版本号**（仍是 versionCode 13 / versionName 1.0.12），用户要求测好之后统一发版、统一写更新日志。commit 从 `7986e2d` 起。
+> 下面 12 节是 **v1.1.0 的内容**，已随 v1.1.0 发布（versionCode 14 / versionName 1.1.0）。
+> commit 从 `7986e2d` 起；`Changelog.kt` 顶部那条面向用户的文案就是这 12 节的白话版。
 
 ### 1. 判断题当成独立题型（`data/model/JudgeOptions.kt`）
 
