@@ -1,4 +1,4 @@
-# 刷了个题 ShuaGeLeTi
+﻿# 刷了个题 ShuaGeLeTi
 
 [![Release](https://img.shields.io/github/v/release/Naatsumeee/ShuaLeGeTi)](https://github.com/Naatsumeee/ShuaLeGeTi/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen.svg)](LICENSE)
@@ -80,6 +80,8 @@
   `./gradlew assembleRelease -PabiOverride=arm64-v8a,x86_64`
 
 ## 🚀 快速上手
+
+> 图文版逐步说明（含配模型、导入、刷题、常见问题）见 **[快速上手.md](快速上手.md)**。
 
 1. 安装后进入「设置 → 添加模型」，填入 Base URL / API Key / 模型名（如 DeepSeek 官方：`https://api.deepseek.com` + `deepseek-flash`），点「测试」确认连通
 2. 「题库 → 导入题库」，选择扫描 PDF / docx / 拍照，按需选择 OCR 引擎，点「AI 智能解析」——任务进入后台，可切出应用等通知
