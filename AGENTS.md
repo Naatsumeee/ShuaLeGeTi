@@ -25,7 +25,7 @@ Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）�
 ## 技术栈与关键决策
 
 - Kotlin + Jetpack Compose（BOM 2024.12.01）+ Material3；MVVM（ViewModel 用 @JvmOverloads/SavedStateHandle 构造，无 DI 框架，`ShuaApp.instance.container` 手工容器）
-- **Room v10**（`data/db/`：Entities/Daos/AppDatabase，迁移 1→2→…→10 全部注册在 `AppDatabase.addMigrations`）。`fallbackToDestructiveMigration` **仍在**，新增字段必须写正式迁移，否则老用户升级即丢库。各版本加了什么：v2 `subtype`/`sharedStem`/`sharedOptionsJson`/`attempt_records.runId`/`durationMs`/`study_progress.filterJson`；v3 `sourcePage`；v4 `originalAnswer`；v5 `aiAnswer`/`answerVerified`/`deepSolved`；v6 三个 token 字段；v7 余额快照；v8 `import_jobs.streamTail`/`banks.pinned`/`banks.archived`；v9 `wrong_records.flagged`（重点标记，与「已掌握」互相独立）；**v10 是数据迁移**（`MIGRATION_9_10` 用 `HeadingClassifier.cleanChapter` 把库里已有的脏章节名就地洗掉，不重导）
+- **Room v12**（`data/db/`：Entities/Daos/AppDatabase，迁移 1→2→…→12 全部注册在 `AppDatabase.addMigrations`）。`fallbackToDestructiveMigration` **仍在**，新增字段必须写正式迁移，否则老用户升级即丢库。各版本加了什么：v2 `subtype`/`sharedStem`/`sharedOptionsJson`/`attempt_records.runId`/`durationMs`/`study_progress.filterJson`；v3 `sourcePage`；v4 `originalAnswer`；v5 `aiAnswer`/`answerVerified`/`deepSolved`；v6 三个 token 字段；v7 余额快照（已废弃）；v8 `import_jobs.streamTail`/`banks.pinned`/`banks.archived`；v9 `wrong_records.flagged`（重点标记，与「已掌握」互相独立）；**v10 是数据迁移**（`MIGRATION_9_10` 用 `HeadingClassifier.cleanChapter` 把库里已有的脏章节名就地洗掉，不重导）；**v11 也是数据迁移**（再洗一次 + `unifyChapterNames` 归一）；v12 新增 `balance_snapshots` 表（余额快照，供「用量情况」的窗口累计）
 - 双 OCR 引擎（`data/ocr/`）：**默认 RapidOCR**（PP-OCRv5 ONNX，v1.0.11 起）+ ML Kit 中文 bundled（备选，轻量）；OCR 后做**双栏阅读顺序重排**（`MlKitOcrEngine.rebuildReadingOrder`，扫描试卷是左右双栏）；RapidOCR 额外跑**版面分析**（见「版面分析」节）
 - RapidOCR 为**源码模块** `rapidocr-src/OcrLibrary`（Apache-2.0，已入库 ~93MB）：NDK r27 + `ANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON` + onnxruntime **1.20**（16KB 页对齐，Maven 的 AAR 抽取）+ opencv-mobile 3.4.15（`src/sdk/`）。**16KB 页对齐是硬要求**（用户手机是 16KB 设备），换依赖时必须验证 PT_LOAD p_align=16384
 - 后台任务 = WorkManager 前台服务（dataSync 类型）：`ImportPipelineWorker`（导入/解析，断点续传按"已落盘分块"）与 `GenerateWorker`（AI 生成，断点续传按"已答即跳过"）；进度写 Room 表（import_jobs/generate_jobs），UI 观察 Flow
@@ -192,7 +192,7 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
   2. **B1 型题**（共用备选答案）自己的 `options` 是空的，选项在 `sharedOptions` 里 → 判定用 `q.options + q.sharedOptions`。
   3. **选项丢失兜底**：正文池无匹配时按题号从字母池取，但要求 `looksObjective`（`stem.length <= 40`、不含 `？`/`?`、不匹配 `subjectiveHintRegex`）。宁可留空也不给简答题填一个字母。
 - **`stemMatchesAnswer` 不要在原始题干上先删标点**：删了会把「何谓血红蛋白病？可分为几类？」粘成一整串，探针过长永远匹配不上；标点本身是天然断句点，直接在原串上取 `[\u4e00-\u9fa5]{2,}` 的前 3 长片段做探针。
-- 回归护栏：`app/src/test/java/com/examhelper/shua/AnswerSheetTest.kt`（11 项）+ `AnswerTableTest.kt`（5 项）+ `ChunkPlannerTest` 的 3 个回填用例 + `AnswerBinderTest`（12 项）+ `AnswerCoverageRealFileTest`（2 项，真实素材）。**全量 177 项**，改这块务必 `--rerun-tasks` 跑全量。
+- 回归护栏：`app/src/test/java/com/examhelper/shua/AnswerSheetTest.kt`（11 项）+ `AnswerTableTest.kt`（5 项）+ `ChunkPlannerTest` 的 3 个回填用例 + `AnswerBinderTest`（12 项）+ `AnswerCoverageRealFileTest`（2 项，真实素材）+ `ReasoningEffortTest`（7 项）+ `ChunkBudgetTest`（3 项）+ `UsageStatsTest`（11 项）。**全量 205 项**，改这块务必 `--rerun-tasks` 跑全量。
 - 真实素材验证：`.shots/p2_full.txt`（47 页扫描件的 OCR 全文，2580 行）与 `.shots/app_raw13.txt`（同素材的 App 端 OCR 输出，8 章 346 题）是标准回归输入。离线链路 `TextQuestionParser.parse` 跑 `app_raw13` 应得 345/346（99%）；**AI 链路**（`LlmQuestionParser.finalizeLines`）现为 281/336（83%），并有单测守着不回落，见下节。
 
 ### OCRUpdate 分支（v1.0.12 重发，versionCode 13）
@@ -206,7 +206,7 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 
 ## v1.0.12 之后的未发版改动（2026-11-07 ~ 11-11）
 
-> 这段全部**没有发 release、没有改版本号**（仍是 versionCode 13 / versionName 1.0.12），用户要求测好之后统一发版、统一写更新日志。commit 从 `7986e2d` 到 `fc82c24`。
+> 这段全部**没有发 release、没有改版本号**（仍是 versionCode 13 / versionName 1.0.12），用户要求测好之后统一发版、统一写更新日志。commit 从 `7986e2d` 起。
 
 ### 1. 判断题当成独立题型（`data/model/JudgeOptions.kt`）
 
@@ -288,15 +288,55 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - **`AnswerSheet` 的两个排版缺口**：① Java 的 `\s` **不含全角空格 U+3000**，`1.B　2.D` 这种最常见的中文分隔会被判「有实义残留」→ 落到主观题分支得到伪数据；② `A1型：1.B 2.D` 这类题型分组前缀会让整行不合格、整组答案全丢。两者都已修（`fillerRe` 补 `\u3000`、新增 `typeLabelRe` 剥前缀）。
 - **提示词必须要求模型输出题号**：`QuestionDto.number` 新增并写进 `PARSE_DEFAULT` 规则 2（「number 必填，原样照抄原文数字，不要改写成全书连续编号，题号不要留在 stem 里」）。这是绑定可靠的前提。
 - 实测：AI 链路答案覆盖 **31/336 → 281/336（83%）**，客观题绑定 205/211 且**零错填**；离线链路维持 345/346。护栏单测：`AnswerBinderTest.kt`（12 项）+ `AnswerCoverageRealFileTest.kt`（真实素材，客观题零错填 + 端到端覆盖率 ≥ 80%）。
-- **改这块必须 `--rerun-tasks` 跑全量**（现为 177 项）。
+- **改这块必须 `--rerun-tasks` 跑全量**（现为 205 项）。
 
-### 11. AI 成本优化方案
+### 11. AI 成本优化（已落地，全部实测）
 
-完整分析在 `.shots/AI成本优化方案.md`（gitignore，不随仓库走）。要点：
+> 完整实测数据在 `.shots/AI成本优化实测.md`（gitignore，不随仓库走）。
 
-- 47 页扫描件的输入侧实测构成：正文 ≈ 21.6k tok、系统提示词 676 tok × 7 块、合计 ≈ 26.3k tok，**提示词占 18%**。成本大头是「提示词 × 块数」这个固定开销，不是正文。
-- 可省的三处：chunk 6000→12000（−8.1%）、提示词压到 40%（−10.8%）、**关掉解析的思考链/改用非推理模型**（输出单价是输入的 4 倍，这块才是真金白银）。
-- 不建议：关块间重叠窗口（只省 0.5%，却会让跨块题目断裂）、按页切块（固定开销涨 6 倍）、用非官方端点（缓存折扣全失效，实测更贵）。
+**最重要的发现：不传 `reasoning_effort` 时 DeepSeek 默认开思考（high），会把输出预算全额烧光。**
+同一段 5613 字分块：旧参数（不传 + max 8192）→ 8192 输出全是思考 token、`finish=length`、
+**0 道题**；新参数（`none` + max 12000）→ 20.5s、6214 token、**46 题**。这比"贵"严重得多。
+
+- `ReasoningEffort` 只有 `none/low/high/max` 四档。**官方把 `medium` 映射成 `high`**，
+  所以下拉不提供 medium（给一个"看着更省、实际一样贵"的档比不给更糟）。
+- **导入解析固定 `none`**（`LlmQuestionParser.PARSE_REASONING`，硬编码，不读设置）：
+  结构化抽取用不上思考，只会烧输出预算。深度解题/补全解析/追问 AI 读设置页，**默认 Low**。
+- `PARSE_MAX_TOKENS` 8192 → **12000**。实测完整解析所需：5613 字要 6132、
+  题量最大块（5996 字）要 8471、9759 字要 9827。经验系数**每 1 字原文约 1.4 token 输出**。
+- 请求失败两级降级：先剥 `reasoning_effort`（新参数最可能不被支持），再剥 `response_format`/`max_tokens`。
+- 提示词 `PARSE_DEFAULT` 1647 → **1177 字（−28.5%）**，单块输入 −250 token，缓存命中维持 96%。
+  语义一条没删（每条规则背后都是一个踩过的坑）；整段仍是常量，前缀缓存前提不变。
+- **chunk 放大被实测否决，保持 6000**：chunk=12000 时 2/4 块 `finish=length` 直接返回 0 题，
+  总题数 261 → 117（−55%），耗时还略升；省下 2434 输入 token 不值得丢一半的题。
+  护栏：`ChunkBudgetTest` 锁住 chunk 与输出预算的联动，谁放大 chunk 不跟着调预算会直接红。
+
+### 12. 缓存命中统计 + 用量情况（DB v12）
+
+- **0% 命中不是算法错**（实测同提示词连发：第 1 次 hit=0、第 2/3 次 hit=768/962），三处别混淆：
+  1. **并发冷启动必然 0**：缓存要等第一次请求**完成**才建立，而 `Semaphore(concurrency)` 的第一批
+     N 个请求同时发出 → 全部落空。小任务（≤ 并发数）全程 0%。UI 必须解释而不是报错。
+  2. **`hitRate` 把「无数据」和「0%」混为一谈**：total==0 也返回 0。用 `hitRateOrNull`，无数据显示「—」。
+  3. **断点续传会冲掉累计用量**：`snapshotUsage()` 每轮从 0 开始，DONE 时覆盖 job 字段。
+     现在统一写 `base + 本轮增量`（import/generate 都改），取消路径也保住已花掉的用量。
+- **「实扣」已删除**：DeepSeek 计费不是实时同步的（几分钟延迟），任务前后两次读余额几乎总相等 ——
+  实测 `61.29 → 61.29` 而实际消耗了 1.6 万 token。差值恒为 0，比不显示更误导。
+  `Cost.spentByBalance` / `BalanceLedger.readSettled` 标记 `@Deprecated`；
+  Entity 的 `balanceBefore/After` 列保留（兼容旧库）但不再写入。
+- **DeepSeek 没有用量/账单接口**：`/user/usage`、`/usage`、`/user/bills`、`/billing`、
+  `/user/consumption`、`/dashboard/billing/usage` 实测全部 404，只有 `/user/balance` 可用。
+  所以「近 7/30 天消费」只能自己算，`data/llm/UsageStats.kt` 两种独立算法并列展示：
+  - **实际消费** = 窗口内余额**下降量**累加（上升视为充值，整段跳过）。结算延迟几分钟，
+    7/30 天窗口足以稀释，能和官方账单对上。
+  - **本地估算** = `import_jobs`/`generate_jobs` 的 hit/miss/out token，按每条记录**自己的时间戳**
+    判峰谷价累加（跨 18:00 的任务不会被统一按高峰算）。
+- **`balance_snapshots` 采样时机**：应用打开（每天最多一次，`DAILY_SAMPLE_INTERVAL_MS`）
+  + 每个任务开始/结束（30 分钟内不重复，`SAMPLE_MIN_INTERVAL_MS`）。采样越密，
+  「充值与消费落在同一区间」被掩盖的消费越少。
+- **只有 1 条快照时 `actualSpent` 必须返回 null**（`series.size < 2`）：否则显示「实际消费 0.00」，
+  和「确实没消费」分不清 —— 和「缓存命中 0%」是同型误导。
+- 踩过的坑：验证 Room 数据**必须连 `shua.db-wal` / `shua.db-shm` 一起拷**。只拷主库会漏掉
+  未 checkpoint 的写入，会让你误判「功能没生效」（我因此白查了一轮）。
 
 ## 待办池（按价值排序）
 
@@ -305,5 +345,7 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 3. 解析预览单题编辑增强（题图支持）
 4. 云备份（暂缓）
 5. 性能：Room 分页加载超大题库
-6. **AI 导入成本优化**：按 `.shots/AI成本优化方案.md` 落地（优先做「解析用非推理模型 + 压低思考」）
-7. **AI 链路的答案覆盖率还有 17% 的缺口**：281/336 里剩下的是 B 型题与答案表本身缺行，不是绑定逻辑的问题；要靠提示词让模型直接把答案写进题（而不是依赖文末表回填）才能再往上走
+6. **AI 链路的答案覆盖率还有 17% 的缺口**：281/336 里剩下的是 B 型题与答案表本身缺行，
+   不是绑定逻辑的问题；要靠提示词让模型直接把答案写进题（而不是依赖文末表回填）才能再往上走
+7. **历史题库的脏章节名**：`bank 5` 这类早期导入的题库里仍有 `第九章 群体遗传` 与
+   `第九章 群体遗传` 混杂、以及无章号条目，v11 迁移的清洗规则没覆盖到，需要单独处理
