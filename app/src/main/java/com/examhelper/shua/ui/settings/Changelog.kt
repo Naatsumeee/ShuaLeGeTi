@@ -24,6 +24,7 @@ val RELEASE_NOTES: List<ReleaseNote> = listOf(
         date = "2026-11-11",
         current = true,
         items = listOf(
+            NoteItem(NoteItem.Kind.FIX, "修复首页上下滑动题库列表时会误进入题库：现在划动只滚动列表，轻点才进入"),
             NoteItem(NoteItem.Kind.NEW, "判断题成了独立题型：原文没写「A 正确 / B 错误」也会自动补齐两项，答案写成「对/错/√/×/T/F」都能识别，不会再出现「没有可点的选项、答不了」"),
             NoteItem(NoteItem.Kind.NEW, "新增单题详情页：测试报告和错题本里点任意题目都能进，完整题干、共用材料、选项、参考答案与解析一次看全，解析默认展开"),
             NoteItem(NoteItem.Kind.NEW, "正确答案标绿修好了：多选题会标出全部正确项，判断题也能正确标出「正确/错误」"),

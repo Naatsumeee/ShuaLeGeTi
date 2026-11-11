@@ -1,6 +1,6 @@
-﻿# AGENTS.md — 刷了个题 (ShuaGeLeTi) 项目记忆
+# AGENTS.md — 刷了个题 (ShuaGeLeTi) 项目记忆
 
-> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-11（**v1.1.0 已发布**，versionCode 14）。
+> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-11（**v1.1.0 已发布**，versionCode 15）。
 
 ## 项目一句话
 
@@ -117,7 +117,7 @@ RapidOCR 识别一页分两步：**先版面分析，再识别文字**。模型�
 
 ```bash
 export JAVA_HOME="/c/Program Files/Microsoft/jdk-17.0.20.101-hotspot"; export PATH="$JAVA_HOME/bin:$PATH"
-./gradlew assembleDebug testDebugUnitTest          # 构建 + 单测（205 项）
+./gradlew assembleDebug testDebugUnitTest          # 构建 + 单测（212 项）
 ./gradlew assembleRelease                          # → app/build/outputs/apk/release/Shualegeti-arm64-v8a-<版本>.apk
 ADB="/c/Users/xutia/AppData/Local/Android/Sdk/platform-tools/adb.exe"
 "$ADB" -s e87a3fe4 install -r app-arm64-v8a-debug.apk   # 装机（debug 包，按 ABI 选包）
@@ -210,7 +210,7 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
   2. **B1 型题**（共用备选答案）自己的 `options` 是空的，选项在 `sharedOptions` 里 → 判定用 `q.options + q.sharedOptions`。
   3. **选项丢失兜底**：正文池无匹配时按题号从字母池取，但要求 `looksObjective`（`stem.length <= 40`、不含 `？`/`?`、不匹配 `subjectiveHintRegex`）。宁可留空也不给简答题填一个字母。
 - **`stemMatchesAnswer` 不要在原始题干上先删标点**：删了会把「何谓血红蛋白病？可分为几类？」粘成一整串，探针过长永远匹配不上；标点本身是天然断句点，直接在原串上取 `[\u4e00-\u9fa5]{2,}` 的前 3 长片段做探针。
-- 回归护栏：`app/src/test/java/com/examhelper/shua/AnswerSheetTest.kt`（11 项）+ `AnswerTableTest.kt`（5 项）+ `ChunkPlannerTest` 的 3 个回填用例 + `AnswerBinderTest`（12 项）+ `AnswerCoverageRealFileTest`（2 项，真实素材）+ `ReasoningEffortTest`（7 项）+ `ChunkBudgetTest`（3 项）+ `UsageStatsTest`（11 项）。**全量 205 项**，改这块务必 `--rerun-tasks` 跑全量。
+- 回归护栏：`app/src/test/java/com/examhelper/shua/AnswerSheetTest.kt`（11 项）+ `AnswerTableTest.kt`（5 项）+ `ChunkPlannerTest` 的 3 个回填用例 + `AnswerBinderTest`（12 项）+ `AnswerCoverageRealFileTest`（2 项，真实素材）+ `ReasoningEffortTest`（7 项）+ `ChunkBudgetTest`（3 项）+ `UsageStatsTest`（11 项）+ `DragBudgetTest`（7 项）。**全量 212 项**，改这块务必 `--rerun-tasks` 跑全量。
 - 真实素材验证：`.shots/p2_full.txt`（47 页扫描件的 OCR 全文，2580 行）与 `.shots/app_raw13.txt`（同素材的 App 端 OCR 输出，8 章 346 题）是标准回归输入。离线链路 `TextQuestionParser.parse` 跑 `app_raw13` 应得 345/346（99%）；**AI 链路**（`LlmQuestionParser.finalizeLines`）现为 281/336（83%），并有单测守着不回落，见下节。
 
 ### OCRUpdate 分支（v1.0.12 重发，versionCode 13）
@@ -224,8 +224,8 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 
 ## v1.1.0 内容（2026-11-07 ~ 11-11，已发布）
 
-> 下面 12 节是 **v1.1.0 的内容**，已随 v1.1.0 发布（versionCode 14 / versionName 1.1.0）。
-> commit 从 `7986e2d` 起；`Changelog.kt` 顶部那条面向用户的文案就是这 12 节的白话版。
+> 下面 13 节是 **v1.1.0 的内容**，已随 v1.1.0 发布（versionCode 15 / versionName 1.1.0；1.1.0 重发过一版修划动误触）。
+> commit 从 `7986e2d` 起；`Changelog.kt` 顶部那条面向用户的文案就是这 13 节的白话版。
 
 ### 1. 判断题当成独立题型（`data/model/JudgeOptions.kt`）
 
@@ -307,7 +307,7 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - **`AnswerSheet` 的两个排版缺口**：① Java 的 `\s` **不含全角空格 U+3000**，`1.B　2.D` 这种最常见的中文分隔会被判「有实义残留」→ 落到主观题分支得到伪数据；② `A1型：1.B 2.D` 这类题型分组前缀会让整行不合格、整组答案全丢。两者都已修（`fillerRe` 补 `\u3000`、新增 `typeLabelRe` 剥前缀）。
 - **提示词必须要求模型输出题号**：`QuestionDto.number` 新增并写进 `PARSE_DEFAULT` 规则 2（「number 必填，原样照抄原文数字，不要改写成全书连续编号，题号不要留在 stem 里」）。这是绑定可靠的前提。
 - 实测：AI 链路答案覆盖 **31/336 → 281/336（83%）**，客观题绑定 205/211 且**零错填**；离线链路维持 345/346。护栏单测：`AnswerBinderTest.kt`（12 项）+ `AnswerCoverageRealFileTest.kt`（真实素材，客观题零错填 + 端到端覆盖率 ≥ 80%）。
-- **改这块必须 `--rerun-tasks` 跑全量**（现为 205 项）。
+- **改这块必须 `--rerun-tasks` 跑全量**（现为 212 项）。
 
 ### 11. AI 成本优化（已落地，全部实测）
 
@@ -356,6 +356,29 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
   和「确实没消费」分不清 —— 和「缓存命中 0%」是同型误导。
 - 踩过的坑：验证 Room 数据**必须连 `shua.db-wal` / `shua.db-shm` 一起拷**。只拷主库会漏掉
   未 checkpoint 的写入，会让你误判「功能没生效」（我因此白查了一轮）。
+
+### 13. 首页划动误进入题库（v1.1.0 重发修，versionCode 15）
+
+> 用户实测：在首页上下划动题库列表时，会误触发进入某个题库。
+
+- **根因（就是用户猜的那条）**：`HapticGestures.twoStageClick` 的 `waitForRelease()` 只判断
+  「所有指针都抬起了没有」，**完全不看这期间手指移动了多远**：
+  ```kotlin
+  if (event.changes.none { it.pressed }) return false   // 抬起 = 短按
+  ```
+  一次划动通常在 340ms 内结束，于是走进 `quickRelease == true` 分支直接执行 `onClick`。
+  它又**不消费事件**（为了不挡滚动），所以表现为「列表在滚 + 页面同时跳进题库」。
+- **修法**：新增 `DragBudget` 累计位移，一旦超过 `viewConfiguration.touchSlop` 就整段放弃
+  （不震、不点、不消费事件），滚动仍然交给父级 LazyColumn。三条必须守住的性质：
+  1. **按累计值判断，不能看单次位移**：一次划动会被切成很多 delta，每个都可能远小于 touchSlop。
+  2. **阈值用 `>` 而不是 `>=`**，与 Compose `touchSlop` 语义一致（超过才算滚动）。
+  3. **长按之后也要继续检测**：按住 340ms 后再划走（长按拖动）同样不能触发菜单。
+     `withTimeoutOrNull` 会取消内层协程，累计值靠外部 `DragBudget` 传递，超时后先检查
+     `budget.exceeded` 再决定要不要给长按那记触感——否则慢速划动会莫名震一下。
+- **回归护栏**：`DragBudgetTest.kt`（7 项，纯 JVM）。Compose 指针流在无 Robolectric 的单测里
+  跑不了，所以把判定逻辑抽成 `internal class DragBudget` 单独测。
+- **设备实证**（真机 adb 程序化复现）：250ms 快速划动 ×5 → 列表滚动且**不再跳转**；
+  轻点卡片 → 正常进题库详情；长按 900ms → 正常弹「置顶/归档/删除题库」菜单。
 
 ## 待办池（按价值排序）
 
