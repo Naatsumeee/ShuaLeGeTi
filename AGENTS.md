@@ -1,6 +1,6 @@
 # AGENTS.md — 刷了个题 (ShuaGeLeTi) 项目记忆
 
-> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：v1.0.12 重发版（2026-11-04）。
+> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-11（v1.0.12 后续未发版改动，versionCode 仍为 13）。
 
 ## 项目一句话
 
@@ -25,7 +25,7 @@ Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）�
 ## 技术栈与关键决策
 
 - Kotlin + Jetpack Compose（BOM 2024.12.01）+ Material3；MVVM（ViewModel 用 @JvmOverloads/SavedStateHandle 构造，无 DI 框架，`ShuaApp.instance.container` 手工容器）
-- Room v4（`data/db/`：Entities/Daos/AppDatabase，含 1→2→3→4 迁移，**禁用破坏性重建需谨慎**：fallbackToDestructiveMigration 仍在，新增字段必须写正式迁移）
+- **Room v10**（`data/db/`：Entities/Daos/AppDatabase，迁移 1→2→…→10 全部注册在 `AppDatabase.addMigrations`）。`fallbackToDestructiveMigration` **仍在**，新增字段必须写正式迁移，否则老用户升级即丢库。各版本加了什么：v2 `subtype`/`sharedStem`/`sharedOptionsJson`/`attempt_records.runId`/`durationMs`/`study_progress.filterJson`；v3 `sourcePage`；v4 `originalAnswer`；v5 `aiAnswer`/`answerVerified`/`deepSolved`；v6 三个 token 字段；v7 余额快照；v8 `import_jobs.streamTail`/`banks.pinned`/`banks.archived`；v9 `wrong_records.flagged`（重点标记，与「已掌握」互相独立）；**v10 是数据迁移**（`MIGRATION_9_10` 用 `HeadingClassifier.cleanChapter` 把库里已有的脏章节名就地洗掉，不重导）
 - 双 OCR 引擎（`data/ocr/`）：**默认 RapidOCR**（PP-OCRv5 ONNX，v1.0.11 起）+ ML Kit 中文 bundled（备选，轻量）；OCR 后做**双栏阅读顺序重排**（`MlKitOcrEngine.rebuildReadingOrder`，扫描试卷是左右双栏）；RapidOCR 额外跑**版面分析**（见「版面分析」节）
 - RapidOCR 为**源码模块** `rapidocr-src/OcrLibrary`（Apache-2.0，已入库 ~93MB）：NDK r27 + `ANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON` + onnxruntime **1.20**（16KB 页对齐，Maven 的 AAR 抽取）+ opencv-mobile 3.4.15（`src/sdk/`）。**16KB 页对齐是硬要求**（用户手机是 16KB 设备），换依赖时必须验证 PT_LOAD p_align=16384
 - 后台任务 = WorkManager 前台服务（dataSync 类型）：`ImportPipelineWorker`（导入/解析，断点续传按"已落盘分块"）与 `GenerateWorker`（AI 生成，断点续传按"已答即跳过"）；进度写 Room 表（import_jobs/generate_jobs），UI 观察 Flow
@@ -192,8 +192,8 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
   2. **B1 型题**（共用备选答案）自己的 `options` 是空的，选项在 `sharedOptions` 里 → 判定用 `q.options + q.sharedOptions`。
   3. **选项丢失兜底**：正文池无匹配时按题号从字母池取，但要求 `looksObjective`（`stem.length <= 40`、不含 `？`/`?`、不匹配 `subjectiveHintRegex`）。宁可留空也不给简答题填一个字母。
 - **`stemMatchesAnswer` 不要在原始题干上先删标点**：删了会把「何谓血红蛋白病？可分为几类？」粘成一整串，探针过长永远匹配不上；标点本身是天然断句点，直接在原串上取 `[\u4e00-\u9fa5]{2,}` 的前 3 长片段做探针。
-- 回归护栏：`app/src/test/java/com/examhelper/shua/AnswerSheetTest.kt`（11 项）+ `AnswerTableTest.kt`（5 项）+ `ChunkPlannerTest` 的 3 个回填用例。**全量 143 项**，改这块务必 `--rerun-tasks` 跑全量。
-- 真实素材验证：`.shots/p2_full.txt`（47 页扫描件的 OCR 全文，2580 行）是标准回归输入，用 `TextQuestionParser.parse` 跑后答案覆盖率应 ≥ 90%（当前 95%，332/347）。
+- 回归护栏：`app/src/test/java/com/examhelper/shua/AnswerSheetTest.kt`（11 项）+ `AnswerTableTest.kt`（5 项）+ `ChunkPlannerTest` 的 3 个回填用例 + `AnswerBinderTest`（12 项）+ `AnswerCoverageRealFileTest`（2 项，真实素材）。**全量 177 项**，改这块务必 `--rerun-tasks` 跑全量。
+- 真实素材验证：`.shots/p2_full.txt`（47 页扫描件的 OCR 全文，2580 行）与 `.shots/app_raw13.txt`（同素材的 App 端 OCR 输出，8 章 346 题）是标准回归输入。离线链路 `TextQuestionParser.parse` 跑 `app_raw13` 应得 345/346（99%）；**AI 链路**（`LlmQuestionParser.finalizeLines`）现为 281/336（83%），并有单测守着不回落，见下节。
 
 ### OCRUpdate 分支（v1.0.12 重发，versionCode 13）
 
@@ -204,6 +204,100 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - 实测（医学遗传学部分2.pdf，47 页扫描件，App 端端到端）：v1.0.12 首发版 332/347（95%）→ 本版 **345/346（99.7%）**，八章分别 40/40、34/34、50/50、82/83、25/25、41/41、39/39、34/34；章节名含题型标签 0 条、stem 残留题号 0 条。唯一无答案的那题是 OCR 把选项 α/β/δ/γ/ψ 与答案表 E 对不上，**留空比填错安全**。
 - **versionCode 13 / versionName 1.0.12**：用户明确要求「重发 1.0.12 而不是发 1.0.13」，所以版本名保持不变、versionCode 递增以保证覆盖升级。远程 tag `v1.0.12` 已用 `gh api -X PATCH repos/.../git/refs/tags/v1.0.12 -F force=true` 移到 merge 提交（Git 本地删标签的操作被 CC Safety Net 的规则拦截，改用 GitHub API 更新 ref）。
 
+## v1.0.12 之后的未发版改动（2026-11-07 ~ 11-11）
+
+> 这段全部**没有发 release、没有改版本号**（仍是 versionCode 13 / versionName 1.0.12），用户要求测好之后统一发版、统一写更新日志。commit 从 `7986e2d` 到 `fc82c24`。
+
+### 1. 判断题当成独立题型（`data/model/JudgeOptions.kt`）
+
+- 之前判断题被归进选择题逻辑，一旦原文没写「A 正确 / B 错误」这两个选项就没有可点的行，题目直接答不了。现在 `JudgeOptions` 是判断题的唯一入口：`normalize(type, options, answer)` 补齐「正确/错误」两项并把答案归一到 A/B；`answerText(type, letters)` 反着把 A/B 显示成「正确/错误」。
+- 认得的答案写法：`对 / 错 / √ / × / T / F / 正确 / 错误`，全部归一到 A/B。
+- 接入点：`BankRepository.toEntity`（所有导入路径的最后一道闸，老题库不用重导）、`StudyScreen`、`ExamScreen`、`SingleQuestionScreen`、`TextQuestionParser`、`LlmQuestionParser`、`StudyRepository.judgeAnswer`。`Prompts.PARSE` 也明确要求判断题必须给两项选项。
+
+### 2. 底部导航掉帧（`ui/theme/LiquidDock.kt`）
+
+- **胶囊滑块的位移必须走 `graphicsLayer { translationX = ... }`，不能用 `offset(x = pillX.value.toDp())`**：offset 的参数在组合阶段读值，吸附动画每帧都会重组合整个 Dock（4 个 tab 的 Icon/Text + 两段渐变 Brush + 三处 border）。这是「切 tab 卡顿掉帧」的根因。
+- 选中态图标放大也不能改 `size(21/19dp)`——改尺寸触发父级重新测量，切 tab 时整排重排。改用 `graphicsLayer` 缩放。
+
+### 3. 震动（`ui/sound/Haptics.kt` + `HapticGestures.kt`）
+
+- **强度与时长彻底拆开**：强度只管振幅（`20 + 235·t^1.8`，1 档 20 / 2 档 24 / 5 档 63 / 8 档 152 / 10 档 255），时长只管毫秒（0.35~10 倍）。之前把强度也乘进时长、且把动作 factor（TICK 0.8 / NG 1.25）乘进振幅 —— 高档位全部饱和到 255，这才是「8 档和 10 档一样重」的原因。
+- 默认强度 2 / 时长 2；设置页两个 1–10 滑块，**每跨一档实时预览震一下**（`Haptics.preview()`）。
+- 补 `VibrationAttributes.createForUsage(USAGE_TOUCH)`：不标的话部分 ROM 会按系统「触感强度」覆盖振幅。
+- **一处动作只能一记震动**：`onOptionTap` 与 `submitChoice` 里各留一处，`next()/prev()` 与按钮的 onclick 不得重复。
+- 长按两段震动（按下震一下不执行 → 松手再震一下才执行）只在**题库卡片**上用，实现是 `HapticGestures.twoStageClick`；不能用 `combinedClickable`（它只在 500ms 后回调，拿不到「按下」那一瞬间）。
+- **`twoStageClick` 必须让位子级可点击组件**：卡片右上角的「更多」是子级 `clickable`，它 consume 事件但父级短按照样执行 → 点一次菜单按钮会同时「进题库」+「弹菜单」。现在按下与等待松开两个环节都检查 `isConsumed`，被子级接管就整段放弃（连触感也不给）。
+
+### 4. 翻页动画（`ui/study/StudyScreen.kt`）
+
+- **按钮翻页走与手势同一套动画**：`flipForward/flipBackward` → `flipTick += 1` → `LaunchedEffect(flipTick)` 播 260ms `FastOutSlowInEasing` 的滑出。
+- **不能再用 `var flipping` 做互斥**：只要有一次协程没跑到 `flipping = false`（重组丢闭包、动画被打断、scope 被取消），标志就永久 true，之后每次点按钮都只排队、永不播动画 —— 这就是「点了没动画，而且一旦发生就再也不恢复」。改 state 驱动后 Compose 自己负责取消与重启。
+- 宽度要在协程里读 `pageWidth.intValue`（`mutableIntState`），不能捕获组合时的局部 `val w`（首次布局前是 1f，`animateTo(-1f)` 只移动 1 像素）。
+
+### 5. 作答状态与「本轮」边界（`ui/study/StudyViewModel.kt`）
+
+- **`reload()` 不能再用 `latestAttempt()` 还原 `revealed`**：那会把历史上任何一次作答都恢复成「已揭晓」，于是只要这题以前做过，不管隔多久、刷哪个模式，一进来就摊着解析。现在改用内存里的 `roundAnswers` 快照（`answerMemo`）：本轮答过的题滑回来仍是已答态，退出重进/开新一轮一律重新作答；背题模式（RECITE）仍然直接展开解析。
+- `StudyFilter.freshAnswer` 控制错题本重刷是否清空历史作答；错题本固定为 `freshAnswer = true`（点错题是看解析，不是重做）。
+
+### 6. 错题本（`ui/wrongbook/WrongBookScreen.kt` + DB v9）
+
+- 顶部 tab 从 4 个变 5 个：全部 / 错题 / 已掌握 / **重点** / …（新增「重点」分组可单独复刷）。**新增 tab 会改变索引，所有 `tab == 3 / tab == 2` 的分支都要跟着调**。
+- 每道题右上角 ⋮ 菜单四项：收藏 / 斩题 / 标记重点 / 从错题本删除。
+- 「忽略整本」从筛选 chip 行挪到**单独一行**（用户明确要求不要和题库/章节挤一排），带二次确认对话框。
+- 题库/章节筛选从两排横向滚动的 FilterChip 改成**一行两个等宽下拉胶囊**（带 ExpandMore 箭头），高度从三排压到一行。
+
+### 7. 单题详情页（`ui/question/SingleQuestionScreen.kt`，新建）
+
+- 测试报告和错题本点题目都进这一个页面：完整题干 / 共用题干 / 选项（带对错标记）/ 参考答案 / 解析，**解析默认展开**。
+- 底部按钮按是否带 `runId` 区分：从测试报告进来 =「返回测试报告」，从错题本进来 =「返回错题本」。
+- **不判分、不写作答记录** —— 免得早答过的题再写一遍污染统计。
+- 正确选项标绿的判据是「集合包含」而不是逐字相等：多选题答案是 `ABD`、单个选项 key 是 `A`，`opt.key == answerLetter` 永远不相等（一个都标不上）；判断题先把「对/√」经 `JudgeOptions` 归一成字母再比。
+
+### 8. 章节名清洗（`data/parse/HeadingClassifier.kt`，新建）
+
+- 之前「（一）名词解释」「一、单项选择题」被当成章节名，反复修不好是因为判定逻辑只在 `TextQuestionParser` 里有一份 private 实现，**AI 解析链路完全没有过滤**。现在 `HeadingClassifier` 是全局唯一判定，分三类：真题标题（保留）/ 题型标签（丢弃，宁可不分章）/ 章内小节（丢弃）。
+- 接入 5 处：`TextQuestionParser` 的 `sectionRegex` 分支与 Markdown 分支、`ChunkPlanner.sectionOf`/`resolveChapter`、`BankRepository.toEntity`（所有导入路径的最后一道闸）。
+- **DB v10 迁移**（`MIGRATION_9_10`）在升级时用 `cleanChapter` 把库里已有的脏章节名就地洗掉 —— 已导入的题库不可能重导（一本扫描件 OCR 十几分钟）。
+
+### 9. 导入可靠性（`ImportPipelineWorker` + `ImportViewModel` + `DocumentIngestor`）
+
+- **菜单误触**同第 3 节的 `twoStageClick`。
+- **取消任务要真的退出去**：`cancelJob()` 原来只写库，界面永远停在「解析中」。现在写 `CANCELED` 后把 `stage` 拨回 `IDLE` 并回调 `onDone()`；`observeJob` 补 `CANCELED` 分支（从通知栏取消也能归位）。
+- **真后台留存**：`enqueue()` 加 `setExpedited()`（否则任务启动时应用已进后台 → `ForegroundServiceStartNotAllowedException`）；`setForeground` 失败不再静默吞掉，界面上提示「后台保活未启动」；`ShuaApp.onCreate` 起线程跑 `ImportPipelineWorker.reviveStale()`，进程重启后把卡在 `INGEST/PARSE` 的任务重新排队续跑；`takePersistableUriPermission` 的 flags 从 0 改成 `FLAG_GRANT_READ_URI_PERMISSION`。
+- **偶发乱码的原生根因**：`CrnnNet` 里 `keys` 是成员变量，`initModel()` 每次只 `emplace_back` 而**不清空**；每新建一个 `OcrEngine` 实例都会走一遍 `init()`，字典长度翻倍 → `keys[maxIndex]` 整条错位 → 成片错字。这就是「同一份 PDF 偶发乱码」的来源（取决于进程此前有没有初始化过引擎）。修法：`initModel` 开头 `keys.clear()` + OCR 引擎进程内共享单例。
+- **别踩的坑**：给三个网络（`CrnnNet`/`DbNet`/`AngleNet`）加「重复 init 先 delete 旧 session」时，`Ort::Session *session;` 没有初始化、构造函数又是空的，`if (session != nullptr) delete session;` 读到野指针 → `Fatal signal 11 (SIGSEGV) ... CrnnNet::initModel`。三个头文件都必须写 `= nullptr`，析构 delete 后也置空。
+- **PDF 导入的三个性能坑**（「速度极慢 / 没新进度」的直接原因）：
+  1. 文字层抽取是 O(页数²)：循环里对每页都设 `startPage/endPage` 再 `stripper.getText(doc)`，每次都会把整份 PDF 重新走一遍。现在 `extractPdfTextLayer` 只打开一次。
+  2. `PdfRenderer` 每页重建：开销在**构造**（解析 xref、建页索引），不在 `openPage`。45MB 扫描件的索引被重建 47 次。现在 `PdfRendererHolder` 按文件路径复用。
+  3. OCR 阶段**没有任何断点**：结果只在内存 `StringBuilder`，`raw_<jobId>.txt` 要等全部页跑完才写，跑十几分钟被杀就整段作废。现在 `DocumentIngestor.onPageDone` 每页回调，worker 写 raw + 写 `ocrp_<jobId>.txt`（已完成页数侧车），续跑从 `resumeFrom` 的下一页继续。
+- `bitmap.recycle()` 挪进 `finally`：早先只在成功路径回收，OCR 抛异常时十几 MB 的位图会漏，后面几页被系统拖慢甚至 OOM。
+
+### 10. 答案回填重做（`data/parse/AnswerBinder.kt`，新建）
+
+> 用户实测「同一本 47 页扫描件，导入后只有 116/347 有答案」，而离线链路一直好的。差别就在回填。
+
+- **根因**：AI 链路回填章末答案表时，题干里没有题号就退回 `table[i + 1]`，而 `i` 是**全书**下标、答案表却是**每章每题型**各自从 1 编号。第 7 章第 1 题被当成全书第 35 题，整章一条答案都配不上。
+- **判据**：`AnswerBinder.bind(rawText, items)` 按「章 + 题号」精确绑定。题号优先取结构化字段（`ParsedLine.number`），其次题干前导数字。
+- **三条护栏，宁可留空也不填错**：
+  1. 按序号兜底只在**整章一道题号都取不到**时启用，且答案表的字母键必须**无重号并落在 1..N 内**。只要有部分题拿到了题号就不能再猜 —— 剩下那几道在列表里的位置早已不等于它们真正的题号（实测按序号硬填会错 8 条）。
+  2. 填进去的字母必须是本题选项之一。
+  3. 主观题**只按内容匹配**（2-gram 命中率 ≥ 0.55），绝不按题号取字母（名词解释与选择题题号重叠）。
+- **两个必须带上的东西**：
+  - **共用备选答案（B1/B2 型）的选项在 `sharedOptions` 上**，判客观题时必须 `options + sharedOptions`，否则这类题被判成主观题、答案永远配不上。
+  - **客观题身份要用题型判断，不能用「选项数 ≥ 2」**：扫描件里选项被 OCR 整块吃掉很常见（实测第八章 40 道客观题只有 29 道识别出选项），漏判会让它从序号里消失、后面所有题集体前移一位。
+- **`AnswerSheet` 的两个排版缺口**：① Java 的 `\s` **不含全角空格 U+3000**，`1.B　2.D` 这种最常见的中文分隔会被判「有实义残留」→ 落到主观题分支得到伪数据；② `A1型：1.B 2.D` 这类题型分组前缀会让整行不合格、整组答案全丢。两者都已修（`fillerRe` 补 `\u3000`、新增 `typeLabelRe` 剥前缀）。
+- **提示词必须要求模型输出题号**：`QuestionDto.number` 新增并写进 `PARSE_DEFAULT` 规则 2（「number 必填，原样照抄原文数字，不要改写成全书连续编号，题号不要留在 stem 里」）。这是绑定可靠的前提。
+- 实测：AI 链路答案覆盖 **31/336 → 281/336（83%）**，客观题绑定 205/211 且**零错填**；离线链路维持 345/346。护栏单测：`AnswerBinderTest.kt`（12 项）+ `AnswerCoverageRealFileTest.kt`（真实素材，客观题零错填 + 端到端覆盖率 ≥ 80%）。
+- **改这块必须 `--rerun-tasks` 跑全量**（现为 177 项）。
+
+### 11. AI 成本优化方案
+
+完整分析在 `.shots/AI成本优化方案.md`（gitignore，不随仓库走）。要点：
+
+- 47 页扫描件的输入侧实测构成：正文 ≈ 21.6k tok、系统提示词 676 tok × 7 块、合计 ≈ 26.3k tok，**提示词占 18%**。成本大头是「提示词 × 块数」这个固定开销，不是正文。
+- 可省的三处：chunk 6000→12000（−8.1%）、提示词压到 40%（−10.8%）、**关掉解析的思考链/改用非推理模型**（输出单价是输入的 4 倍，这块才是真金白银）。
+- 不建议：关块间重叠窗口（只省 0.5%，却会让跨块题目断裂）、按页切块（固定开销涨 6 倍）、用非官方端点（缓存折扣全失效，实测更贵）。
+
 ## 待办池（按价值排序）
 
 1. release 正式签名 + Play 上架准备（当前 debug 签名）
@@ -211,3 +305,5 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 3. 解析预览单题编辑增强（题图支持）
 4. 云备份（暂缓）
 5. 性能：Room 分页加载超大题库
+6. **AI 导入成本优化**：按 `.shots/AI成本优化方案.md` 落地（优先做「解析用非推理模型 + 压低思考」）
+7. **AI 链路的答案覆盖率还有 17% 的缺口**：281/336 里剩下的是 B 型题与答案表本身缺行，不是绑定逻辑的问题；要靠提示词让模型直接把答案写进题（而不是依赖文末表回填）才能再往上走
