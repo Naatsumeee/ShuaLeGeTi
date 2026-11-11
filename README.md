@@ -1,4 +1,10 @@
-﻿# 刷了个题 ShuaGeLeTi
+# 刷了个题 ShuaGeLeTi
+
+> ## 📖 第一次用？从这里开始
+>
+> 先看 **[快速上手.md](快速上手.md)** —— 从申请 DeepSeek API Key、导入题库，到刷题、错题重刷、换机迁移，一份文档走完全流程，含截图级的界面路径说明与常见问题。
+>
+> 只想下载安装：直接去 [Releases](https://github.com/Naatsumeee/ShuaLeGeTi/releases) 拿 `Shualegeti-arm64-v8a-1.1.0.apk`。
 
 [![Release](https://img.shields.io/github/v/release/Naatsumeee/ShuaLeGeTi)](https://github.com/Naatsumeee/ShuaLeGeTi/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen.svg)](LICENSE)
