@@ -1,6 +1,13 @@
-# AGENTS.md — 刷了个题 (ShuaGeLeTi) 项目记忆
+﻿# AGENTS.md — 刷了个题 (ShuaGeLeTi) 项目记忆
 
-> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-11（**v1.1.0 已发布**，versionCode 15）。
+> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-13（**v1.1.0 已发布**，versionCode 15）。
+>
+> **文档分工**（别把三份混在一起）：
+> - `AGENTS.md`（本文件，**入库**）—— 项目的长期公共记忆：架构、决策、踩过的坑、待办。所有 Agent 都该读。
+> - `README.md`（入库）—— 给**用户**看的：功能、下载、构建。
+> - `快速上手.md`（入库）—— 给**用户**看的操作手册：申请 API Key → 导入 → 刷题 → 换机。README 开头有入口。
+> - `MEMORY.md`（**不入库**，见 .gitignore）—— 某个 Agent 阶段的**工作交接**：这段做了什么、当前工作区状态、下一步。会随交接过期，所以不进历史。
+> - `快速上手.docx` 由 `.shots/md2docx.py` 从 md 生成，**未入库**（两份副本易漂移；要入库就约定"改 md 必重新生成"）。
 
 ## 项目一句话
 
@@ -136,6 +143,16 @@ GH_TOKEN=$TOKEN gh release list                    # GitHub API 操作
 6. commit → push main
 7. `git tag -a vX.Y.Z -m "..."` + push tag → `gh release create vX.Y.Z --verify-tag --title ... --notes-file ... <apk>`
    （`--target <短SHA>` 会被 GitHub 拒绝为 `target_commitish is invalid`，所以先推 tag 再 `--verify-tag`）
+
+**重发同名版本时还有四步**（v1.1.0 第二次发版走通过）：
+
+- `versionName` 保持不变、**`versionCode` 必须再 +1**，否则老用户装不上
+- `Changelog.kt` 顶部那条是**改**不是新增（同一个版本号只能有一条 `current = true`）
+- 删旧资产再传新包：`gh release delete-asset <tag> <old> --yes` → `gh release upload <tag> <new>`
+- **tag 必须移到含修复的提交**，否则从 tag 下源码的人拿到的还是有 bug 的版本：
+  `git push --force-with-lease=refs/tags/vX.Y.Z:<旧SHA> origin refs/tags/vX.Y.Z`
+  （`--force` 会被 CC Safety Net 拦，必须带 lease）
+- 发完做一次**端到端校验**：把资产真下载下来比对 SHA256，并确认 `draft=false` / `latest` 指向它
 
 **换签名是不可回退的**：新 keystore 的证书指纹与旧包不同，Android 不允许覆盖安装。
 发版说明里必须写清"先导出数据 → 卸载 → 重装 → 导入"。
