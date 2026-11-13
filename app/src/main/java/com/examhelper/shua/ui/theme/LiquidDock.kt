@@ -73,6 +73,8 @@ private val DockShape = RoundedCornerShape(26.dp)
 private val PillShape = RoundedCornerShape(20.dp)
 private val DockHeight = 64.dp
 
+/** 主 Tab 页面切换使用与 Dock 胶囊相同的弹簧参数，避免页面与按钮各弹各的。 */
+
 @Composable
 fun LiquidDock(
     tabs: List<DockTab>,
@@ -157,7 +159,9 @@ fun LiquidDock(
                 // 非线性吸附：带一点回弹的弹簧，跨格时先快后慢地"咬合"到按钮中心
                 pillX.animateTo(
                     target,
-                    spring(dampingRatio = 0.62f, stiffness = Spring.StiffnessMediumLow)
+                    // 用户反馈回弹略过头：把阻尼调到接近临界、提高刚度，
+                    // 保留一点点「咬合」感，但不再左右晃两下。
+                    spring(dampingRatio = 0.88f, stiffness = Spring.StiffnessMedium)
                 )
             }
 

@@ -107,8 +107,10 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
 
     // 学习记录导出：系统文件选择器
     val exportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/json")
-    ) { uri -> vm.exportLearningRecords(uri) }
+        // Creator 的 MIME 用 octet-stream，避免部分 ROM 强制给文件名补 .json，
+        // 破坏用户要求的 *.shua 单文件观感。
+        contract = ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri -> vm.exportShuaPackage(uri) }
 
     val extra = shuaColors
 
@@ -219,8 +221,8 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                 PaperCard(Modifier.fillMaxWidth()) {
                     Column {
                         SettingActionRow(
-                            title = "导出学习记录",
-                            subtitle = "导出作答历史、错题本、收藏与斩题为 JSON 文件",
+                            title = "导出学习数据",
+                            subtitle = "题库 + 作答历史 + 错题本 + 收藏 + 斩题，整合为一个 .shua 文件",
                             actionLabel = "导出",
                             icon = Icons.Filled.Save,
                             onClick = { exportLauncher.launch(vm.suggestedFileName()) }

@@ -167,6 +167,8 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         }.filter { it > 0 }
         if (ids.isEmpty()) return
         val names = bankDao.observeAll().first().associate { it.id to it.name }
+        // 合并题库后，旧题库 id 已搬走；错题记录里的 bankId 已随合并更新。
+        // 题库组是聚合视图，不直接拥有错题，不在筛选器里显示空组。
         _lists.value = _lists.value.copy(bankNames = names.filterKeys { it in ids })
     }
 

@@ -17,11 +17,122 @@ import com.examhelper.shua.data.model.QuestionOption
  */
 object TextQuestionParser {
 
+    /** 离线解析的软分块大小：太小会切断题干/答案表，太大则单次状态机耗时明显。 */
+    const val OFFLINE_CHUNK_SIZE = 24_000
+
+    /**
+     * 长文本离线解析入口：先按题目/章节边界安全切块，块间带重叠，再逐块解析并去重。
+     *
+     * 旧实现把整份 md/txt 一次交给 [parse]。几 MB 的文本会长时间占住后台线程，
+     * 章节答案表也会跨越巨大区间，表现为「进度不动 / 超时 / 答案错位」。
+     * 这里复用 [ChunkPlanner] 的边界与重叠规则，但**不把 [章节上下文] 前缀
+     * 写回题目正文**；每块解析完只合并题目并去重。
+     */
+    fun parseLong(
+        text: String,
+        onProgress: (done: Int, total: Int) -> Unit = { _, _ -> }
+    ): List<ParsedQuestion> {
+        if (text.length <= OFFLINE_CHUNK_SIZE) return parse(text)
+        val chunks = ChunkPlanner.plan(text, OFFLINE_CHUNK_SIZE, overlapLines = 18)
+        if (chunks.size <= 1) return parse(text)
+
+        val merged = mutableListOf<ParsedQuestion>()
+        chunks.forEachIndexed { i, chunk ->
+            // ChunkPlanner 可能给后续块前置「[章节上下文] xxx」；去掉这行再离线解析，
+            // 避免它被字符串状态机当成普通正文。章节归属沿用 chunk.section。
+            val body = chunk.text.lineSequence()
+                .dropWhile { it.trim().startsWith("[章节上下文]") }
+                .joinToString("\n")
+            val parsed = parse(body)
+            val section = chunk.section?.let { HeadingClassifier.cleanChapter(it) }
+            parsed.forEach { q ->
+                if (q.chapter.isNullOrBlank() && !section.isNullOrBlank()) q.chapter = section
+            }
+            merged += parsed
+            onProgress(i + 1, chunks.size)
+        }
+        return mergeLongResults(merged, text)
+    }
+
+    /** 单个长文本分块的解析；供后台 Worker 逐块推进进度时复用。 */
+    fun parseLongChunk(chunk: ChunkPlanner.Chunk): List<ParsedQuestion> {
+        val body = chunk.text.lineSequence()
+            .dropWhile { it.trim().startsWith("[章节上下文]") }
+            .joinToString("\n")
+        val parsed = parse(body)
+        val section = chunk.section?.let { HeadingClassifier.cleanChapter(it) }
+        parsed.forEach { q ->
+            if (q.chapter.isNullOrBlank() && !section.isNullOrBlank()) q.chapter = section
+        }
+        return parsed
+    }
+
+    /** 合并长文本各块结果：按「章节+题号」去重，最后在全文上回填答案表。 */
+    fun mergeLongResults(merged: List<ParsedQuestion>, fullText: String): List<ParsedQuestion> {
+
+        // 块间重叠会产生同一道题的副本：保留题干更完整的一份，补齐答案/解析/选项。
+        val unique = mutableListOf<ParsedQuestion>()
+        merged.forEach { q ->
+            val hit = unique.indexOfFirst { prev ->
+                // 去重只针对「块间重叠」：必须同章同题号，或至少题干高度相同且
+                // 两边都没有题号可区分。相邻题题干可能高度相似（如第3章第1题
+                // 与第4章第1题），只按题干去重会把真实的题吞掉。
+                sameQuestionIdentity(prev, q) &&
+                    ChunkPlanner.similarity(prev.stem, q.stem) >= ChunkPlanner.SAME_QUESTION &&
+                    optionsCompatible(prev, q)
+            }
+            if (hit < 0) unique += q else {
+                val prev = unique[hit]
+                unique[hit] = prev.copy(
+                    stem = if (q.stem.length > prev.stem.length) q.stem else prev.stem,
+                    answer = prev.answer ?: q.answer,
+                    analysis = if ((prev.analysis?.length ?: 0) >= (q.analysis?.length ?: 0)) prev.analysis ?: q.analysis else q.analysis,
+                    options = if (prev.options.size >= q.options.size) prev.options else q.options,
+                    chapter = prev.chapter ?: q.chapter,
+                    sharedStem = prev.sharedStem ?: q.sharedStem,
+                    sharedOptions = if (prev.sharedOptions.isNotEmpty()) prev.sharedOptions else q.sharedOptions,
+                    sourceNumber = prev.sourceNumber ?: q.sourceNumber,
+                    sourcePage = prev.sourcePage ?: q.sourcePage
+                )
+            }
+        }
+        // 长文件里「章末参考答案」可能落在最后一个块，而题目在更早的块里。
+        // 只按块解析时这些答案会丢；这里用统一答案表回填器在合并后的全文上
+        // 再绑定一次（同时做最后的相似度去重）。
+        return LlmQuestionParser.finalize(unique, fullText)
+    }
+
+    private fun sameQuestionIdentity(a: ParsedQuestion, b: ParsedQuestion): Boolean {
+        val sameCh = chunkChapterKey(a.chapter) == chunkChapterKey(b.chapter) ||
+            // 长文本的后续块会被补上「第X章」上下文；同章的不同写法要能对上。
+            (chunkChapterKey(a.chapter).isNotEmpty() && chunkChapterKey(b.chapter).isNotEmpty() &&
+                (chunkChapterKey(a.chapter).contains(chunkChapterKey(b.chapter)) ||
+                    chunkChapterKey(b.chapter).contains(chunkChapterKey(a.chapter))))
+        val na = a.sourceNumber
+        val nb = b.sourceNumber
+        if (na != null && nb != null) return sameCh && na == nb
+        return sameCh && (na == null || nb == null)
+    }
+
+    private fun chunkChapterKey(chapter: String?): String =
+        HeadingClassifier.cleanChapter(chapter)?.filter { it.isLetterOrDigit() }.orEmpty()
+
+    private fun optionsCompatible(a: ParsedQuestion, b: ParsedQuestion): Boolean {
+        if (a.options.size < 2 || b.options.size < 2) return true
+        val ka = a.options.map { it.text.filter { c -> c.isLetterOrDigit() } }.filter { it.isNotEmpty() }.toSet()
+        val kb = b.options.map { it.text.filter { c -> c.isLetterOrDigit() } }.filter { it.isNotEmpty() }.toSet()
+        if (ka.isEmpty() || kb.isEmpty()) return true
+        val union = ka.union(kb).size
+        return union == 0 || ka.intersect(kb).size.toDouble() / union >= 0.6
+    }
+
     private val questionStartRegex = Regex("""^\s*\(?\s*(\d{1,4})\s*\)?\s*[、.．,，:：)）]\s*(.*)$""")
     private val optionRegex = Regex("""^\s*[(（]?\s*([A-Ea-e])\s*[)）、.．,，:：]?\s+(.*)$""")
     private val optionTightRegex = Regex("""^\s*[(（]?\s*([A-Ea-e])\s*[)）、.．,，:：]\s*(.*)$""")
     private val answerRegex = Regex("""^\s*[\[【(（]?\s*(?:参考)?答案\s*[\]】)）]?\s*[:：is]?\s*(.*)$""")
-    private val analysisRegex = Regex("""^\s*[\[【(（]?\s*(?:参考)?解析\s*[\]】)）]?\s*[:：]?\s*(.*)$""")
+    private val analysisRegex = Regex(
+        """^\s*[\[【(（]?\s*(?:参考|答案|试题|题目)?\s*解析\s*[\]】)）]?\s*[:：]?\s*(.*)$"""
+    )
     private val sectionRegex = Regex("""^\s*(?:第?\s*[一二三四五六七八九十百]+\s*部分|[\(（]\s*[一二三四五六七八九十]+\s*[\)）]).*$|^\s*[一二三四五六七八九十]+\s*[、.．]\s*\S{0,20}$""")
     private val trailingColonAnswerRegex = Regex("""[:：]\s*[(（]?\s*([A-Ea-e])\s*[)）]?\s*$""")
     private val sharedStemHintRegex = Regex("""共用题干|共同题干|共用材料|以下材料""")
@@ -549,13 +660,44 @@ object TextQuestionParser {
                 continue
             }
 
+            // 「D. 选项正文　参考答案：A」——答案和选项在同一行。必须先于选项
+            // 正则处理，否则整行会被当成 D 的正文，答案永远丢掉。
+            // 注意：D. 开头的行必须以当前选项字母为前缀，避免把「答案解析：」
+            // 开头的解析正文误判成答案。
+            val inlineAnswer = OfflineAnswerExtractor.find(line)
+                ?.takeIf { it.answer.isNotBlank() && !line.contains("答案解析") }
+            if (inlineAnswer != null && q.answer == null) {
+                val before = inlineAnswer.before.trim()
+                val omBefore = optionTightRegex.find(before) ?: optionRegex.find(before)
+                if (omBefore != null && before.isNotEmpty()) {
+                    val optText = omBefore.groupValues[2].trim()
+                    if (optText.isNotBlank()) {
+                        q.options += QuestionOption(omBefore.groupValues[1].uppercase(), optText)
+                        appendingTo = 2
+                    }
+                } else if (before.isNotEmpty()) {
+                    q.stem = if (q.stem.isBlank()) before else q.stem + "\n" + before
+                }
+                q.answer = inlineAnswer.answer
+                val inlineAnalysis = inlineAnswer.analysis
+                    ?: inlineAnswer.after.takeIf { it.isNotBlank() }
+                inlineAnalysis?.let { a ->
+                    // 答案后还有一句没有「解析」标签：保守地当解析续文，不塞回题干/选项。
+                    q.analysis = listOfNotNull(q.analysis?.takeIf { it.isNotBlank() }, a)
+                        .joinToString("\n")
+                }
+                continue
+            }
+
             val am = answerRegex.find(line)
-            if (am != null && q.answer == null) {
+            if (am != null && q.answer == null && !line.contains("答案解析")) {
                 q.answer = am.groupValues[1].trim()
                 appendingTo = 1
                 continue
             }
 
+            // 「答案：B 解析：…」或「正确答案是 B，解析：…」把值抽出来后，
+            // 同一行的剩余解析不能再丢。旧逻辑整行 continue，解析字段永远空。
             val an = analysisRegex.find(line)
             if (an != null) {
                 q.analysis = (q.analysis ?: "") + an.groupValues[1].trim()
@@ -675,7 +817,7 @@ object TextQuestionParser {
     private fun normalizeQuestion(q: ParsedQuestion) {
         // 题干内嵌 "答案：B" / "答案：对"
         if (q.answer == null) {
-            Regex("""(?:参考)?答案\s*[是为]?\s*[:：]?\s*([A-Ea-e]{1,5}|对|错|正确|错误|√|×)""")
+            Regex("""(?:参考|正确|标准|本题)?答案\s*(?:[:：=]|为|是|选)?\s*(?:[\[【(（]\s*)?([A-Ha-h]{1,8}|对|错|正确|错误|√|×)(?![A-Za-z\u4e00-\u9fa5])""")
                 .find(q.stem)?.let { m ->
                     q.answer = m.groupValues[1]
                     q.stem = q.stem.removeRange(m.range).trim()

@@ -68,10 +68,12 @@ fun BankDetailScreen(
     onBack: () -> Unit,
     onStartStudy: (StudyMode) -> Unit,
     onGenerate: () -> Unit,
-    onEdit: () -> Unit
+    onEdit: () -> Unit,
+    onOpenGroupChild: (Long) -> Unit = {}
 ) {
     val vm: BankDetailViewModel = viewModel()
     var bank by remember { mutableStateOf<com.examhelper.shua.data.db.QuestionBank?>(null) }
+    var totalQuestions by remember { mutableStateOf(0) }
     var noAnswer by remember { mutableStateOf(0) }
     var noAnalysis by remember { mutableStateOf(0) }
     val context = LocalContext.current
@@ -79,6 +81,7 @@ fun BankDetailScreen(
     var showExportDialog by remember { mutableStateOf(false) }
     var exportStats by remember { mutableStateOf<BankDetailViewModel.ExportStats?>(null) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var groupChildren by remember { mutableStateOf<List<com.examhelper.shua.data.db.QuestionBank>>(emptyList()) }
     val extra = shuaColors
 
     val exportLauncher = rememberLauncherForActivityResult(
@@ -88,7 +91,10 @@ fun BankDetailScreen(
     }
 
     LaunchedEffect(bankId) {
-        bank = vm.loadBank(bankId)
+        val loaded = vm.loadBank(bankId)
+        bank = loaded
+        groupChildren = if (loaded?.isGroup == true) vm.groupBanks(bankId) else emptyList()
+        totalQuestions = loaded?.let { vm.cardCount(it) } ?: 0
         noAnswer = vm.countNoAnswer(bankId)
         noAnalysis = vm.countNoAnalysis(bankId)
     }
@@ -102,12 +108,29 @@ fun BankDetailScreen(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             bank?.let { b ->
+                if (b.isGroup) {
+                    item { SectionLabel("题库组", trailing = "${groupChildren.size} 个题库") }
+                    item {
+                        PaperCard(Modifier.fillMaxWidth()) {
+                            Column {
+                                groupChildren.forEachIndexed { i, child ->
+                                    if (i > 0) Divider()
+                                    ModeRow(
+                                        child.name,
+                                        "${child.questionCount} 题 · 点击进入该题库",
+                                        StudyMode.SEQUENTIAL
+                                    ) { onOpenGroupChild(child.id) }
+                                }
+                            }
+                        }
+                    }
+                }
                 item {
                     GlassSurface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), elevation = 12.dp) {
                         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Row(verticalAlignment = Alignment.Bottom) {
                                 Text(
-                                    "${b.questionCount}",
+                                    "$totalQuestions",
                                     style = serifTitle(42.sp, FontWeight.Medium),
                                     color = MaterialTheme.colorScheme.primary
                                 )
@@ -121,15 +144,15 @@ fun BankDetailScreen(
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                                 CoverageBar(
                                     "答案覆盖率",
-                                    if (b.questionCount == 0) 0 else (b.questionCount - noAnswer) * 100 / b.questionCount,
-                                    "${b.questionCount - noAnswer}/${b.questionCount}",
+                                    if (totalQuestions == 0) 0 else (totalQuestions - noAnswer) * 100 / totalQuestions,
+                                    "${totalQuestions - noAnswer}/$totalQuestions",
                                     Modifier.weight(1f),
                                     extra.terracotta
                                 )
                                 CoverageBar(
                                     "解析覆盖率",
-                                    if (b.questionCount == 0) 0 else (b.questionCount - noAnalysis) * 100 / b.questionCount,
-                                    "${b.questionCount - noAnalysis}/${b.questionCount}",
+                                    if (totalQuestions == 0) 0 else (totalQuestions - noAnalysis) * 100 / totalQuestions,
+                                    "${totalQuestions - noAnalysis}/$totalQuestions",
                                     Modifier.weight(1f),
                                     extra.amber
                                 )
@@ -170,22 +193,36 @@ fun BankDetailScreen(
                         Column {
                             ActionRow(
                                 title = if (noAnswer > 0) "AI 生成答案 · 缺 $noAnswer 题" else "AI 重新生成答案",
-                                subtitle = "调用已配置模型补全答案与解析，标注置信度；三省六部可交叉验证",
-                                onClick = onGenerate
+                                subtitle = if (b.isGroup) {
+                                    "题库组不直接存题，请进入下方子题库生成"
+                                } else {
+                                    "调用已配置模型补全答案与解析，标注置信度；三省六部可交叉验证"
+                                },
+                                onClick = { if (!b.isGroup) onGenerate() }
                             )
                             Divider()
                             ActionRow(
                                 title = "编辑题目 / 章节划分",
-                                subtitle = "按页码或题号批量分章，逐题修改题干选项答案解析",
-                                onClick = onEdit
+                                subtitle = if (b.isGroup) {
+                                    "题库组不直接存题，请进入下方子题库编辑"
+                                } else {
+                                    "按页码或题号批量分章，逐题修改题干选项答案解析"
+                                },
+                                onClick = { if (!b.isGroup) onEdit() }
                             )
                             Divider()
                             ActionRow(
                                 title = "导出题库",
-                                subtitle = "导出为 App 通用 .json，可再次导入",
+                                subtitle = if (b.isGroup) {
+                                    "题库组暂不支持整体导出，请进入下方子题库导出"
+                                } else {
+                                    "导出为 App 通用 .json，可再次导入"
+                                },
                                 onClick = {
-                                    exportStats = null
-                                    showExportDialog = true
+                                    if (!b.isGroup) {
+                                        exportStats = null
+                                        showExportDialog = true
+                                    }
                                 }
                             )
                         }

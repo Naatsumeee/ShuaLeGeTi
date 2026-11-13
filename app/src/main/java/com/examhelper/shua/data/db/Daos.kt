@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface BankDao {
     // 置顶的排最前，其次按最近更新；归档的由 UI 单独收起，这里一并取出
-    @Query("SELECT * FROM banks ORDER BY pinned DESC, updatedAt DESC")
+    @Query("SELECT * FROM banks ORDER BY pinned DESC, sortOrder ASC, updatedAt DESC")
     fun observeAll(): Flow<List<QuestionBank>>
 
     @Query("SELECT * FROM banks WHERE id = :id")
@@ -25,6 +25,33 @@ interface BankDao {
 
     @Query("UPDATE banks SET archived = :archived, updatedAt = :now WHERE id = :id")
     suspend fun setArchived(id: Long, archived: Boolean, now: Long)
+
+    @Query("UPDATE banks SET groupId = :groupId, updatedAt = :now WHERE id = :id")
+    suspend fun setGroup(id: Long, groupId: Long?, now: Long)
+
+    @Query("UPDATE banks SET note = :note, updatedAt = :now WHERE id = :id")
+    suspend fun setNote(id: Long, note: String?, now: Long)
+
+    @Query("UPDATE banks SET accentColor = :color, updatedAt = :now WHERE id = :id")
+    suspend fun setAccentColor(id: Long, color: Long?, now: Long)
+
+    @Query("UPDATE banks SET sortOrder = :sortOrder, updatedAt = :now WHERE id = :id")
+    suspend fun setSortOrder(id: Long, sortOrder: Int, now: Long)
+
+    @Query("UPDATE banks SET questionCount = :count, mergedFromJson = :snapshot, mergeSnapshotJson = :mergeSnapshot, updatedAt = :now WHERE id = :id")
+    suspend fun setMergedState(
+        id: Long,
+        count: Int,
+        snapshot: String?,
+        mergeSnapshot: String?,
+        now: Long
+    )
+
+    @Query("SELECT * FROM banks WHERE groupId = :groupId AND archived = 0 ORDER BY sortOrder ASC, updatedAt DESC")
+    suspend fun getGroupBanks(groupId: Long): List<QuestionBank>
+
+    @Query("SELECT * FROM banks WHERE isGroup = 1 ORDER BY sortOrder ASC, updatedAt DESC")
+    suspend fun getGroups(): List<QuestionBank>
 
     @Insert
     suspend fun insert(bank: QuestionBank): Long
@@ -47,8 +74,17 @@ interface QuestionDao {
     @Query("SELECT * FROM questions WHERE bankId = :bankId ORDER BY orderInBank ASC")
     suspend fun getByBank(bankId: Long): List<Question>
 
+    @Query("SELECT * FROM questions WHERE bankId IN (:bankIds) ORDER BY bankId, orderInBank ASC")
+    suspend fun getByBanks(bankIds: List<Long>): List<Question>
+
     @Query("SELECT * FROM questions WHERE id = :id")
     suspend fun getById(id: Long): Question?
+
+    @Query("SELECT * FROM questions WHERE id = :id")
+    fun observeById(id: Long): Flow<Question?>
+
+    @Query("UPDATE questions SET bankId = :bankId, orderInBank = :order WHERE id = :id")
+    suspend fun moveQuestion(id: Long, bankId: Long, order: Int)
 
     @Query("SELECT * FROM questions WHERE id IN (:ids)")
     suspend fun getByIds(ids: List<Long>): List<Question>
@@ -215,14 +251,26 @@ interface RecordDao {
     @Query("DELETE FROM attempt_records WHERE bankId = :bankId")
     suspend fun deleteAttemptsByBank(bankId: Long)
 
+    @Query("UPDATE attempt_records SET bankId = :toBankId WHERE bankId = :fromBankId")
+    suspend fun moveAttemptsBank(fromBankId: Long, toBankId: Long)
+
     @Query("DELETE FROM wrong_records WHERE bankId = :bankId")
     suspend fun deleteWrongByBank(bankId: Long)
+
+    @Query("UPDATE wrong_records SET bankId = :toBankId WHERE bankId = :fromBankId")
+    suspend fun moveWrongBank(fromBankId: Long, toBankId: Long)
 
     @Query("DELETE FROM favorites WHERE bankId = :bankId")
     suspend fun deleteFavoritesByBank(bankId: Long)
 
+    @Query("UPDATE favorites SET bankId = :toBankId WHERE bankId = :fromBankId")
+    suspend fun moveFavoritesBank(fromBankId: Long, toBankId: Long)
+
     @Query("DELETE FROM kill_records WHERE bankId = :bankId")
     suspend fun deleteKillsByBank(bankId: Long)
+
+    @Query("UPDATE kill_records SET bankId = :toBankId WHERE bankId = :fromBankId")
+    suspend fun moveKillsBank(fromBankId: Long, toBankId: Long)
 
     // ---- 斩题 ----
     @Insert(onConflict = OnConflictStrategy.REPLACE)

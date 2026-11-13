@@ -43,7 +43,11 @@ class StudySetupViewModel(
     init {
         viewModelScope.launch {
             val bank = container.bankRepo.getBank(bankId)
-            val questions = container.bankRepo.getQuestions(bankId)
+            val questions = if (bank?.isGroup == true) {
+                container.bankRepo.getQuestionsForCard(bank)
+            } else {
+                container.bankRepo.getQuestions(bankId)
+            }
             allCount = questions.size
             _state.value = UiState(
                 bank = bank,

@@ -2,6 +2,15 @@ package com.examhelper.shua.ui
 
 import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
@@ -169,6 +178,59 @@ fun AppRoot(fontScale: Float = 1f) {
                 NavHost(
                     navController = navController,
                     startDestination = Routes.BANKS,
+                    // 一级 tab 横向切换：方向按 tab 索引判断，速度与 Dock 胶囊同一组弹簧。
+                    // 只在一级 tab 之间做横移，进出二级页保持默认快速转场，避免列表页
+                    // 与详情页之间来回横滑造成“层级不清”。
+                    enterTransition = {
+                        if (!isTabToTab(initialState.destination.route, targetState.destination.route)) {
+                            // 二级页面（详情/刷题/导入）保持系统默认的快速淡入，
+                            // 只有一级 tab 之间才做横向跟手过场。
+                            EnterTransition.None
+                        } else {
+                            val from = tabIndex(initialState.destination.route.orEmpty())
+                            val to = tabIndex(targetState.destination.route.orEmpty())
+                            val dir = if (to >= from) 1 else -1
+                            slideInHorizontally(
+                                animationSpec = spring(dampingRatio = 0.80f, stiffness = Spring.StiffnessMedium),
+                                initialOffsetX = { full -> dir * full / 3 }
+                            ) + fadeIn(tween(90))
+                        }
+                    },
+                    exitTransition = {
+                        if (!isTabToTab(initialState.destination.route, targetState.destination.route)) {
+                            ExitTransition.None
+                        } else {
+                            val from = tabIndex(initialState.destination.route.orEmpty())
+                            val to = tabIndex(targetState.destination.route.orEmpty())
+                            val dir = if (to >= from) 1 else -1
+                            slideOutHorizontally(
+                                animationSpec = tween(150, easing = androidx.compose.animation.core.FastOutLinearInEasing),
+                                targetOffsetX = { full -> -dir * full / 4 }
+                            ) + fadeOut(tween(110))
+                        }
+                    },
+                    popEnterTransition = {
+                        if (isTabToTab(initialState.destination.route, targetState.destination.route)) {
+                            val from = tabIndex(initialState.destination.route.orEmpty())
+                            val to = tabIndex(targetState.destination.route.orEmpty())
+                            val dir = if (to >= from) 1 else -1
+                            slideInHorizontally(
+                                animationSpec = spring(dampingRatio = 0.84f, stiffness = Spring.StiffnessMedium),
+                                initialOffsetX = { full -> dir * full / 4 }
+                            ) + fadeIn(tween(90))
+                        } else fadeIn(tween(160))
+                    },
+                    popExitTransition = {
+                        if (isTabToTab(initialState.destination.route, targetState.destination.route)) {
+                            val from = tabIndex(initialState.destination.route.orEmpty())
+                            val to = tabIndex(targetState.destination.route.orEmpty())
+                            val dir = if (to >= from) 1 else -1
+                            slideOutHorizontally(
+                                animationSpec = tween(150, easing = androidx.compose.animation.core.FastOutLinearInEasing),
+                                targetOffsetX = { full -> -dir * full / 4 }
+                            ) + fadeOut(tween(110))
+                        } else fadeOut(tween(120))
+                    },
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(
@@ -192,18 +254,11 @@ fun AppRoot(fontScale: Float = 1f) {
                             onStartStudy = { bankId, mode, filterJson ->
                                 navController.navigate(Routes.study(bankId, mode, filterJson))
                             },
-                            // 点某道错题 → 单题详情（不传 runId，底部按钮是「返回错题本」）
-                            onOpenQuestion = { qid ->
-                                navController.navigate(Routes.singleQuestion(qid, null))
-                            }
+                            onOpenQuestion = { qid -> navController.navigate(Routes.singleQuestion(qid, null)) }
                         )
                     }
-                    composable(Routes.STATS) {
-                        StatsScreen(contentPadding = PaddingValues(top = topInset))
-                    }
-                    composable(Routes.SETTINGS) {
-                        SettingsScreen(contentPadding = PaddingValues(top = topInset))
-                    }
+                    composable(Routes.STATS) { StatsScreen(contentPadding = PaddingValues(top = topInset)) }
+                    composable(Routes.SETTINGS) { SettingsScreen(contentPadding = PaddingValues(top = topInset)) }
                     composable(Routes.SEARCH) {
                         SearchScreen(onBack = { navController.popBackStack() })
                     }
@@ -225,7 +280,8 @@ fun AppRoot(fontScale: Float = 1f) {
                             onBack = { navController.popBackStack() },
                             onStartStudy = { mode -> navController.navigate(Routes.studySetup(bankId, mode)) },
                             onGenerate = { navController.navigate("generate/$bankId") },
-                            onEdit = { navController.navigate("editor/$bankId") }
+                            onEdit = { navController.navigate("editor/$bankId") },
+                            onOpenGroupChild = { childId -> navController.navigate(Routes.bankDetail(childId)) }
                         )
                     }
                     composable(Routes.STUDY_SETUP) { entry ->
@@ -303,3 +359,13 @@ fun AppRoot(fontScale: Float = 1f) {
         }
     }
 }
+
+private fun tabIndex(route: String): Int =
+    listOf(Routes.BANKS, Routes.WRONGBOOK, Routes.STATS, Routes.SETTINGS)
+        .indexOf(route).coerceAtLeast(0)
+
+private fun isTabRoute(route: String?): Boolean =
+    route == Routes.BANKS || route == Routes.WRONGBOOK || route == Routes.STATS || route == Routes.SETTINGS
+
+private fun isTabToTab(from: String?, to: String?): Boolean =
+    isTabRoute(from) && isTabRoute(to) && from != to

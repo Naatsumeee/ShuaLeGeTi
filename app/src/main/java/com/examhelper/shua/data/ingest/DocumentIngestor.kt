@@ -11,7 +11,6 @@ import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.xmlpull.v1.XmlPullParser
 import java.io.InputStream
 import kotlin.math.max
 
@@ -52,23 +51,34 @@ class DocumentIngestor(
         onProgress: suspend (IngestProgress) -> Unit = {}
     ): String = withContext(Dispatchers.IO) {
         val name = queryDisplayName(uri) ?: ""
-        val lower = name.lowercase()
-        // 部分文件管理器 / 云盘返回的 display name 没有扩展名，退回 ContentResolver 的 MIME 判断
-        val mime = if (lower.endsWith(".docx") || lower.endsWith(".pdf") || lower.endsWith(".doc") ||
-            lower.endsWith(".md") || lower.endsWith(".markdown") || lower.endsWith(".txt") ||
-            lower.endsWith(".text")
-        ) "" else context.contentResolver.getType(uri).orEmpty().lowercase()
-        val asMarkdown = lower.endsWith(".md") || lower.endsWith(".markdown") ||
-            mime.contains("markdown")
-        val asPlainText = asMarkdown || lower.endsWith(".txt") || lower.endsWith(".text") ||
-            (mime.startsWith("text/") && !mime.contains("html"))
-        when {
-            lower.endsWith(".docx") -> extractDocx(uri)
-            lower.endsWith(".pdf") -> ingestPdf(uri, onProgress)
-            lower.endsWith(".doc") ->
+        val mime = context.contentResolver.getType(uri)
+        val metadata = IngestFormatResolver.fromMetadata(name, mime)
+        when (metadata) {
+            IngestFormatResolver.Format.DOCX -> extractDocx(uri)
+            IngestFormatResolver.Format.PDF -> ingestPdf(uri, onProgress)
+            IngestFormatResolver.Format.LEGACY_DOC ->
                 throw IllegalArgumentException("暂不支持旧版 .doc，请在 Word 中另存为 .docx 后导入")
-            asPlainText -> extractPlainText(uri, asMarkdown, onProgress)
-            else -> ingestImage(uri, onProgress)
+            IngestFormatResolver.Format.MARKDOWN -> extractPlainText(uri, true, onProgress)
+            IngestFormatResolver.Format.TEXT -> extractPlainText(uri, false, onProgress)
+            IngestFormatResolver.Format.IMAGE -> ingestImage(uri, onProgress)
+            else -> {
+                // 云盘/无扩展名：读一小段文件头再兜底。文本不能被误送进 OCR。
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: throw IllegalArgumentException("无法读取文件")
+                when (val detected = IngestFormatResolver.fromBytes(bytes)) {
+                    IngestFormatResolver.Format.DOCX -> DocxTextExtractor.extract(bytes)
+                    IngestFormatResolver.Format.PDF -> {
+                        // 已读出的字节不能直接交给 PdfRenderer；把 URI 重新走 PDF 路径。
+                        ingestPdf(uri, onProgress)
+                    }
+                    IngestFormatResolver.Format.MARKDOWN ->
+                        extractPlainTextBytes(bytes, true, onProgress)
+                    IngestFormatResolver.Format.TEXT ->
+                        extractPlainTextBytes(bytes, false, onProgress)
+                    IngestFormatResolver.Format.IMAGE -> ingestImage(uri, onProgress)
+                    else -> throw IllegalArgumentException(IngestFormatResolver.unsupportedMessage(name))
+                }
+            }
         }
     }
 
@@ -84,6 +94,17 @@ class DocumentIngestor(
     ): String {
         onProgress(IngestProgress("extract", 1, 1, if (asMarkdown) "读取 Markdown 文本" else "读取文本文件"))
         val raw = readTextUtf8(uri)
+        if (raw.isBlank()) throw IllegalArgumentException("文件中没有可读文本")
+        return if (asMarkdown) MarkdownToText.normalize(raw) else raw
+    }
+
+    private suspend fun extractPlainTextBytes(
+        bytes: ByteArray,
+        asMarkdown: Boolean,
+        onProgress: suspend (IngestProgress) -> Unit
+    ): String {
+        onProgress(IngestProgress("extract", 1, 1, if (asMarkdown) "读取 Markdown 文本" else "读取文本文件"))
+        val raw = TextDecoder.decode(bytes)
         if (raw.isBlank()) throw IllegalArgumentException("文件中没有可读文本")
         return if (asMarkdown) MarkdownToText.normalize(raw) else raw
     }
@@ -109,45 +130,27 @@ class DocumentIngestor(
     private fun extractDocx(uri: Uri): String {
         val input = context.contentResolver.openInputStream(uri)
             ?: throw IllegalArgumentException("无法读取文件")
-        input.use { stream ->
-            val zip = java.util.zip.ZipInputStream(stream)
-            var entry = zip.nextEntry
-            val paragraphs = StringBuilder()
-            while (entry != null) {
-                if (entry.name == "word/document.xml") {
-                    val xmlBytes = zip.readBytes()
-                    paragraphs.append(parseDocxXml(xmlBytes))
-                    break
-                }
-                entry = zip.nextEntry
-            }
-            if (paragraphs.isBlank()) throw IllegalArgumentException("docx 中没有找到文本内容")
-            return paragraphs.toString()
+        return try {
+            input.use { stream -> extractDocxBytes(stream.readBytes()) }
+        } catch (e: IllegalArgumentException) {
+            throw e
+        } catch (e: Exception) {
+            throw IllegalArgumentException("docx 解析失败：${e.message ?: e.javaClass.simpleName}", e)
         }
     }
 
-    private fun parseDocxXml(bytes: ByteArray): String {
-        val factory = org.xmlpull.v1.XmlPullParserFactory.newInstance()
-        val parser = factory.newPullParser()
-        parser.setInput(bytes.inputStream(), "UTF-8")
-        val sb = StringBuilder()
-        var paragraph = StringBuilder()
-        var event = parser.eventType
-        while (event != XmlPullParser.END_DOCUMENT) {
-            when (event) {
-                XmlPullParser.START_TAG ->
-                    if (parser.name == "t") paragraph.append(parser.nextText())
-                XmlPullParser.END_TAG ->
-                    if (parser.name == "p") {
-                        if (paragraph.isNotBlank()) sb.appendLine(paragraph.toString().trim())
-                        paragraph = StringBuilder()
-                    }
-            }
-            event = parser.next()
-        }
-        if (paragraph.isNotBlank()) sb.appendLine(paragraph.toString().trim())
-        return sb.toString()
-    }
+    /**
+     * 纯函数入口：从 docx 的 zip 字节提取正文。
+     *
+     * 这样做有两个目的：
+     * 1. 不依赖 Android `ContentResolver`，可以在纯 JVM 单测里把真实 docx 跑一遍；
+     * 2. 出错时把「文件损坏 / 不是 zip / 缺少 document.xml」区分开，界面上能看到
+     *    可行动的原因，而不是统一一句「没有找到文本内容」。
+     */
+    internal fun extractDocxBytes(bytes: ByteArray): String = DocxTextExtractor.extract(bytes)
+
+    /** 纯字节入口：只返回 `word/document.xml`，供 JVM 单测与本体复用。 */
+    internal fun extractDocxDocumentXml(bytes: ByteArray): ByteArray? = DocxTextExtractor.readDocumentXml(bytes)
 
     // ---------- PDF：文字页直接抽文本，扫描页 OCR ----------
 

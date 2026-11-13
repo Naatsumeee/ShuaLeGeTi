@@ -367,7 +367,8 @@ class StudyRepository(
 
     /** 按筛选条件过滤题库题目 */
     suspend fun filteredQuestions(bankId: Long, filter: com.examhelper.shua.data.model.StudyFilter?): List<Question> {
-        val all = bankRepo.getQuestions(bankId)
+        val bank = bankRepo.getBank(bankId)
+        val all = if (bank?.isGroup == true) bankRepo.getQuestionsForCard(bank) else bankRepo.getQuestions(bankId)
         if (filter == null || filter.isDefault) return all
         val wrong = recordDao.wrongIds().toSet()
         val favorite = recordDao.favoriteIds().toSet()

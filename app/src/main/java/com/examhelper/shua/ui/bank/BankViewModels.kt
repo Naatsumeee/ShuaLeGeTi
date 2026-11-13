@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 
 class BankListViewModel @JvmOverloads constructor(
     private val bankRepo: BankRepository = ShuaApp.instance.container.bankRepo
@@ -54,6 +56,57 @@ class BankListViewModel @JvmOverloads constructor(
         viewModelScope.launch {
             ShuaApp.instance.container.database.bankDao()
                 .setArchived(bankId, archived, System.currentTimeMillis())
+        }
+    }
+
+    fun renameAndNote(bankId: Long, name: String, note: String?, color: Long?) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch {
+            val dao = ShuaApp.instance.container.database.bankDao()
+            dao.rename(bankId, trimmed, System.currentTimeMillis())
+            dao.setNote(bankId, note?.trim()?.takeIf { it.isNotBlank() }, System.currentTimeMillis())
+            dao.setAccentColor(bankId, color, System.currentTimeMillis())
+        }
+    }
+
+    fun moveBank(bankId: Long, targetIndex: Int, visibleIds: List<Long>) {
+        viewModelScope.launch {
+            val now = System.currentTimeMillis()
+            val dao = ShuaApp.instance.container.database.bankDao()
+            visibleIds.toMutableList().apply {
+                remove(bankId)
+                add(targetIndex.coerceIn(0, size), bankId)
+            }.forEachIndexed { i, id -> dao.setSortOrder(id, i, now) }
+        }
+    }
+
+    fun createGroup(name: String, note: String?, color: Long?, ids: List<Long>, onDone: (Long) -> Unit) {
+        viewModelScope.launch {
+            val id = bankRepo.createGroup(name, note, color, ids)
+            onDone(id)
+        }
+    }
+
+    fun merge(name: String, note: String?, color: Long?, ids: List<Long>, onDone: (Long) -> Unit) {
+        viewModelScope.launch {
+            val id = bankRepo.mergeBanks(name, note, color, ids)
+            onDone(id)
+        }
+    }
+
+    fun undoMerge(bankId: Long) {
+        viewModelScope.launch { bankRepo.undoMerge(bankId) }
+    }
+
+    fun batchDelete(ids: List<Long>) {
+        viewModelScope.launch { ids.forEach { bankRepo.deleteBank(it) } }
+    }
+
+    fun batchArchive(ids: List<Long>, archived: Boolean) {
+        viewModelScope.launch {
+            val dao = ShuaApp.instance.container.database.bankDao()
+            ids.forEach { dao.setArchived(it, archived, System.currentTimeMillis()) }
         }
     }
 }
@@ -113,8 +166,18 @@ class BankDetailViewModel @JvmOverloads constructor(
     private val studyRepo: StudyRepository = ShuaApp.instance.container.studyRepo
 ) : ViewModel() {
     suspend fun loadBank(bankId: Long): QuestionBank? = bankRepo.getBank(bankId)
-    suspend fun countNoAnswer(bankId: Long): Int = bankRepo.countNoAnswer(bankId)
-    suspend fun countNoAnalysis(bankId: Long): Int = bankRepo.countNoAnalysis(bankId)
+    suspend fun groupBanks(bankId: Long): List<QuestionBank> = bankRepo.getGroupBanks(bankId)
+    suspend fun cardCount(bank: QuestionBank): Int = bankRepo.cardQuestionCount(bank)
+    suspend fun countNoAnswer(bankId: Long): Int {
+        val bank = bankRepo.getBank(bankId) ?: return 0
+        if (bank.isGroup) return bankRepo.getGroupBanks(bankId).sumOf { bankRepo.countNoAnswer(it.id) }
+        return bankRepo.countNoAnswer(bankId)
+    }
+    suspend fun countNoAnalysis(bankId: Long): Int {
+        val bank = bankRepo.getBank(bankId) ?: return 0
+        if (bank.isGroup) return bankRepo.getGroupBanks(bankId).sumOf { bankRepo.countNoAnalysis(it.id) }
+        return bankRepo.countNoAnalysis(bankId)
+    }
     fun deleteBank(bankId: Long, onDone: () -> Unit) {
         viewModelScope.launch {
             bankRepo.deleteBank(bankId)

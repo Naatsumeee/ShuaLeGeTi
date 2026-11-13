@@ -17,6 +17,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
@@ -98,6 +100,7 @@ import com.examhelper.shua.data.db.StudyMode
 import com.examhelper.shua.data.model.JsonCodec
 import com.examhelper.shua.ui.bank.typeLabel
 import com.examhelper.shua.ui.theme.ChipTone
+import com.examhelper.shua.ui.theme.SquishyButtonSurface
 import com.examhelper.shua.ui.theme.CompactTopBar
 import com.examhelper.shua.ui.theme.GlassSurface
 import com.examhelper.shua.ui.theme.Markdown
@@ -1365,25 +1368,42 @@ private fun BottomControls(
                     }
                 }
                 val canNext = state.answered || state.revealed || state.mode == StudyMode.RECITE
-                Button(
-                    onClick = {
-                        com.examhelper.shua.ui.sound.Haptics.tick()
-                        onFlipNext?.invoke() ?: vm.next()
-                    },
-                    enabled = canNext,
-                    modifier = Modifier
+                val nextInteraction = remember { MutableInteractionSource() }
+                val nextPressed by nextInteraction.collectIsPressedAsState()
+                Box(
+                    Modifier
                         .weight(if (state.mode == StudyMode.RANDOM) 1f else 1.4f)
                         .heightIn(min = 44.dp),
-                    shape = RoundedCornerShape(13.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
-                    )
+                    contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        if (state.answered || state.revealed) "下一题" else "先作答",
-                        style = MaterialTheme.typography.labelLarge
-                    )
+                    SquishyButtonSurface(
+                        interactionSource = nextInteraction,
+                        shape = RoundedCornerShape(13.dp),
+                        shadowColor = Color.Black.copy(alpha = if (nextPressed) 0.30f else 0.16f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 44.dp)
+                            .background(
+                                if (canNext) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.surfaceVariant
+                            )
+                            .clickable(
+                                interactionSource = nextInteraction,
+                                indication = null,
+                                enabled = canNext
+                            ) {
+                                com.examhelper.shua.ui.sound.Haptics.tick()
+                                onFlipNext?.invoke() ?: vm.next()
+                            }
+                    ) {
+                        Text(
+                            if (state.answered || state.revealed) "下一题" else "先作答",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (canNext) MaterialTheme.colorScheme.onPrimary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+                    }
                 }
             }
         }

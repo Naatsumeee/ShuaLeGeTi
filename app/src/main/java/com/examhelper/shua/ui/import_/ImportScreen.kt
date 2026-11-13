@@ -159,7 +159,12 @@ fun ImportScreen(
                             // 三个都列上，实在没有的靠文件名扩展名兜底（见 DocumentIngestor）
                             "text/markdown",
                             "text/plain",
+                            // Windows 记事本/部分文件管理器给 .txt 报 x-text
+                            "text/x-text",
                             "text/x-markdown",
+                            // 云盘/下载管理器常把 .md/.txt 报成通用二进制 MIME；
+                            // 不列这一项时，文件在选择器里会变灰、根本选不中。
+                            "application/octet-stream",
                             "image/*"
                         )
                     )

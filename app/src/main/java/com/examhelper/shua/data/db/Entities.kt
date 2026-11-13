@@ -33,7 +33,7 @@ enum class StudyMode {
 }
 
 /** 题库 */
-@Entity(tableName = "banks")
+@Entity(tableName = "banks", indices = [Index("groupId")])
 data class QuestionBank(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
@@ -44,7 +44,21 @@ data class QuestionBank(
     /** 置顶：首页列表里始终排在最前（长按菜单） */
     val pinned: Boolean = false,
     /** 归档：默认收进「显示已归档题库」里，不占主列表（长按菜单） */
-    val archived: Boolean = false
+    val archived: Boolean = false,
+    /** 题库组 id；null = 普通题库。题库组本身也是 banks 里的一条记录 */
+    val groupId: Long? = null,
+    /** 该题库是否是一个题库组（组内题目由子题库聚合，不直接存 questions） */
+    val isGroup: Boolean = false,
+    /** 题库卡片左侧渐变色（AARRGGBB）；null 用默认赤陶色 */
+    val accentColor: Long? = null,
+    /** 自定义备注 */
+    val note: String? = null,
+    /** 首页拖拽排序键，越小越靠前 */
+    val sortOrder: Int = 0,
+    /** 合并撤销：记录合并前的子题库 id（JSON 数组）；null = 不是合并题库 */
+    val mergedFromJson: String? = null,
+    /** 合并撤销用的完整快照（原题库元数据 + 每题原 bankId/order） */
+    val mergeSnapshotJson: String? = null
 )
 
 /** 题目。选项/分歧等复杂字段以 JSON 字符串存储，由仓库层编解码。 */

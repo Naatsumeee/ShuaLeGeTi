@@ -64,6 +64,9 @@ class ImportPipelineWorker(
         /** 流式尾巴落库的最小间隔：模型吐字极快，逐字写 Room 会把 IO 打满 */
         private const val STREAM_FLUSH_MS = 350L
 
+        /** 单份原始文本上限：超过后明确拒绝，避免“长时间无响应” */
+        private const val MAX_RAW_TEXT_CHARS = 5_000_000
+
         fun enqueue(
             context: Context,
             jobId: String,
@@ -223,6 +226,11 @@ class ImportPipelineWorker(
                         setForeground(foregroundInfo(p.message, p.current, p.total))
                     }
                 }
+                if (text.length > MAX_RAW_TEXT_CHARS) {
+                    // 500 万字符约 10MB 中文文本，已远超合理题库规模；继续解析只会
+                    // 长时间占内存且几乎没有成功收益。明确报错比“永远转圈”好。
+                    return fail(jobId, "文本过长（${text.length} 字符），请拆分后再导入")
+                }
                 raw.writeText(text)
             }
 
@@ -231,10 +239,39 @@ class ImportPipelineWorker(
             val text = raw.readText()
 
             if (parseMode == "offline") {
+                // 离线长文本的安全切块、重叠与去重统一放在 TextQuestionParser.parseLong，
+                // 避免 Worker 与解析器各维护一份规则。短文本内部会直接走 parse。
+                val offlineChunkList = ChunkPlanner.plan(text, TextQuestionParser.OFFLINE_CHUNK_SIZE, overlapLines = 18)
+                val offlineChunks = offlineChunkList.size
                 updateJob(jobId) {
-                    it.copy(stage = "PARSE", message = "离线解析中", totalUnits = 1, doneUnits = 0)
+                    it.copy(
+                        stage = "PARSE",
+                        message = if (offlineChunks > 1) "离线解析中（$offlineChunks 段）" else "离线解析中",
+                        totalUnits = offlineChunks.coerceAtLeast(1),
+                        doneUnits = 0
+                    )
                 }
-                val questions = TextQuestionParser.parse(text)
+                val offlineParsed = if (offlineChunks <= 1) {
+                    TextQuestionParser.parse(text)
+                } else {
+                    val merged = mutableListOf<com.examhelper.shua.data.model.ParsedQuestion>()
+                    offlineChunkList.forEachIndexed { i, chunk ->
+                        if (isStopped) return Result.failure()
+                        merged += TextQuestionParser.parseLongChunk(chunk)
+                        updateJob(jobId) {
+                            it.copy(
+                                stage = "PARSE",
+                                message = "离线解析中（${i + 1}/$offlineChunks）",
+                                totalUnits = offlineChunks,
+                                doneUnits = i + 1
+                            )
+                        }
+                        kotlinx.coroutines.yield()
+                    }
+                    TextQuestionParser.mergeLongResults(merged, text)
+                }
+                val questions = offlineParsed
+                kotlinx.coroutines.yield()
                 parsed.writeText(
                     questions.mapIndexed { i, q ->
                         JsonCodec.json.encodeToString(

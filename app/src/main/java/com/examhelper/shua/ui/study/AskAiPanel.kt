@@ -152,6 +152,9 @@ fun AskAiPanel(
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
             .padding(bottom = bottomInset)
+            // ModalBottomSheet 自带跟手阻尼与速度吸附；面板只负责内容。
+            // 顶部留一点空白，拖动时标题不会贴着拖拽把手。
+            .padding(top = 4.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("问 AI", style = serifTitle(18.sp, FontWeight.Medium))

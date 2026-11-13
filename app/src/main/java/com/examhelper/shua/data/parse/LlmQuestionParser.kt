@@ -39,6 +39,23 @@ class LlmQuestionParser(
         val page: Int? = null
     )
 
+    /** 超时/连接类错误是否值得把当前块拆小再试。 */
+    private fun isTimeoutLike(t: Throwable): Boolean {
+        var e: Throwable? = t
+        while (e != null) {
+            val msg = e.message.orEmpty()
+            if (e is java.net.SocketTimeoutException ||
+                e is java.io.InterruptedIOException ||
+                msg.contains("timeout", ignoreCase = true) ||
+                msg.contains("timed out", ignoreCase = true) ||
+                msg.contains("Read timed out", ignoreCase = true) ||
+                msg.contains("connection reset", ignoreCase = true)
+            ) return true
+            e = e.cause
+        }
+        return false
+    }
+
     /** 供后台任务逐块调用 */
     suspend fun parseChunkText(
         provider: LlmProvider,
@@ -102,27 +119,39 @@ class LlmQuestionParser(
     ): List<QuestionDto> {
         // 有 onDelta 就走流式：导入页要把「模型正在写什么」实时显示出来。
         // 流式与非流式返回同一个 ChatResult，解析逻辑完全一致。
-        val result = if (onDelta != null) {
-            llmClient.chatStream(
-                provider = provider,
-                systemPrompt = systemPrompt,
-                userPrompt = chunk,
-                jsonMode = true,
-                temperature = 0.1,
-                maxTokens = PARSE_MAX_TOKENS,
-                reasoningEffort = PARSE_REASONING,
-                onDelta = onDelta
-            )
-        } else {
-            llmClient.chatWithUsage(
-                provider = provider,
-                systemPrompt = systemPrompt,
-                userPrompt = chunk,
-                jsonMode = true,
-                temperature = 0.1,
-                maxTokens = PARSE_MAX_TOKENS,
-                reasoningEffort = PARSE_REASONING
-            )
+        val result = try {
+            if (onDelta != null) {
+                llmClient.chatStream(
+                    provider = provider,
+                    systemPrompt = systemPrompt,
+                    userPrompt = chunk,
+                    jsonMode = true,
+                    temperature = 0.1,
+                    maxTokens = PARSE_MAX_TOKENS,
+                    reasoningEffort = PARSE_REASONING,
+                    onDelta = onDelta
+                )
+            } else {
+                llmClient.chatWithUsage(
+                    provider = provider,
+                    systemPrompt = systemPrompt,
+                    userPrompt = chunk,
+                    jsonMode = true,
+                    temperature = 0.1,
+                    maxTokens = PARSE_MAX_TOKENS,
+                    reasoningEffort = PARSE_REASONING
+                )
+            }
+        } catch (e: Exception) {
+            // 长块超时不要直接判整块失败：把块对半交给子调用，既缩短单次等待，
+            // 也让已成功的半块落入缓存。认证/参数错误仍原样抛出，交给上层停止。
+            if (isTimeoutLike(e) && depth < MAX_SPLIT_DEPTH && chunk.length >= MIN_SPLIT_CHARS) {
+                val halves = ChunkPlanner.plan(chunk, chunk.length / 2, overlapLines = 8)
+                if (halves.size >= 2) {
+                    return halves.flatMap { parseChunk(provider, it.text, depth + 1, onDelta) }
+                }
+            }
+            throw e
         }
         val parsed = decodeQuestions(result.content)
         recordUsage(result.usage)
@@ -427,11 +456,13 @@ class LlmQuestionParser(
             stem: String,
             options: List<QuestionOption>,
             stemOf: (T) -> String,
-            optionsOf: (T) -> List<QuestionOption>
+            optionsOf: (T) -> List<QuestionOption>,
+            sameIdentity: ((T) -> Boolean)? = null
         ): Int {
             var best = -1
             var bestScore = 0.0
             for (i in list.indices) {
+                if (sameIdentity != null && !sameIdentity(list[i])) continue
                 val sim = ChunkPlanner.similarity(stemOf(list[i]), stem)
                 if (sim < ChunkPlanner.SAME_QUESTION) continue
                 val other = optionsOf(list[i])
@@ -451,6 +482,9 @@ class LlmQuestionParser(
 
         /** 题干开头的题号（`1.` `2、` `（3）`），没有则 null */
         private val leadingNumberRe = Regex("""^\s*[（(]?\s*(\d{1,4})\s*[）)]?\s*[、.．,，:：)）]""")
+
+        private fun chapterKey(chapter: String?): String =
+            HeadingClassifier.cleanChapter(chapter)?.filter { it.isLetterOrDigit() }.orEmpty()
 
         private fun leadingNumber(stem: String): Int? =
             leadingNumberRe.find(stem)?.groupValues?.get(1)?.toIntOrNull()
@@ -508,7 +542,19 @@ class LlmQuestionParser(
             val list = mutableListOf<ParsedQuestion>()
             for (q in questions) {
                 if (q.stem.isBlank()) continue
-                val hit = findSame(list, q.stem, q.options, { it.stem }, { it.options })
+                val hit = findSame(list, q.stem, q.options, { it.stem }, { it.options }) { prev ->
+                    // 块间重叠去重：题号是强身份。相邻题题干相似但题号不同，
+                    // 不能合并；无题号时才退化为「同章节 + 题干相似」。
+                    // 同一章节的多种写法（`第六章` / `第六章 线粒体遗传`）要视为同章；
+                    // 但要保留题号这个强身份，避免不同章的同号题被误合并。
+                    val sameChapter = chapterKey(prev.chapter) == chapterKey(q.chapter) ||
+                        ChunkPlanner.resolveChapter(prev.chapter, q.chapter)?.let {
+                            chapterKey(it) == chapterKey(prev.chapter)
+                        } == true
+                    if (prev.sourceNumber != null && q.sourceNumber != null) {
+                        sameChapter && prev.sourceNumber == q.sourceNumber
+                    } else sameChapter
+                }
                 if (hit < 0) {
                     list += q
                 } else {
@@ -555,7 +601,15 @@ class LlmQuestionParser(
             val list = mutableListOf<ParsedLine>()
             for (l in ordered) {
                 if (l.stem.isBlank()) continue
-                val hit = findSame(list, l.stem, l.options, { it.stem }, { it.options })
+                val hit = findSame(list, l.stem, l.options, { it.stem }, { it.options }) { prev ->
+                    val sameChapter = chapterKey(prev.chapter) == chapterKey(l.chapter) ||
+                        ChunkPlanner.resolveChapter(prev.chapter, l.chapter)?.let {
+                            chapterKey(it) == chapterKey(prev.chapter)
+                        } == true
+                    if (prev.number != null && l.number != null) {
+                        sameChapter && prev.number == l.number
+                    } else sameChapter
+                }
                 if (hit < 0) {
                     list += l
                 } else {

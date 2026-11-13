@@ -37,7 +37,7 @@ class Converters {
         GenerateJob::class,
         BalanceSnapshot::class
     ],
-    version = 12,
+    version = 13,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -287,6 +287,27 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v12 → v13：题库分组、合并、拖拽排序与卡片配色。
+         *
+         * 全部是 banks 的新增列，不动 questions：题库组是「聚合视图」，
+         * 子题库用 groupId 反向归属，组本身不复制题目，避免 4229 题被复制一份。
+         */
+        private val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE banks ADD COLUMN groupId INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE banks ADD COLUMN isGroup INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE banks ADD COLUMN accentColor INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE banks ADD COLUMN note TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE banks ADD COLUMN sortOrder INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE banks ADD COLUMN mergedFromJson TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE banks ADD COLUMN mergeSnapshotJson TEXT DEFAULT NULL")
+                // Room entity 里的 indices 是 SQL 生成的 `index_banks_groupId`；
+                // 手写迁移必须用同名，否则 Room 校验 schema 会报“找不到索引”。
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_banks_groupId` ON `banks` (`groupId`)")
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -300,7 +321,7 @@ abstract class AppDatabase : RoomDatabase() {
                     .addMigrations(
                         MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
                         MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
-                        MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12
+                        MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13
                     )
                     .fallbackToDestructiveMigration()
                     .build()

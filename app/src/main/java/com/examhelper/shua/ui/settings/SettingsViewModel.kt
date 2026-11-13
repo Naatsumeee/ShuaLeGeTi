@@ -126,13 +126,13 @@ class SettingsViewModel(
     /** 导出文件建议名（日期戳） */
     fun suggestedFileName(): String = localDataRepo.suggestedFileName()
 
-    fun exportLearningRecords(uri: Uri?) {
+    fun exportShuaPackage(uri: Uri?) {
         if (uri == null) return
         viewModelScope.launch {
-            runCatching { localDataRepo.exportLearningRecords(getApplication(), uri) }
+            runCatching { localDataRepo.exportShuaPackage(getApplication(), uri) }
                 .onSuccess { s ->
                     _message.value =
-                        "已导出：作答 ${s.attempts} · 错题 ${s.wrong} · 收藏 ${s.favorites} · 斩题 ${s.kills}"
+                        "已导出 ${s.banks} 个题库 / ${s.questions} 题：作答 ${s.attempts} · 错题 ${s.wrong} · 收藏 ${s.favorites} · 斩题 ${s.kills}"
                 }
                 .onFailure { _message.value = "导出失败：${it.message?.take(80)}" }
         }

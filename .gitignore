@@ -39,6 +39,9 @@ MEMORY.md
 
 # ---------- Gradle / Kotlin / Android 构建缓存 ----------
 .gradle/
+.gradle-user/
+.gradle-build/
+.android-user/
 build/
 .kotlin/
 captures/
@@ -60,6 +63,7 @@ lint/tmp/
 # 本机专用的模拟器启动脚本（硬编码了本机 SDK 路径与 AVD 名）
 启动模拟器.bat
 .tmp-*
+.tmp/
 *.log
 *.bak
 *.orig
