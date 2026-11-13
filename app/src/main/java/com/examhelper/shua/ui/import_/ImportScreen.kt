@@ -151,23 +151,10 @@ fun ImportScreen(
                             notifPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
                         }
                     }
-                    filePicker.launch(
-                        arrayOf(
-                            "application/pdf",
-                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            // .md / .txt：不同 ROM 的 DocumentsProvider 给的 MIME 不统一，
-                            // 三个都列上，实在没有的靠文件名扩展名兜底（见 DocumentIngestor）
-                            "text/markdown",
-                            "text/plain",
-                            // Windows 记事本/部分文件管理器给 .txt 报 x-text
-                            "text/x-text",
-                            "text/x-markdown",
-                            // 云盘/下载管理器常把 .md/.txt 报成通用二进制 MIME；
-                            // 不列这一项时，文件在选择器里会变灰、根本选不中。
-                            "application/octet-stream",
-                            "image/*"
-                        )
-                    )
+                    // 不同 ROM/云盘给 docx、.md、.txt 的 MIME 极不统一。继续按
+                    // MIME 白名单过滤会把文件直接置灰；这里打开全部文件，由
+                    // DocumentIngestor 再做扩展名 + MIME + 文件头校验并给出可行动错误。
+                    filePicker.launch(arrayOf("*/*"))
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     SecondaryAction("拍照导入", Modifier.weight(1f)) {

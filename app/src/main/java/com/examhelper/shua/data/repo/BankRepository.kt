@@ -1,5 +1,6 @@
 package com.examhelper.shua.data.repo
 
+import androidx.room.withTransaction
 import com.examhelper.shua.data.db.AppDatabase
 import com.examhelper.shua.data.db.BankDao
 import com.examhelper.shua.data.db.Question
@@ -16,19 +17,8 @@ import com.examhelper.shua.data.model.ShuaBankFile
 import com.examhelper.shua.data.model.ShuaQuestionJson
 import com.examhelper.shua.data.parse.HeadingClassifier
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.int
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.long
-import kotlinx.serialization.json.longOrNull
-import kotlinx.serialization.json.put
 
 class BankRepository(
     private val db: AppDatabase,
@@ -37,7 +27,12 @@ class BankRepository(
     private val progressDao: ProgressDao = db.progressDao(),
     private val recordDao: RecordDao = db.recordDao()
 ) {
-    fun observeBanks(): Flow<List<QuestionBank>> = bankDao.observeAll()
+    fun observeBanks(): Flow<List<QuestionBank>> = combine(
+        bankDao.observeAll(),
+        questionDao.observeCountsByBank()
+    ) { banks, countRows ->
+        withLiveGroupCounts(banks, countRows.associate { it.bankId to it.cnt })
+    }
 
     suspend fun getBank(id: Long): QuestionBank? = bankDao.getById(id)
 
@@ -78,14 +73,18 @@ class BankRepository(
 
     /** 新建题库组；只建立归属关系，不移动任何题目 */
     suspend fun createGroup(name: String, note: String?, color: Long?, childIds: List<Long>): Long {
+        val children = childIds.distinct().mapNotNull { bankDao.getById(it) }
+        require(children.size == childIds.distinct().size) { "部分题库已不存在" }
+        require(children.none { it.isGroup }) { "题库组暂不支持嵌套，请选择组内题库" }
         val now = System.currentTimeMillis()
+        val totalQuestions = children.sumOf { questionDao.countByBank(it.id) }
         val id = bankDao.insert(
             QuestionBank(
                 name = name.trim().ifBlank { "未命名题库组" },
                 note = note?.trim()?.takeIf { it.isNotBlank() },
                 accentColor = color,
                 isGroup = true,
-                questionCount = childIds.distinct().size,
+                questionCount = totalQuestions,
                 updatedAt = now
             )
         )
@@ -103,111 +102,121 @@ class BankRepository(
     suspend fun mergeBanks(name: String, note: String?, color: Long?, sourceIds: List<Long>): Long {
         val ids = sourceIds.distinct()
         require(ids.size >= 2) { "至少选择两个题库才能合并" }
-        val sources = ids.mapNotNull { bankDao.getById(it) }
-        require(sources.size == ids.size) { "部分题库已不存在" }
-        val now = System.currentTimeMillis()
-        val mergedId = bankDao.insert(
-            QuestionBank(
-                name = name.trim().ifBlank { sources.first().name },
-                note = note?.trim()?.takeIf { it.isNotBlank() },
-                accentColor = color,
-                questionCount = sources.sumOf { it.questionCount },
-                updatedAt = now
+        return db.withTransaction {
+            val sources = ids.mapNotNull { bankDao.getById(it) }
+            require(sources.size == ids.size) { "部分题库已不存在" }
+            require(sources.none { it.isGroup }) { "题库组暂不支持直接合并，请选择组内题库" }
+            val sourceQuestions = sources.associate { it.id to questionDao.getByBank(it.id) }
+            val now = System.currentTimeMillis()
+            val mergedId = bankDao.insert(
+                QuestionBank(
+                    name = name.trim().ifBlank { sources.first().name },
+                    note = note?.trim()?.takeIf { it.isNotBlank() },
+                    accentColor = color,
+                    questionCount = sourceQuestions.values.sumOf { it.size },
+                    updatedAt = now
+                )
             )
-        )
-        var order = 0
-        val originalQuestions = sources.flatMap { source ->
-            questionDao.getByBank(source.id).map { q ->
-                Triple(source.id, q.id, q.orderInBank)
-            }
-        }
-        sources.forEach { source ->
-            val qs = questionDao.getByBank(source.id)
-            // **保留原题 id，只改归属和顺序**。复制成新 id 会让撤销快照失效，
-            // 也会让尝试/错题/收藏等按 questionId 关联的记录变成孤儿。
-            qs.forEach { q ->
-                questionDao.moveQuestion(q.id, mergedId, order++)
-            }
-            recordDao.moveAttemptsBank(source.id, mergedId)
-            recordDao.moveWrongBank(source.id, mergedId)
-            recordDao.moveFavoritesBank(source.id, mergedId)
-            recordDao.moveKillsBank(source.id, mergedId)
-            progressDao.deleteByBank(source.id)
-            bankDao.deleteById(source.id)
-        }
-        // 完整快照：撤销合并时按原 bankId/原题 id/原顺序还原，不能只恢复空壳。
-        val snapshot = buildJsonObject {
-            put("banks", buildJsonArray {
-                sources.forEach { s -> add(buildJsonObject {
-                    put("id", s.id); put("name", s.name); put("sourceFileName", s.sourceFileName)
-                    put("createdAt", s.createdAt); put("pinned", s.pinned); put("archived", s.archived)
-                    put("sortOrder", s.sortOrder); put("accentColor", s.accentColor); put("note", s.note)
-                }) }
-            })
-            put("questions", buildJsonArray {
-                originalQuestions.forEach { (bankId, qid, originalOrder) ->
-                    add(buildJsonObject {
-                        put("bankId", bankId); put("questionId", qid); put("order", originalOrder)
-                    })
+            var order = 0
+            sources.forEach { source ->
+                // **保留原题 id，只改归属和顺序**。复制成新 id 会让撤销快照失效，
+                // 也会让尝试/错题/收藏等按 questionId 关联的记录变成孤儿。
+                sourceQuestions.getValue(source.id).forEach { q ->
+                    questionDao.moveQuestion(q.id, mergedId, order++)
                 }
-            })
+                recordDao.moveAttemptsBank(source.id, mergedId)
+                recordDao.moveWrongBank(source.id, mergedId)
+                recordDao.moveFavoritesBank(source.id, mergedId)
+                recordDao.moveKillsBank(source.id, mergedId)
+                progressDao.deleteByBank(source.id)
+                bankDao.deleteById(source.id)
+            }
+            // 完整快照：撤销合并时按原 bankId/原题 id/原顺序还原，不能只恢复空壳。
+            val snapshot = MergeSnapshot(
+                banks = sources.map { s ->
+                    MergeBankSnapshot(
+                        id = s.id,
+                        name = s.name,
+                        sourceFileName = s.sourceFileName,
+                        questionCount = sourceQuestions.getValue(s.id).size,
+                        createdAt = s.createdAt,
+                        updatedAt = s.updatedAt,
+                        pinned = s.pinned,
+                        archived = s.archived,
+                        groupId = s.groupId,
+                        isGroup = s.isGroup,
+                        accentColor = s.accentColor,
+                        note = s.note,
+                        sortOrder = s.sortOrder
+                    )
+                },
+                questions = sources.flatMap { source ->
+                    sourceQuestions.getValue(source.id).map { q ->
+                        MergeQuestionSnapshot(
+                            bankId = source.id,
+                            questionId = q.id,
+                            order = q.orderInBank
+                        )
+                    }
+                }
+            )
+            // mergedFromJson 只存原 id，保留给旧版数据/调试；真正撤销用完整快照。
+            bankDao.setMergedState(
+                mergedId,
+                count = order,
+                snapshot = JsonCodec.json.encodeToString(sources.map { it.id }),
+                mergeSnapshot = MergeSnapshotCodec.encode(snapshot),
+                now = now
+            )
+            mergedId
         }
-        // mergedFromJson 只存原 id，保留给旧版数据/调试；真正撤销用完整快照。
-        bankDao.setMergedState(
-            mergedId,
-            count = order,
-            snapshot = JsonCodec.json.encodeToString(sources.map { it.id }),
-            mergeSnapshot = snapshot.toString(),
-            now = now
-        )
-        return mergedId
     }
 
-    /** 撤销合并：删除合并库，恢复原题库空壳（题目已合并，无法逐题无损还原）。 */
+    /** 撤销合并：删除合并库，按完整快照恢复原题库、题目顺序与学习记录归属。 */
     suspend fun undoMerge(mergedId: Long): Boolean {
-        val merged = bankDao.getById(mergedId) ?: return false
-        val raw = merged.mergedFromJson ?: return false
-        val ids = runCatching { JsonCodec.json.decodeFromString<List<Long>>(raw) }.getOrDefault(emptyList())
-        if (ids.isEmpty()) return false
-        val now = System.currentTimeMillis()
-        val snapshot = runCatching {
-            JsonCodec.json.parseToJsonElement(merged.mergeSnapshotJson ?: return false).jsonObject
-        }.getOrNull() ?: return false
-        val bankNodes = snapshot["banks"]?.jsonArray ?: return false
-        val questionNodes = snapshot["questions"]?.jsonArray ?: return false
-        bankNodes.forEach { node ->
-            val o = node.jsonObject
-            bankDao.insert(QuestionBank(
-                id = o["id"]!!.jsonPrimitive.long,
-                name = o["name"]!!.jsonPrimitive.content,
-                sourceFileName = o["sourceFileName"]?.jsonPrimitive?.contentOrNull,
-                createdAt = o["createdAt"]!!.jsonPrimitive.long,
-                pinned = o["pinned"]?.jsonPrimitive?.booleanOrNull ?: false,
-                archived = o["archived"]?.jsonPrimitive?.booleanOrNull ?: false,
-                sortOrder = o["sortOrder"]?.jsonPrimitive?.intOrNull ?: 0,
-                accentColor = o["accentColor"]?.jsonPrimitive?.longOrNull,
-                note = o["note"]?.jsonPrimitive?.contentOrNull,
-                updatedAt = now
-            ))
+        return db.withTransaction {
+            val merged = bankDao.getById(mergedId) ?: return@withTransaction false
+            val raw = merged.mergedFromJson ?: return@withTransaction false
+            val ids = runCatching {
+                JsonCodec.json.decodeFromString<List<Long>>(raw)
+            }.getOrDefault(emptyList())
+            if (ids.isEmpty()) return@withTransaction false
+            val snapshot = MergeSnapshotCodec.decode(merged.mergeSnapshotJson)
+                ?: return@withTransaction false
+            if (snapshot.banks.map { it.id }.toSet() != ids.toSet()) {
+                return@withTransaction false
+            }
+            snapshot.banks.forEach { saved ->
+                bankDao.insert(
+                    QuestionBank(
+                        id = saved.id,
+                        name = saved.name,
+                        sourceFileName = saved.sourceFileName,
+                        questionCount = saved.questionCount,
+                        createdAt = saved.createdAt,
+                        updatedAt = saved.updatedAt,
+                        pinned = saved.pinned,
+                        archived = saved.archived,
+                        groupId = saved.groupId,
+                        isGroup = saved.isGroup,
+                        accentColor = saved.accentColor,
+                        note = saved.note,
+                        sortOrder = saved.sortOrder
+                    )
+                )
+            }
+            snapshot.questions.forEach { saved ->
+                questionDao.moveQuestion(saved.questionId, saved.bankId, saved.order)
+            }
+            // 题目归属已恢复，记录再按 questionId 对应到正确原题库；一次 SQL 完成，
+            // 不会像按题库循环搬移那样把同一批记录反复搬到最后一个题库。
+            recordDao.restoreAttemptsBankFromQuestions(mergedId)
+            recordDao.restoreWrongBankFromQuestions(mergedId)
+            recordDao.restoreFavoritesBankFromQuestions(mergedId)
+            recordDao.restoreKillsBankFromQuestions(mergedId)
+            bankDao.deleteById(mergedId)
+            true
         }
-        questionNodes.forEach { node ->
-            val o = node.jsonObject
-            questionDao.moveQuestion(
-                o["questionId"]!!.jsonPrimitive.long,
-                o["bankId"]!!.jsonPrimitive.long,
-                o["order"]!!.jsonPrimitive.int
-            )
-        }
-        // 学习记录按原题库拆回去：用快照里的原 bankId 恢复记录归属。
-        bankNodes.forEach { node ->
-            val oldId = node.jsonObject["id"]!!.jsonPrimitive.long
-            recordDao.moveAttemptsBank(mergedId, oldId)
-            recordDao.moveWrongBank(mergedId, oldId)
-            recordDao.moveFavoritesBank(mergedId, oldId)
-            recordDao.moveKillsBank(mergedId, oldId)
-        }
-        bankDao.deleteById(mergedId)
-        return true
     }
 
     fun observeQuestions(bankId: Long): Flow<List<Question>> = questionDao.observeByBank(bankId)
@@ -263,6 +272,10 @@ class BankRepository(
     }
 
     suspend fun deleteBank(bankId: Long) {
+        val bank = bankDao.getById(bankId)
+        if (bank?.isGroup == true) {
+            bankDao.clearGroup(bankId, System.currentTimeMillis())
+        }
         questionDao.deleteByBank(bankId)
         progressDao.deleteByBank(bankId)
         recordDao.deleteAttemptsByBank(bankId)
@@ -353,4 +366,22 @@ class BankRepository(
         agreement = agreement,
         dissent = dissent
     )
+}
+
+/**
+ * 题库组本身不存题，题数必须按组内子题库实时聚合。
+ * 子库被合并/删除后，首页不能继续显示建组时的旧数字。
+ */
+internal fun withLiveGroupCounts(
+    banks: List<QuestionBank>,
+    questionCounts: Map<Long, Int>
+): List<QuestionBank> = banks.map { bank ->
+    if (!bank.isGroup) {
+        bank
+    } else {
+        val total = banks.asSequence()
+            .filter { it.groupId == bank.id && !it.archived }
+            .sumOf { questionCounts[it.id] ?: it.questionCount }
+        bank.copy(questionCount = total)
+    }
 }

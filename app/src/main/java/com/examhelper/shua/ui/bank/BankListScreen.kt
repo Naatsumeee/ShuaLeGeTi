@@ -1,7 +1,8 @@
 package com.examhelper.shua.ui.bank
 
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -15,7 +16,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.IntrinsicSize
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -57,6 +57,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
@@ -68,15 +69,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import com.examhelper.shua.data.db.QuestionBank
 import com.examhelper.shua.ui.sound.Haptics
 import com.examhelper.shua.ui.theme.ChipTone
@@ -92,7 +94,6 @@ import androidx.compose.animation.core.spring
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -119,11 +120,25 @@ fun BankListScreen(
     var groupDialog by remember { mutableStateOf<BankAction?>(null) }
     var deleteBatch by remember { mutableStateOf(false) }
     var confirmUndoMerge by remember { mutableStateOf<QuestionBank?>(null) }
+    var actionError by remember { mutableStateOf<String?>(null) }
     val extra = shuaColors
     val activeJobs = jobs.filter { it.stage != "FAILED" && it.stage != "CANCELED" }
     // 归档的默认收起来，只在最下面留一个小字按钮
-    val banks = allBanks.filter { !it.archived }
-    val archivedBanks = allBanks.filter { it.archived }
+    // 已归组的子题库只从对应题库组进入，不再在首页顶层重复出现。
+    val topLevelBanks = allBanks.filter { it.groupId == null }
+    val banks = topLevelBanks.filter { !it.archived }
+    val archivedBanks = topLevelBanks.filter { it.archived }
+    val listState = rememberLazyListState()
+    val reorderScope = rememberCoroutineScope()
+    var orderedBanks by remember { mutableStateOf(banks) }
+    var draggingBankId by remember { mutableStateOf<Long?>(null) }
+    var dragOffsetY by remember { mutableFloatStateOf(0f) }
+    var suppressClickFor by remember { mutableStateOf<Long?>(null) }
+    val itemGapPx = with(LocalDensity.current) { 12.dp.toPx() }
+
+    LaunchedEffect(banks) {
+        if (draggingBankId == null) orderedBanks = banks
+    }
 
         Box(Modifier.fillMaxSize()) {
         Column(
@@ -262,10 +277,12 @@ fun BankListScreen(
                 }
         } else {
             LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 96.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
-                    state = rememberLazyListState()
+                    state = listState
                 ) {
                     activeJobs.forEach { job ->
                         item(key = "job_${job.id}") {
@@ -302,31 +319,132 @@ fun BankListScreen(
                             }
                         }
                     }
-                    itemsIndexed(banks, key = { _, it -> it.id }) { index, bank ->
+                    itemsIndexed(orderedBanks, key = { _, it -> it.id }) { _, bank ->
+                        val dragging = draggingBankId == bank.id
+                        val visualOffset by animateFloatAsState(
+                            targetValue = if (dragging) dragOffsetY else 0f,
+                            animationSpec = if (dragging) {
+                                snap()
+                            } else {
+                                spring(
+                                    dampingRatio = 0.76f,
+                                    stiffness = Spring.StiffnessMediumLow
+                                )
+                            },
+                            label = "bankDragOffset"
+                        )
                         Box(
-                            Modifier.animateItemPlacement(
-                                spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow)
-                            )
+                            Modifier
+                                .zIndex(if (dragging) 2f else 0f)
+                                .graphicsLayer {
+                                    translationY = visualOffset
+                                    val scale = if (dragging) 1.012f else 1f
+                                    scaleX = scale
+                                    scaleY = scale
+                                    shadowElevation = if (dragging) 16f else 0f
+                                }
+                                .then(
+                                    if (dragging) {
+                                        Modifier
+                                    } else {
+                                        Modifier.animateItemPlacement(
+                                            spring(
+                                                dampingRatio = 0.72f,
+                                                stiffness = Spring.StiffnessMediumLow
+                                            )
+                                        )
+                                    }
+                                )
                         ) {
                             BankCard(
-                            bank = bank,
-                            onClick = { if (editMode) toggled(selected, bank.id) else onOpenBank(bank.id) },
-                            onRename = { renaming = bank },
-                            onPin = { vm.setPinned(bank.id, !bank.pinned) },
-                            onArchive = { vm.setArchived(bank.id, true) },
-                            onDelete = { deleting = bank },
-                            onUndoMerge = { confirmUndoMerge = bank },
-                            editMode = editMode,
-                            checked = bank.id in selected,
-                            color = bank.accentColor?.let { androidx.compose.ui.graphics.Color(it.toULong()) }
-                                ?: if (bank.isGroup) BankColors.Default else extra.terracotta,
-                            onToggle = { toggled(selected, bank.id) },
-                                dragHandle = {
-                                    DragSortHandle(
-                                        bankId = bank.id,
-                                        index = index,
-                                        visibleIds = banks.map { it.id },
-                                        onMove = { id, target -> vm.moveBank(id, target, banks.map { it.id }) }
+                                bank = bank,
+                                onClick = {
+                                    if (suppressClickFor != bank.id) {
+                                        if (editMode) toggled(selected, bank.id) else onOpenBank(bank.id)
+                                    }
+                                },
+                                onRename = { renaming = bank },
+                                onPin = { vm.setPinned(bank.id, !bank.pinned) },
+                                onArchive = { vm.setArchived(bank.id, true) },
+                                onDelete = { deleting = bank },
+                                onUndoMerge = { confirmUndoMerge = bank },
+                                editMode = editMode,
+                                checked = bank.id in selected,
+                                color = BankColors.fromStorage(bank.accentColor)
+                                    ?: if (bank.isGroup) BankColors.Default else extra.terracotta,
+                                onToggle = { toggled(selected, bank.id) },
+                                dragging = dragging,
+                                dragModifier = Modifier.pointerInput(bank.id) {
+                                    detectDragGesturesAfterLongPress(
+                                        onDragStart = {
+                                            draggingBankId = bank.id
+                                            suppressClickFor = bank.id
+                                            dragOffsetY = 0f
+                                            Haptics.longPress()
+                                        },
+                                        onDrag = { change, drag ->
+                                            if (draggingBankId != bank.id) return@detectDragGesturesAfterLongPress
+                                            change.consume()
+                                            dragOffsetY += drag.y
+
+                                            // 长按后按真实卡片高度找相邻项；每跨过一张卡，
+                                            // 立即交换本地顺序。被拖卡片此时关闭位移动画，
+                                            // 其余卡片继续用 animateItemPlacement 弹簧让位。
+                                            var guard = 0
+                                            while (guard++ < orderedBanks.size) {
+                                                val currentIndex = orderedBanks.indexOfFirst { it.id == bank.id }
+                                                if (currentIndex < 0) break
+                                                val info = listState.layoutInfo.visibleItemsInfo
+                                                    .firstOrNull { it.key == bank.id } ?: break
+                                                val next = orderedBanks.getOrNull(currentIndex + 1)
+                                                val previous = orderedBanks.getOrNull(currentIndex - 1)
+                                                val nextInfo = next?.let { candidate ->
+                                                    listState.layoutInfo.visibleItemsInfo
+                                                        .firstOrNull { it.key == candidate.id }
+                                                }
+                                                val previousInfo = previous?.let { candidate ->
+                                                    listState.layoutInfo.visibleItemsInfo
+                                                        .firstOrNull { it.key == candidate.id }
+                                                }
+                                                when {
+                                                    next != null && next.pinned == bank.pinned && nextInfo != null &&
+                                                        dragOffsetY >= (info.size + nextInfo.size) / 2f + itemGapPx -> {
+                                                        val movedBy = nextInfo.size + itemGapPx
+                                                        orderedBanks = orderedBanks.toMutableList().apply {
+                                                            add(currentIndex + 1, removeAt(currentIndex))
+                                                        }
+                                                        dragOffsetY -= movedBy
+                                                    }
+                                                    previous != null && previous.pinned == bank.pinned && previousInfo != null &&
+                                                        dragOffsetY <= -((info.size + previousInfo.size) / 2f + itemGapPx) -> {
+                                                        val movedBy = previousInfo.size + itemGapPx
+                                                        orderedBanks = orderedBanks.toMutableList().apply {
+                                                            add(currentIndex - 1, removeAt(currentIndex))
+                                                        }
+                                                        dragOffsetY += movedBy
+                                                    }
+                                                    else -> break
+                                                }
+                                            }
+                                        },
+                                        onDragEnd = {
+                                            val finalOrder = orderedBanks.map { it.id }
+                                            dragOffsetY = 0f
+                                            draggingBankId = null
+                                            vm.reorderBanks(finalOrder)
+                                            reorderScope.launch {
+                                                delay(120)
+                                                if (suppressClickFor == bank.id) suppressClickFor = null
+                                            }
+                                        },
+                                        onDragCancel = {
+                                            dragOffsetY = 0f
+                                            draggingBankId = null
+                                            reorderScope.launch {
+                                                delay(120)
+                                                if (suppressClickFor == bank.id) suppressClickFor = null
+                                            }
+                                        }
                                     )
                                 }
                             )
@@ -364,8 +482,22 @@ fun BankListScreen(
             if (editMode && selected.isNotEmpty()) {
                 BatchActionBar(
                     selected = selected.toList(),
-                    onMerge = { if (selected.size >= 2) groupDialog = BankAction.MERGE },
-                    onGroup = { if (selected.isNotEmpty()) groupDialog = BankAction.GROUP },
+                    onMerge = {
+                        val picked = selected.mapNotNull { id -> allBanks.firstOrNull { it.id == id } }
+                        when {
+                            picked.size < 2 -> actionError = "至少选择两个普通题库才能合并"
+                            picked.any { it.isGroup } -> actionError = "题库组暂不支持直接合并，请选择组内题库"
+                            else -> groupDialog = BankAction.MERGE
+                        }
+                    },
+                    onGroup = {
+                        val picked = selected.mapNotNull { id -> allBanks.firstOrNull { it.id == id } }
+                        if (picked.any { it.isGroup }) {
+                            actionError = "题库组暂不支持嵌套，请选择组内题库"
+                        } else {
+                            groupDialog = BankAction.GROUP
+                        }
+                    },
                     onArchive = {
                         vm.batchArchive(selected.toList(), true)
                         selected.clear()
@@ -395,7 +527,16 @@ fun BankListScreen(
             onDismissRequest = { deleting = null },
             containerColor = MaterialTheme.colorScheme.surface,
             title = { Text("删除题库", style = serifTitle(18.sp, FontWeight.Medium)) },
-            text = { Text("确定删除\"${bank.name}\"？该题库全部 ${bank.questionCount} 道题、进度与错题记录都会被删除，不可恢复。", style = MaterialTheme.typography.bodyMedium) },
+            text = {
+                Text(
+                    if (bank.isGroup) {
+                        "确定删除题库组\"${bank.name}\"？组内题库不会删除，会回到首页普通列表。"
+                    } else {
+                        "确定删除\"${bank.name}\"？该题库全部 ${bank.questionCount} 道题、进度与错题记录都会被删除，不可恢复。"
+                    },
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
                     vm.deleteBank(bank.id)
@@ -437,11 +578,20 @@ fun BankListScreen(
     }
 
     if (deleteBatch) {
+        val includesGroup = selected.any { id -> allBanks.firstOrNull { it.id == id }?.isGroup == true }
         AlertDialog(
             onDismissRequest = { deleteBatch = false },
             containerColor = MaterialTheme.colorScheme.surface,
             title = { Text("批量删除题库", style = serifTitle(18.sp, FontWeight.Medium)) },
-            text = { Text("确定删除选中的 ${selected.size} 个题库？全部题目、进度与错题记录都会删除，不可恢复。", style = MaterialTheme.typography.bodyMedium) },
+            text = {
+                Text(
+                    buildString {
+                        append("确定删除选中的 ${selected.size} 个题库？普通题库的题目、进度与错题记录会被删除且不可恢复。")
+                        if (includesGroup) append("其中题库组只删除分组，组内题库会保留。")
+                    },
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
                     vm.batchDelete(selected.toList())
@@ -465,6 +615,17 @@ fun BankListScreen(
                 }) { Text("撤销", color = extra.sage) }
             },
             dismissButton = { TextButton(onClick = { confirmUndoMerge = null }) { Text("取消") } }
+        )
+    }
+
+    actionError?.let { message ->
+        AlertDialog(
+            onDismissRequest = { actionError = null },
+            title = { Text("无法执行", style = serifTitle(18.sp, FontWeight.Medium)) },
+            text = { Text(message, style = MaterialTheme.typography.bodyMedium) },
+            confirmButton = {
+                TextButton(onClick = { actionError = null }) { Text("知道了") }
+            }
         )
     }
 
@@ -502,7 +663,8 @@ private fun BankCard(
     checked: Boolean = false,
     color: Color = shuaColors.terracotta,
     onToggle: () -> Unit = {},
-    dragHandle: @Composable (() -> Unit)? = null
+    dragging: Boolean = false,
+    dragModifier: Modifier = Modifier
 ) {
     // 菜单状态提到外层：编辑模式下拖拽/勾选会重绘卡片，不能让右键菜单
     // 因 pointerInput 或列表 key 变化意外关闭。
@@ -513,8 +675,8 @@ private fun BankCard(
     PaperCard(
         modifier = Modifier
             .fillMaxWidth()
-            // 长按不再是菜单：长按/拖动排序由左侧拖拽柄负责。
-            // 普通点击仍是进入题库，编辑模式下点击 = 勾选。
+            .then(dragModifier)
+            // 长按整张卡片进入拖拽；普通点击仍是进入题库，编辑模式下点击 = 勾选。
             .clickable(onClick = onClick),
         shape = shape
     ) {
@@ -585,7 +747,15 @@ private fun BankCard(
                 }
             }
             Box {
-                dragHandle?.invoke()
+                Icon(
+                    Icons.Filled.DragHandle,
+                    contentDescription = "长按卡片拖动排序",
+                    tint = if (dragging) shuaColors.terracotta else MaterialTheme.colorScheme.outline,
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(CircleShape)
+                        .background(if (dragging) shuaColors.terracottaSoft else Color.Transparent)
+                )
                 com.examhelper.shua.ui.theme.GlassIconButton(
                     icon = Icons.Filled.MoreVert,
                     contentDescription = "更多",
@@ -691,51 +861,6 @@ private fun BatchChip(
     }
 }
 
-/**
- * 拖拽排序柄：长按即抬起并跟手，位移超过半张卡高就把自己插入新位置。
- * 这里用 pointerInput 的累计 dy 计算目标槽位；列表由 Room sortOrder 刷新，
- * 因此其它卡片会在落位后通过 key 动画平滑让位。
- */
-@Composable
-private fun DragSortHandle(
-    bankId: Long,
-    index: Int,
-    visibleIds: List<Long>,
-    onMove: (Long, Int) -> Unit
-) {
-    val density = LocalDensity.current
-    val itemPx = with(density) { 88.dp.toPx() }
-    var dragging by remember { mutableStateOf(false) }
-    val offsetY = remember { Animatable(0f) }
-    Icon(
-        Icons.Filled.DragHandle,
-        contentDescription = "拖动排序",
-        tint = if (dragging) shuaColors.terracotta else MaterialTheme.colorScheme.outline,
-        modifier = Modifier
-            .size(34.dp)
-            .clip(CircleShape)
-            .background(if (dragging) shuaColors.terracottaSoft else Color.Transparent)
-            .graphicsLayer { translationY = offsetY.value; shadowElevation = if (dragging) 12f else 0f }
-            .pointerInput(bankId, index, visibleIds) {
-                var pointerY = 0f
-                detectDragGesturesAfterLongPress(
-                    onDragStart = { dragging = true; pointerY = 0f; Haptics.longPress() },
-                    onDrag = { change, drag ->
-                        change.consume()
-                        pointerY += drag.y
-                    },
-                    onDragEnd = {
-                        val slots = (pointerY / itemPx).roundToInt()
-                        val target = (index + slots).coerceIn(0, visibleIds.lastIndex)
-                        dragging = false
-                        if (target != index) onMove(bankId, target)
-                    },
-                    onDragCancel = { dragging = false }
-                )
-            }
-    )
-}
-
 /** 重命名题库：只有名字一个字段，空名直接忽略 */
 @Composable
 private fun RenameBankDialog(initial: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
@@ -776,8 +901,6 @@ private fun CreateBankDialog(
     var name by remember { mutableStateOf(defaultName) }
     var note by remember { mutableStateOf("") }
     var color by remember { mutableStateOf(BankColors.Default) }
-    var customHex by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf<String?>(null) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title, style = serifTitle(18.sp, FontWeight.Medium)) },
@@ -787,36 +910,7 @@ private fun CreateBankDialog(
                 OutlinedTextField(name, { name = it }, label = { Text("名称") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(note, { note = it }, label = { Text("备注（可选）") }, maxLines = 3, modifier = Modifier.fillMaxWidth())
                 if (allowColor) {
-                    Text("装饰条颜色", style = MaterialTheme.typography.labelMedium)
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                        BankColors.Presets.forEach { (label, c) ->
-                            Box(
-                                Modifier
-                                    .size(27.dp)
-                                    .clip(CircleShape)
-                                    .background(c)
-                                    .border(
-                                        if (c == color) 2.dp else 1.dp,
-                                        if (c == color) MaterialTheme.colorScheme.onSurface else shuaColors.creamLine,
-                                        CircleShape
-                                    )
-                                    .clickable { color = c },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                if (c == color) Icon(Icons.Filled.Check, label, tint = Color.White, modifier = Modifier.size(14.dp))
-                            }
-                        }
-                    }
-                    // optional hex input applies to the selected color
-                    OutlinedTextField(
-                        customHex,
-                        { customHex = it; error = null },
-                        label = { Text("自定义 #RRGGBB") },
-                        singleLine = true,
-                        isError = error != null,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall) }
+                    BankColorEditor(initialColor = color) { color = it }
                 }
             }
         },
@@ -824,12 +918,11 @@ private fun CreateBankDialog(
             TextButton(
                 enabled = name.isNotBlank(),
                 onClick = {
-                    val custom = if (customHex.isNotBlank()) BankColors.parseHex(customHex) else null
-                    if (customHex.isNotBlank() && custom == null) {
-                        error = "请输入合法的 #RRGGBB 颜色，且不要使用黑白灰"
-                    } else {
-                        onConfirm(name.trim(), note.trim().takeIf { it.isNotEmpty() }, (custom ?: color).toArgb().toLong())
-                    }
+                    onConfirm(
+                        name.trim(),
+                        note.trim().takeIf { it.isNotEmpty() },
+                        BankColors.toStorage(color)
+                    )
                 }
             ) { Text(confirmText) }
         },
@@ -850,7 +943,7 @@ private fun BankEditDialog(
     var name by remember { mutableStateOf(initialName) }
     var note by remember { mutableStateOf(initialNote.orEmpty()) }
     var color by remember {
-        mutableStateOf(initialColor?.let { Color(it.toULong()) } ?: BankColors.Default)
+        mutableStateOf(BankColors.fromStorage(initialColor) ?: BankColors.Default)
     }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -860,41 +953,13 @@ private fun BankEditDialog(
                 OutlinedTextField(name, { name = it }, label = { Text("名称") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(note, { note = it }, label = { Text("备注") }, maxLines = 3, modifier = Modifier.fillMaxWidth())
                 if (isGroup) {
-                    Text("装饰条颜色", style = MaterialTheme.typography.labelMedium)
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                        BankColors.Presets.forEach { (label, c) ->
-                            Box(
-                                Modifier.size(27.dp).clip(CircleShape).background(c)
-                                    .border(
-                                        if (c == color) 2.dp else 1.dp,
-                                        if (c == color) MaterialTheme.colorScheme.onSurface else shuaColors.creamLine,
-                                        CircleShape
-                                    )
-                                    .clickable { color = c },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                if (c == color) Icon(Icons.Filled.Check, label, tint = Color.White, modifier = Modifier.size(14.dp))
-                            }
-                        }
-                    }
-                    var hex by remember { mutableStateOf("") }
-                    var hexError by remember { mutableStateOf<String?>(null) }
-                    OutlinedTextField(
-                        hex, { hex = it; hexError = null },
-                        label = { Text("或输入 #RRGGBB") }, singleLine = true,
-                        isError = hexError != null, modifier = Modifier.fillMaxWidth()
-                    )
-                    hexError?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error) }
-                    TextButton(onClick = {
-                        val parsed = BankColors.parseHex(hex)
-                        if (parsed == null) hexError = "颜色不合法（不能是黑白灰）" else color = parsed
-                    }) { Text("应用自定义颜色") }
+                    BankColorEditor(initialColor = color) { color = it }
                 }
             }
         },
         confirmButton = {
             TextButton(enabled = name.isNotBlank(), onClick = {
-                onConfirm(name.trim(), note.trim().takeIf { it.isNotEmpty() }, color.toArgb().toLong())
+                onConfirm(name.trim(), note.trim().takeIf { it.isNotEmpty() }, BankColors.toStorage(color))
             }) { Text("保存") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }

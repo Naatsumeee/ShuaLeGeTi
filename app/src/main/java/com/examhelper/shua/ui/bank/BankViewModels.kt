@@ -74,10 +74,18 @@ class BankListViewModel @JvmOverloads constructor(
         viewModelScope.launch {
             val now = System.currentTimeMillis()
             val dao = ShuaApp.instance.container.database.bankDao()
-            visibleIds.toMutableList().apply {
+            val ordered = visibleIds.toMutableList().apply {
                 remove(bankId)
                 add(targetIndex.coerceIn(0, size), bankId)
-            }.forEachIndexed { i, id -> dao.setSortOrder(id, i, now) }
+            }
+            dao.setSortOrders(ordered, now)
+        }
+    }
+
+    fun reorderBanks(orderedIds: List<Long>) {
+        viewModelScope.launch {
+            ShuaApp.instance.container.database.bankDao()
+                .setSortOrders(orderedIds, System.currentTimeMillis())
         }
     }
 

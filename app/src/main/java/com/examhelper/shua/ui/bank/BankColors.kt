@@ -1,9 +1,12 @@
 package com.examhelper.shua.ui.bank
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 
 /** 题库组可选 8 色 + 默认正确绿；刻意避开首页品牌赤陶与黑白灰。 */
 object BankColors {
+    data class Hsl(val hue: Float, val saturation: Float, val lightness: Float)
+
     /** 正确选项绿：题库组默认色 */
     val Default = Color(0xFF3F6B4A)
 
@@ -18,7 +21,7 @@ object BankColors {
         "青碧" to Color(0xFF2E7D78)
     )
 
-    /** #RRGGBB / #AARRGGBB；拒绝黑白灰与过透明颜色。 */
+    /** #RGB / #RRGGBB / #AARRGGBB；只做合法性与透明度校验。 */
     fun parseHex(raw: String): Color? {
         val s = raw.trim().removePrefix("#")
         val expanded = when (s.length) {
@@ -33,11 +36,8 @@ object BankColors {
         val g = ((argb shr 8) and 0xFF).toInt()
         val b = (argb and 0xFF).toInt()
         if (a < 0x80) return null
-        val max = maxOf(r, g, b)
-        val min = minOf(r, g, b)
-        // 黑白灰/接近无色（饱和度 < 12%）不适合当题库识别色。
-        if (max - min < 30) return null
-        return Color(argb)
+        // 预设色板不提供黑白灰；自定义色允许用户输入 #000000/#FFFFFF。
+        return Color(argb.toInt())
     }
 
     fun toHex(color: Color): String = String.format(
@@ -65,4 +65,28 @@ object BankColors {
         val m = ll - c / 2f
         return Color(r1 + m, g1 + m, b1 + m)
     }
+
+    /** RGB -> HSL，用于把已有自定义颜色同步到色盘指针。 */
+    fun toHsl(color: Color): Hsl {
+        val r = color.red
+        val g = color.green
+        val b = color.blue
+        val max = maxOf(r, g, b)
+        val min = minOf(r, g, b)
+        val delta = max - min
+        val l = (max + min) / 2f
+        if (delta == 0f) return Hsl(0f, 0f, l)
+        val s = if (l > 0.5f) delta / (2f - max - min) else delta / (max + min)
+        val h = when (max) {
+            r -> 60f * (((g - b) / delta) % 6f)
+            g -> 60f * (((b - r) / delta) + 2f)
+            else -> 60f * (((r - g) / delta) + 4f)
+        }
+        return Hsl((h + 360f) % 360f, s.coerceIn(0f, 1f), l.coerceIn(0f, 1f))
+    }
+
+    /** Room 用 Long 存 ARGB；统一存无符号 32 位，避免负数扩展成 64 位后变色。 */
+    fun toStorage(color: Color): Long = color.toArgb().toLong() and 0xFFFF_FFFFL
+
+    fun fromStorage(value: Long?): Color? = value?.let { Color(it.toInt()) }
 }

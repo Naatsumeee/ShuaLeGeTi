@@ -102,6 +102,8 @@ object ChunkPlanner {
             if (end == start + 1 && lines[start].length > hardCap) {
                 val line = lines[start]
                 var from = 0
+                // 无换行的超长文本也必须重叠，否则切点处的题干/答案无法被下一块抢救。
+                val charOverlap = minOf(600, size / 10).coerceAtLeast(80)
                 while (from < line.length) {
                     var to = minOf(from + size, line.length)
                     // 切点不能落在代理对中间：BMP 以外的字符（生僻字、emoji）在 Kotlin
@@ -113,7 +115,11 @@ object ChunkPlanner {
                         to--
                     }
                     chunks += Chunk(index++, line.substring(from, to), start, start)
-                    from = to
+                    if (to >= line.length) break
+                    // 下一块从上一块尾部回退一小段，重复内容由解析后的题号/题干去重。
+                    from = (to - charOverlap).coerceAtLeast(from + 1)
+                    // 重叠起点也不能落在代理对中间。
+                    if (from < line.length && line[from].isLowSurrogate()) from++
                 }
                 start++
                 continue

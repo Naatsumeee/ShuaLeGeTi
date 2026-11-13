@@ -1,5 +1,6 @@
 package com.examhelper.shua
 
+import androidx.compose.ui.graphics.toArgb
 import com.examhelper.shua.data.export.ShuaArchive
 import com.examhelper.shua.data.model.ShuaBankFile
 import com.examhelper.shua.ui.bank.BankColors
@@ -29,15 +30,22 @@ class ArchiveAndColorTest {
     }
 
     @Test
-    fun `颜色校验允许彩色十六进制并拒绝黑白灰`() {
+    fun `颜色校验允许自定义黑白但预设仍不含黑白灰`() {
         assertNotNull(BankColors.parseHex("#3F6B4A"))
         assertNotNull(BankColors.parseHex("D97757"))
         assertNotNull(BankColors.parseHex("#8A4F7D"))
-        assertNull(BankColors.parseHex("#000000"))
-        assertNull(BankColors.parseHex("#FFFFFF"))
-        assertNull(BankColors.parseHex("#808080"))
+        assertNotNull(BankColors.parseHex("#000000"))
+        assertNotNull(BankColors.parseHex("#FFFFFF"))
+        assertNotNull(BankColors.parseHex("#808080"))
         assertNull(BankColors.parseHex("not-a-color"))
         assertNull(BankColors.parseHex("#00FFFFFF")) // 完全透明
+    }
+
+    @Test
+    fun `颜色存入 Room 后再读出不发生通道错乱`() {
+        val original = BankColors.parseHex("#D97757")!!
+        val restored = BankColors.fromStorage(BankColors.toStorage(original))!!
+        assertEquals(original.toArgb(), restored.toArgb())
     }
 
     @Test
@@ -45,5 +53,16 @@ class ArchiveAndColorTest {
         val colors = (0 until 8).map { i -> BankColors.hsl(i * 45f, 0.55f, 0.42f) }
         assertEquals(8, colors.size)
         assertTrue(colors.toSet().size == 8)
+    }
+
+    @Test
+    fun `已有颜色能准确转换回 HSL 色盘坐标`() {
+        val color = BankColors.parseHex("#3F6B4A")!!
+        val hsl = BankColors.toHsl(color)
+        val roundTrip = BankColors.hsl(hsl.hue, hsl.saturation, hsl.lightness)
+        assertEquals(color.toArgb(), roundTrip.toArgb())
+
+        val gray = BankColors.toHsl(BankColors.parseHex("#808080")!!)
+        assertEquals(0f, gray.saturation, 0.001f)
     }
 }

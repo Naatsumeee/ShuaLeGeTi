@@ -50,10 +50,25 @@ class ChunkPlannerTest {
 
     @Test
     fun `没有边界的长文本会硬切而不是死循环`() {
-        val text = "无边界" + "内容".repeat(5000)
+        // 每段带递增编号，避免周期文本让「最长公共前后缀」误判出超长重叠。
+        val text = "无边界" + (0 until 3000).joinToString("") {
+            "内容${it.toString(16).padStart(5, '0')}"
+        }
         val chunks = ChunkPlanner.plan(text, 1000)
         assertTrue(chunks.size > 1)
-        assertEquals(text, chunks.joinToString("") { it.text })
+        val overlap = minOf(600, 1000 / 10).coerceAtLeast(80)
+        chunks.zipWithNext().forEach { (a, b) ->
+            assertEquals(
+                "相邻硬切块必须保留 $overlap 字符重叠",
+                a.text.takeLast(overlap),
+                b.text.take(overlap)
+            )
+        }
+        val rejoined = buildString {
+            append(chunks.first().text)
+            chunks.drop(1).forEach { append(it.text.drop(overlap)) }
+        }
+        assertEquals(text, rejoined)
     }
 
     @Test
@@ -295,9 +310,11 @@ class ChunkPlannerTest {
             assertTrue("第 $i 块以孤立高代理结尾", t.isEmpty() || !t[t.length - 1].isHighSurrogate())
         }
 
-        // 拼回去必须与原串完全一致：既没丢字符，也没产生替换符
-        val rejoined = chunks.joinToString("") { it.text }
-        assertEquals(line, rejoined)
-        assertTrue("不应出现替换字符", !rejoined.contains('\uFFFD'))
+        // 块之间允许重叠，因此不能直接一次拼接；但切点两侧不能出现孤立代理。
+        chunks.forEachIndexed { i, c ->
+            assertTrue("第 $i 块以孤立低代理开头", c.text.isEmpty() || !c.text[0].isLowSurrogate())
+            assertTrue("第 $i 块以孤立高代理结尾", c.text.isEmpty() || !c.text.last().isHighSurrogate())
+        }
+        assertTrue("不应出现替换字符", chunks.none { it.text.contains('\uFFFD') })
     }
 }

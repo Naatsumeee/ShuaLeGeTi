@@ -29,6 +29,10 @@ interface BankDao {
     @Query("UPDATE banks SET groupId = :groupId, updatedAt = :now WHERE id = :id")
     suspend fun setGroup(id: Long, groupId: Long?, now: Long)
 
+    /** 删除题库组时只解散容器，组内题库必须保留并回到首页普通列表。 */
+    @Query("UPDATE banks SET groupId = NULL, updatedAt = :now WHERE groupId = :groupId")
+    suspend fun clearGroup(groupId: Long, now: Long)
+
     @Query("UPDATE banks SET note = :note, updatedAt = :now WHERE id = :id")
     suspend fun setNote(id: Long, note: String?, now: Long)
 
@@ -37,6 +41,12 @@ interface BankDao {
 
     @Query("UPDATE banks SET sortOrder = :sortOrder, updatedAt = :now WHERE id = :id")
     suspend fun setSortOrder(id: Long, sortOrder: Int, now: Long)
+
+    /** 拖拽结束时一次性写入整张可见列表的顺序，避免多次独立更新产生中间态。 */
+    @Transaction
+    suspend fun setSortOrders(orderedIds: List<Long>, now: Long) {
+        orderedIds.forEachIndexed { index, id -> setSortOrder(id, index, now) }
+    }
 
     @Query("UPDATE banks SET questionCount = :count, mergedFromJson = :snapshot, mergeSnapshotJson = :mergeSnapshot, updatedAt = :now WHERE id = :id")
     suspend fun setMergedState(
@@ -65,6 +75,8 @@ interface BankDao {
 
 @Dao
 interface QuestionDao {
+    data class QuestionCountRow(val bankId: Long, val cnt: Int)
+
     @Insert
     suspend fun insertAll(questions: List<Question>): List<Long>
 
@@ -91,6 +103,9 @@ interface QuestionDao {
 
     @Query("SELECT COUNT(*) FROM questions WHERE bankId = :bankId")
     suspend fun countByBank(bankId: Long): Int
+
+    @Query("SELECT bankId, COUNT(*) AS cnt FROM questions GROUP BY bankId")
+    fun observeCountsByBank(): Flow<List<QuestionCountRow>>
 
     // 缺失判定必须与 UI 的 isNullOrBlank() 口径一致：纯空白串也算缺失。
     // 之前只判断 = ''，AI 返回空白串时统计不报缺失，覆盖率却算成不满。
@@ -254,11 +269,33 @@ interface RecordDao {
     @Query("UPDATE attempt_records SET bankId = :toBankId WHERE bankId = :fromBankId")
     suspend fun moveAttemptsBank(fromBankId: Long, toBankId: Long)
 
+    /**
+     * 撤销合并：按题目当前恢复后的 bankId 一次性还原作答记录。
+     *
+     * 不能按原题库循环 `moveAttemptsBank`：合并期间所有记录都在 mergedId 下，
+     * 第一次搬移后后续循环只会继续把同一批记录搬到下一个题库，最终全部落到最后一本。
+     */
+    @Query("""
+        UPDATE attempt_records
+        SET bankId = (SELECT q.bankId FROM questions q WHERE q.id = attempt_records.questionId)
+        WHERE bankId = :mergedId
+          AND EXISTS (SELECT 1 FROM questions q WHERE q.id = attempt_records.questionId)
+    """)
+    suspend fun restoreAttemptsBankFromQuestions(mergedId: Long): Int
+
     @Query("DELETE FROM wrong_records WHERE bankId = :bankId")
     suspend fun deleteWrongByBank(bankId: Long)
 
     @Query("UPDATE wrong_records SET bankId = :toBankId WHERE bankId = :fromBankId")
     suspend fun moveWrongBank(fromBankId: Long, toBankId: Long)
+
+    @Query("""
+        UPDATE wrong_records
+        SET bankId = (SELECT q.bankId FROM questions q WHERE q.id = wrong_records.questionId)
+        WHERE bankId = :mergedId
+          AND EXISTS (SELECT 1 FROM questions q WHERE q.id = wrong_records.questionId)
+    """)
+    suspend fun restoreWrongBankFromQuestions(mergedId: Long): Int
 
     @Query("DELETE FROM favorites WHERE bankId = :bankId")
     suspend fun deleteFavoritesByBank(bankId: Long)
@@ -266,11 +303,27 @@ interface RecordDao {
     @Query("UPDATE favorites SET bankId = :toBankId WHERE bankId = :fromBankId")
     suspend fun moveFavoritesBank(fromBankId: Long, toBankId: Long)
 
+    @Query("""
+        UPDATE favorites
+        SET bankId = (SELECT q.bankId FROM questions q WHERE q.id = favorites.questionId)
+        WHERE bankId = :mergedId
+          AND EXISTS (SELECT 1 FROM questions q WHERE q.id = favorites.questionId)
+    """)
+    suspend fun restoreFavoritesBankFromQuestions(mergedId: Long): Int
+
     @Query("DELETE FROM kill_records WHERE bankId = :bankId")
     suspend fun deleteKillsByBank(bankId: Long)
 
     @Query("UPDATE kill_records SET bankId = :toBankId WHERE bankId = :fromBankId")
     suspend fun moveKillsBank(fromBankId: Long, toBankId: Long)
+
+    @Query("""
+        UPDATE kill_records
+        SET bankId = (SELECT q.bankId FROM questions q WHERE q.id = kill_records.questionId)
+        WHERE bankId = :mergedId
+          AND EXISTS (SELECT 1 FROM questions q WHERE q.id = kill_records.questionId)
+    """)
+    suspend fun restoreKillsBankFromQuestions(mergedId: Long): Int
 
     // ---- 斩题 ----
     @Insert(onConflict = OnConflictStrategy.REPLACE)

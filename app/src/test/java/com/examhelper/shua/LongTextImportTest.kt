@@ -9,7 +9,7 @@ import org.junit.Test
 /** 长 md / txt 的分块、重叠与去重回归。 */
 class LongTextImportTest {
 
-    private fun buildLongBank(chapters: Int, perChapter: Int): String {
+    private fun buildLongBank(chapters: Int, perChapter: Int, inlineAnswer: Boolean = true): String {
         val sb = StringBuilder()
         repeat(chapters) { c ->
             sb.appendLine("第${c + 1}章 测试章节")
@@ -20,7 +20,7 @@ class LongTextImportTest {
                 sb.appendLine("B. 选项乙${c}_${i}")
                 sb.appendLine("C. 选项丙${c}_${i}")
                 sb.appendLine("D. 选项丁${c}_${i}")
-                sb.appendLine("答案：A")
+                if (inlineAnswer) sb.appendLine("答案：A")
             }
             sb.appendLine("三、参考答案")
             repeat(perChapter) { i -> sb.appendLine("${i + 1}. A") }
@@ -67,9 +67,19 @@ class LongTextImportTest {
 
     @Test
     fun `答案表在长文本分块后仍能按题号回填`() {
-        val text = buildLongBank(chapters = 10, perChapter = 25)
+        val text = buildLongBank(chapters = 10, perChapter = 25, inlineAnswer = false)
         val qs = TextQuestionParser.parseLong(text)
         assertEquals(250, qs.size)
         assertEquals(250, qs.count { it.answer == "A" })
+    }
+
+    @Test
+    fun `无换行超长文本硬切时保留字符重叠`() {
+        val text = "1." + "题干内容".repeat(7000)
+        val chunks = ChunkPlanner.plan(text, 6000, overlapLines = 18)
+        assertTrue("超长单行应被切成多块", chunks.size >= 2)
+        val tail = chunks[0].text.takeLast(600)
+        val nextHead = chunks[1].text.take(600)
+        assertEquals(tail, nextHead)
     }
 }

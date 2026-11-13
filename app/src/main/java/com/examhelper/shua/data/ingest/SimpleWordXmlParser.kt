@@ -27,15 +27,23 @@ object SimpleWordXmlParser {
             val gt = xml.indexOf('>', lt + 1)
             if (gt < 0) break
             val tag = xml.substring(lt + 1, gt).trim()
+            val closing = tag.startsWith("/")
+            val rawName = tag.trimStart('/').trimEnd('/')
+                .substringBefore(' ')
+                .substringBefore('\t')
+            // 不依赖命名空间前缀：w:t / strict:t 都取最后一段。
+            val local = rawName.substringAfter(':').lowercase()
+            val selfClosing = tag.endsWith("/")
             when {
-                tag == "w:p" || tag == "w:p/" -> flushParagraph()
-                tag == "w:tab" || tag == "w:tab/" -> paragraph.append('\t')
-                tag == "w:br" || tag == "w:br/" -> paragraph.append('\n')
-                tag.startsWith("w:t") && !tag.startsWith("w:tbl") -> {
+                local == "p" -> flushParagraph()
+                local == "tab" -> paragraph.append('\t')
+                local == "br" || local == "cr" -> paragraph.append('\n')
+                local == "t" && !closing && !selfClosing -> {
                     val bodyStart = gt + 1
-                    val bodyEnd = xml.indexOf("</w:t>", bodyStart).takeIf { it >= 0 } ?: xml.length
-                    paragraph.append(xml.substring(bodyStart, bodyEnd))
-                    i = bodyEnd + 6
+                    val close = Regex("""</(?:[A-Za-z0-9_]+:)?t\s*>""").find(xml, bodyStart)
+                    val bodyEnd = close?.range?.first ?: xml.length
+                    paragraph.append(decodeXmlEntities(xml.substring(bodyStart, bodyEnd)))
+                    i = close?.range?.last?.plus(1) ?: xml.length
                     continue
                 }
             }
@@ -43,5 +51,20 @@ object SimpleWordXmlParser {
         }
         flushParagraph()
         return sb.toString()
+    }
+
+    private fun decodeXmlEntities(raw: String): String {
+        if ('&' !in raw) return raw
+        val named = mapOf("amp" to "&", "lt" to "<", "gt" to ">", "quot" to "\"", "apos" to "'")
+        return Regex("""&(#x[0-9A-Fa-f]+|#\d+|[A-Za-z]+);""").replace(raw) { m ->
+            val token = m.groupValues[1]
+            when {
+                token.startsWith("#x") -> token.drop(2).toIntOrNull(16)
+                    ?.let { String(Character.toChars(it)) } ?: m.value
+                token.startsWith("#") -> token.drop(1).toIntOrNull()
+                    ?.let { String(Character.toChars(it)) } ?: m.value
+                else -> named[token] ?: m.value
+            }
+        }
     }
 }

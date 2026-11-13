@@ -1,6 +1,6 @@
 ﻿# AGENTS.md — 刷了个题 (ShuaGeLeTi) 项目记忆
 
-> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-13（**v1.1.0 已发布**，versionCode 15）。
+> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-13（**v1.1.0 已发布**；`main` 另有未发版导入/题库组/动效修复，等待用户测试）。
 >
 > **文档分工**（别把三份混在一起）：
 > - `AGENTS.md`（本文件，**入库**）—— 项目的长期公共记忆：架构、决策、踩过的坑、待办。所有 Agent 都该读。
@@ -32,7 +32,7 @@ Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）�
 ## 技术栈与关键决策
 
 - Kotlin + Jetpack Compose（BOM 2024.12.01）+ Material3；MVVM（ViewModel 用 @JvmOverloads/SavedStateHandle 构造，无 DI 框架，`ShuaApp.instance.container` 手工容器）
-- **Room v12**（`data/db/`：Entities/Daos/AppDatabase，迁移 1→2→…→12 全部注册在 `AppDatabase.addMigrations`）。`fallbackToDestructiveMigration` **仍在**，新增字段必须写正式迁移，否则老用户升级即丢库。各版本加了什么：v2 `subtype`/`sharedStem`/`sharedOptionsJson`/`attempt_records.runId`/`durationMs`/`study_progress.filterJson`；v3 `sourcePage`；v4 `originalAnswer`；v5 `aiAnswer`/`answerVerified`/`deepSolved`；v6 三个 token 字段；v7 余额快照（已废弃）；v8 `import_jobs.streamTail`/`banks.pinned`/`banks.archived`；v9 `wrong_records.flagged`（重点标记，与「已掌握」互相独立）；**v10 是数据迁移**（`MIGRATION_9_10` 用 `HeadingClassifier.cleanChapter` 把库里已有的脏章节名就地洗掉，不重导）；**v11 也是数据迁移**（再洗一次 + `unifyChapterNames` 归一）；v12 新增 `balance_snapshots` 表（余额快照，供「用量情况」的窗口累计）
+- **Room v13**（`data/db/`：Entities/Daos/AppDatabase，迁移 1→2→…→13 全部注册在 `AppDatabase.addMigrations`）。`fallbackToDestructiveMigration` **仍在**，新增字段必须写正式迁移，否则老用户升级即丢库。各版本加了什么：v2 `subtype`/`sharedStem`/`sharedOptionsJson`/`attempt_records.runId`/`durationMs`/`study_progress.filterJson`；v3 `sourcePage`；v4 `originalAnswer`；v5 `aiAnswer`/`answerVerified`/`deepSolved`；v6 三个 token 字段；v7 余额快照（已废弃）；v8 `import_jobs.streamTail`/`banks.pinned`/`banks.archived`；v9 `wrong_records.flagged`（重点标记，与「已掌握」互相独立）；**v10 是数据迁移**（`MIGRATION_9_10` 用 `HeadingClassifier.cleanChapter` 把库里已有的脏章节名就地洗掉，不重导）；**v11 也是数据迁移**（再洗一次 + `unifyChapterNames` 归一）；v12 新增 `balance_snapshots` 表（余额快照，供「用量情况」的窗口累计）；**v13** 给 `banks` 新增 `groupId`/`isGroup`/`accentColor`/`note`/`sortOrder`/`mergedFromJson`/`mergeSnapshotJson`
 - 双 OCR 引擎（`data/ocr/`）：**默认 RapidOCR**（PP-OCRv5 ONNX，v1.0.11 起）+ ML Kit 中文 bundled（备选，轻量）；OCR 后做**双栏阅读顺序重排**（`MlKitOcrEngine.rebuildReadingOrder`，扫描试卷是左右双栏）；RapidOCR 额外跑**版面分析**（见「版面分析」节）
 - RapidOCR 为**源码模块** `rapidocr-src/OcrLibrary`（Apache-2.0，已入库 ~93MB）：NDK r27 + `ANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON` + onnxruntime **1.20**（16KB 页对齐，Maven 的 AAR 抽取）+ opencv-mobile 3.4.15（`src/sdk/`）。**16KB 页对齐是硬要求**（用户手机是 16KB 设备），换依赖时必须验证 PT_LOAD p_align=16384
 - 后台任务 = WorkManager 前台服务（dataSync 类型）：`ImportPipelineWorker`（导入/解析，断点续传按"已落盘分块"）与 `GenerateWorker`（AI 生成，断点续传按"已答即跳过"）；进度写 Room 表（import_jobs/generate_jobs），UI 观察 Flow
@@ -217,8 +217,23 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - **导入入口在标题栏**（`CompactTopBar` 的 actions：搜索 → 问 AI → 赤陶色「+ 导入」胶囊）。原右下角悬浮玻璃胶囊已删——它挡住列表最后一张卡片。0 题库时页面正中另有一个大号「导入题库」按钮（两个 `DropdownMenu` 用**各自的** open 标志，共用会导致两个菜单同时弹出）。
 - **问 AI 与刷题页共用同一个面板**：`AskAiPanel(state: AskAiState, ...)` 吃的是轻量 `AskAiState`（chat/asking/askStream/askError/askModelName/deepSolved/hint/placeholder），不是 `StudyUiState`。首页由 `ui/bank/HomeAskViewModel.kt` 提供状态（无「当前题目」上下文，走 `Prompts.ASK_DEFAULT` + `chatStreamMessages`）。**不要为了首页另写一套面板**，样式会走偏。
 - **长按题库卡片**（`combinedClickable(onLongClick = ...)`）弹二级菜单四项：置顶 / 取消置顶、编辑题库名称、归档 / 取消归档、删除题库。右上角 `MoreVert` 图标点开同一个菜单。
-- **归档**：`banks.archived = true` 的题库不进主列表，只在最下方一行小字「显示已归档题库（N）」/「收起已归档题库」居中显示，点开才渲染。`BankDao.observeAll()` 排序是 `ORDER BY pinned DESC, updatedAt DESC`。
+- **归档**：`banks.archived = true` 的题库不进主列表，只在最下方一行小字「显示已归档题库（N）」/「收起已归档题库」居中显示，点开才渲染。`BankDao.observeAll()` 排序是 `ORDER BY pinned DESC, sortOrder ASC, updatedAt DESC`；整卡长按拖拽会批量写入 `sortOrder`。
 - 改名的 `RenameBankDialog` 用 `OutlinedTextField` + 空值禁用「保存」；`BankListViewModel.renameBank` 会 `trim` 后空则忽略。
+
+## 未发版待测批次（2026-11-13，DB v13）
+
+> 这一批已提交/待推送，**没有发 Release、没有改版本号**。用户要求先推送 APK/源码供测试，确认无误后再发版。
+
+- **文档导入**：新增纯 JVM `DocxTextExtractor` + `SimpleWordXmlParser`，不再依赖 Android `ContentResolver` 才能读 docx；支持命名空间前缀、表格段落、`tab/br`、XML 实体和解压路径大小写。真实 `docx-sample.docx` 有回归测试。
+- **md/txt 分流**：文件选择器改为 `*/*`，由 `IngestFormatResolver` 按扩展名 → MIME → 文件头/文本启发式判定；无扩展名、通用 MIME、GBK/UTF-16/UTF-8 BOM 都能进正确解析链，不再误送图片 OCR。
+- **长文本导入**：`TextQuestionParser.parseLong` / `ChunkPlanner` 按题目/章节边界分块，块间有行重叠；单行超长时按字符硬切并保留 `min(600, size/10).coerceAtLeast(80)` 字符重叠且保护代理对。Worker 逐块落进度；AI 解析超时/空结果自动对半降载，原始文本硬上限 5,000,000 字符。
+- **离线答案正则**：`OfflineAnswerExtractor` 覆盖 `参考答案：A`、`【正确答案】A`、`答案 A`、`正确答案是A`、`参考答案及解析：A`、选项后同行答案、多选 `A,C,D`、判断题对/错等；答案不会再被吞入最后一个选项。
+- **本地学习数据**：设置页导出为 `.shua`（实际标准 ZIP），内含 `manifest.json`、`banks/*.json`、`learning-records.json`。
+- **题库组**：`banks.groupId` 建立聚合关系，组本身不复制题目；首页只显示顶层题库/组，组内子题库在组详情展示，组卡片题数按子题库实时聚合。删除组只解散容器，子题库回到首页。
+- **合并/撤销**：保留原 question id，只迁移归属；attempt/wrong/favorite/kill 的 bankId 跟随。撤销放在 Room 事务里，按快照 `questionId -> 原 bankId` 一次性恢复记录——**不能按原题库循环搬移**，否则同一条记录会被反复搬到最后一本。题库组暂不支持直接合并或嵌套（UI 会明确提示）。
+- **颜色/拖拽**：8 个区分色不含默认橘红和黑白；自定义支持 `#RGB/#RRGGBB/#AARRGGBB`，HSL 二维色盘 + 色相条 + 十六进制实时校验。整张题库卡片长按进入拖拽，跨越相邻卡时即时交换本地顺序，其他项用弹簧让位，松手一次写 `sortOrder`；长按不会再弹旧菜单/误进题库。
+- **动效**：一级 Tab 横向过场与 Dock 同组弹簧参数；问 AI Bottom Sheet 有橡皮筋阻尼/速度吸附；做题主按钮有 0.96 压缩、内阴影和释放回弹。
+- **回归基线**：`./gradlew testDebugUnitTest --rerun-tasks` 当前 **243 项全绿**。设备实证：长按拖拽顺序持久化、编辑批量栏可见、HSL 对话框不溢出、组详情 2 子库/4 题可作答、撤销后记录分别回到原题库。
 
 ## AI 解析流式预览（`ImportPipelineWorker` + `ImportScreen.kt`，v1.0.11）
 
