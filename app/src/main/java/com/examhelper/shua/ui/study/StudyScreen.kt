@@ -560,7 +560,8 @@ fun StudyScreen(
             onDismissRequest = { vm.toggleAsk() },
             containerColor = MaterialTheme.colorScheme.surface,
             // 键盘弹起时面板自动上移，输入框不会被遮挡
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+            // 半屏/全屏/关闭三档锚点，跟手阻尼与松手速度吸附由 Material3 完成。
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
         ) {
             AskAiPanel(
                 state = com.examhelper.shua.ui.study.AskAiState(

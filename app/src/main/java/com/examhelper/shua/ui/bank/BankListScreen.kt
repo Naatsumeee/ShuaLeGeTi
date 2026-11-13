@@ -634,7 +634,9 @@ fun BankListScreen(
         ModalBottomSheet(
             onDismissRequest = { askVm.toggle() },
             containerColor = MaterialTheme.colorScheme.surface,
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+            // 保留半展开锚点：内容较高时可在半屏/全屏/关闭三档间拖动，
+            // 松手由 Material3 按 velocity 自动选择最近锚点。
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
         ) {
             com.examhelper.shua.ui.study.AskAiPanel(
                 state = askState.copy(
