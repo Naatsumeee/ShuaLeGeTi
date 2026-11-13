@@ -23,6 +23,8 @@ class Converters {
     fun toStudyMode(value: String): StudyMode = StudyMode.valueOf(value)
 }
 
+const val APP_DATABASE_VERSION = 13
+
 @Database(
     entities = [
         QuestionBank::class,
@@ -37,7 +39,7 @@ class Converters {
         GenerateJob::class,
         BalanceSnapshot::class
     ],
-    version = 13,
+    version = APP_DATABASE_VERSION,
     exportSchema = false
 )
 @TypeConverters(Converters::class)

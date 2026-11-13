@@ -94,7 +94,7 @@ object AnswerSheet {
     )
 
     /** 主观题答案正文：`1．纯质性（homoplasmy):是指…`、`2.简述…` */
-    private val subjectiveRe = Regex("""^\s*(\d{1,4})\s*[.、．:：)）]\s*(\S.{6,})$""")
+    private val subjectiveRe = Regex("""^\s*(\d{1,4})\s*[.、．:：)）]\s*(\S.{2,})$""")
 
     /** 单个答案字符（用于跨行拼接） */
     private val loneAnswerRe = Regex("""^\s*([A-EGH]{1,8}|对|错|正确|错误)\s*$""")

@@ -1,5 +1,6 @@
 package com.examhelper.shua.ui.bank
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
@@ -130,11 +131,21 @@ fun BankListScreen(
     val archivedBanks = topLevelBanks.filter { it.archived }
     val listState = rememberLazyListState()
     val reorderScope = rememberCoroutineScope()
+    val askSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
     var orderedBanks by remember { mutableStateOf(banks) }
     var draggingBankId by remember { mutableStateOf<Long?>(null) }
     var dragOffsetY by remember { mutableFloatStateOf(0f) }
     var suppressClickFor by remember { mutableStateOf<Long?>(null) }
     val itemGapPx = with(LocalDensity.current) { 12.dp.toPx() }
+    val editScale by animateFloatAsState(if (editMode) 0.95f else 1f, spring(dampingRatio = 0.78f, stiffness = Spring.StiffnessMediumLow), label = "editScale")
+    val editAlpha by animateFloatAsState(if (editMode) 0.72f else 1f, spring(dampingRatio = 0.88f, stiffness = Spring.StiffnessMedium), label = "editAlpha")
+
+    LaunchedEffect(askOpen) { if (askOpen) askSheetState.show() }
+
+    BackHandler(enabled = editMode) {
+        editMode = false
+        selected.clear()
+    }
 
     LaunchedEffect(banks) {
         if (draggingBankId == null) orderedBanks = banks
@@ -150,6 +161,8 @@ fun BankListScreen(
                 com.examhelper.shua.ui.theme.GlassIconButton(
                     icon = Icons.Filled.Edit,
                     contentDescription = if (editMode) "退出编辑" else "编辑题库",
+                    tint = if (editMode) extra.terracottaDeep else MaterialTheme.colorScheme.onSurfaceVariant,
+                    containerColor = if (editMode) extra.terracottaSoft else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
                     onClick = {
                         Haptics.tap()
                         editMode = !editMode
@@ -279,7 +292,8 @@ fun BankListScreen(
             LazyColumn(
                     modifier = Modifier
                         .weight(1f)
-                        .fillMaxWidth(),
+                        .fillMaxWidth()
+                        .graphicsLayer { scaleX = editScale; scaleY = editScale; alpha = editAlpha },
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 96.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     state = listState
@@ -321,6 +335,7 @@ fun BankListScreen(
                     }
                     itemsIndexed(orderedBanks, key = { _, it -> it.id }) { _, bank ->
                         val dragging = draggingBankId == bank.id
+                        val cardShape = remember { RoundedCornerShape(20.dp) }
                         val visualOffset by animateFloatAsState(
                             targetValue = if (dragging) dragOffsetY else 0f,
                             animationSpec = if (dragging) {
@@ -341,6 +356,8 @@ fun BankListScreen(
                                     val scale = if (dragging) 1.012f else 1f
                                     scaleX = scale
                                     scaleY = scale
+                                    shape = cardShape
+                                    clip = true
                                     shadowElevation = if (dragging) 16f else 0f
                                 }
                                 .then(
@@ -360,7 +377,7 @@ fun BankListScreen(
                                 bank = bank,
                                 onClick = {
                                     if (suppressClickFor != bank.id) {
-                                        if (editMode) toggled(selected, bank.id) else onOpenBank(bank.id)
+                                        if (editMode) { Haptics.tap(); toggled(selected, bank.id) } else onOpenBank(bank.id)
                                     }
                                 },
                                 onRename = { renaming = bank },
@@ -501,6 +518,7 @@ fun BankListScreen(
                     onArchive = {
                         vm.batchArchive(selected.toList(), true)
                         selected.clear()
+                        editMode = false
                     },
                     onDelete = { deleteBatch = true }
                 )
@@ -569,9 +587,9 @@ fun BankListScreen(
                 val ids = selected.toList()
                 groupDialog = null
                 if (action == BankAction.MERGE) {
-                    vm.merge(name, note, null, ids) { selected.clear() }
+                    vm.merge(name, note, null, ids) { selected.clear(); editMode = false }
                 } else {
-                    vm.createGroup(name, note, color, ids) { selected.clear() }
+                    vm.createGroup(name, note, color, ids) { selected.clear(); editMode = false }
                 }
             }
         )
@@ -597,6 +615,7 @@ fun BankListScreen(
                     vm.batchDelete(selected.toList())
                     selected.clear()
                     deleteBatch = false
+                    editMode = false
                 }) { Text("删除", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { deleteBatch = false }) { Text("取消") } }
@@ -632,11 +651,11 @@ fun BankListScreen(
     // 首页问 AI 面板：与刷题页同一个组件，样式与交互完全一致
     if (askOpen) {
         ModalBottomSheet(
-            onDismissRequest = { askVm.toggle() },
+            onDismissRequest = { reorderScope.launch { askSheetState.hide(); askVm.toggle() } },
             containerColor = MaterialTheme.colorScheme.surface,
             // 保留半展开锚点：内容较高时可在半屏/全屏/关闭三档间拖动，
             // 松手由 Material3 按 velocity 自动选择最近锚点。
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+            sheetState = askSheetState
         ) {
             com.examhelper.shua.ui.study.AskAiPanel(
                 state = askState.copy(
@@ -644,7 +663,7 @@ fun BankListScreen(
                 ),
                 onAsk = askVm::ask,
                 onClear = askVm::clear,
-                onDismiss = { askVm.toggle() }
+                onDismiss = { reorderScope.launch { askSheetState.hide(); askVm.toggle() } }
             )
         }
     }
@@ -749,20 +768,23 @@ private fun BankCard(
                 }
             }
             Box {
-                Icon(
-                    Icons.Filled.DragHandle,
-                    contentDescription = "长按卡片拖动排序",
-                    tint = if (dragging) shuaColors.terracotta else MaterialTheme.colorScheme.outline,
-                    modifier = Modifier
-                        .size(34.dp)
-                        .clip(CircleShape)
-                        .background(if (dragging) shuaColors.terracottaSoft else Color.Transparent)
-                )
-                com.examhelper.shua.ui.theme.GlassIconButton(
-                    icon = Icons.Filled.MoreVert,
-                    contentDescription = "更多",
-                    onClick = { menuOpen = true }
-                )
+                if (editMode) {
+                    Icon(
+                        Icons.Filled.DragHandle,
+                        contentDescription = "长按卡片拖动排序",
+                        tint = if (dragging) shuaColors.terracotta else MaterialTheme.colorScheme.outline,
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(if (dragging) shuaColors.terracottaSoft else Color.Transparent)
+                    )
+                } else {
+                    com.examhelper.shua.ui.theme.GlassIconButton(
+                        icon = Icons.Filled.MoreVert,
+                        contentDescription = "更多",
+                        onClick = { menuOpen = true }
+                    )
+                }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                     DropdownMenuItem(
                         text = { Text(if (bank.pinned) "取消置顶" else "置顶") },

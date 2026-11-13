@@ -129,8 +129,11 @@ fun StudyScreen(
     val vm: StudyViewModel = viewModel()
     val state by vm.state.collectAsState()
     var showSheet by remember { mutableStateOf(false) }
+    val pageScope = rememberCoroutineScope()
+    val askSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
     val extra = shuaColors
     val compact = isCompactWidth()
+    LaunchedEffect(state.askOpen) { if (state.askOpen) askSheetState.show() }
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().safeTopPadding()) {
@@ -557,11 +560,11 @@ fun StudyScreen(
     // ---- 问 AI 追问面板 ----
     if (state.askOpen) {
         ModalBottomSheet(
-            onDismissRequest = { vm.toggleAsk() },
+            onDismissRequest = { pageScope.launch { askSheetState.hide(); vm.toggleAsk() } },
             containerColor = MaterialTheme.colorScheme.surface,
             // 键盘弹起时面板自动上移，输入框不会被遮挡
             // 半屏/全屏/关闭三档锚点，跟手阻尼与松手速度吸附由 Material3 完成。
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+            sheetState = askSheetState
         ) {
             AskAiPanel(
                 state = com.examhelper.shua.ui.study.AskAiState(
@@ -574,7 +577,7 @@ fun StudyScreen(
                 ),
                 onAsk = vm::ask,
                 onClear = vm::clearAsk,
-                onDismiss = { vm.toggleAsk() }
+                onDismiss = { pageScope.launch { askSheetState.hide(); vm.toggleAsk() } }
             )
         }
     }

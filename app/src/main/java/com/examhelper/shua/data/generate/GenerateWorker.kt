@@ -70,7 +70,22 @@ class GenerateWorker(
             chapters: List<String> = emptyList(),
             scope: String = if (forceAll) GenerateScope.ALL else GenerateScope.MISSING
         ) {
-            val request = OneTimeWorkRequestBuilder<GenerateWorker>()
+            WorkManager.getInstance(context)
+                .enqueueUniqueWork(
+                    uniqueName(bankId),
+                    ExistingWorkPolicy.KEEP,
+                    request(bankId, forceAll, concurrency, chapters, scope)
+                )
+        }
+
+        fun request(
+            bankId: Long,
+            forceAll: Boolean,
+            concurrency: Int,
+            chapters: List<String> = emptyList(),
+            scope: String = if (forceAll) GenerateScope.ALL else GenerateScope.MISSING
+        ): androidx.work.OneTimeWorkRequest =
+            OneTimeWorkRequestBuilder<GenerateWorker>()
                 .setInputData(
                     workDataOf(
                         KEY_BANK_ID to bankId,
@@ -81,10 +96,24 @@ class GenerateWorker(
                     )
                 )
                 .build()
-            WorkManager.getInstance(context)
-                .enqueueUniqueWork(uniqueName(bankId), ExistingWorkPolicy.KEEP, request)
-        }
 
+        fun enqueueSequential(
+            context: Context,
+            bankIds: List<Long>,
+            concurrency: Int = 3,
+            scope: String = GenerateScope.MISSING
+        ) {
+            val ids = bankIds.distinct()
+            if (ids.isEmpty()) return
+            val requests = ids.map { request(it, false, concurrency, scope = scope) }
+            val wm = WorkManager.getInstance(context)
+            var chain = wm.beginUniqueWork(
+                "maintenance_generate_${ids.joinToString("_")}",
+                ExistingWorkPolicy.REPLACE,
+                requests.first()
+            )
+            requests.drop(1).forEach { chain = chain.then(it) }
+        }
         fun cancel(context: Context, bankId: Long) {
             WorkManager.getInstance(context).cancelUniqueWork(uniqueName(bankId))
         }

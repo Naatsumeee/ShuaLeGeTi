@@ -1,6 +1,13 @@
 package com.examhelper.shua
 
 import androidx.compose.ui.graphics.toArgb
+import com.examhelper.shua.data.db.APP_DATABASE_VERSION
+import com.examhelper.shua.data.model.JsonCodec
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import com.examhelper.shua.data.export.ShuaArchive
 import com.examhelper.shua.data.model.ShuaBankFile
 import com.examhelper.shua.ui.bank.BankColors
@@ -65,4 +72,41 @@ class ArchiveAndColorTest {
         val gray = BankColors.toHsl(BankColors.parseHex("#808080")!!)
         assertEquals(0f, gray.saturation, 0.001f)
     }
-}
+
+    @Test
+    fun `shua manifest 包含版本组指针和题库 SHA256`() {
+        val groupBytes = """{"name":"组"}""".toByteArray()
+        val childBytes = """{"name":"子库"}""".toByteArray()
+        val group = ShuaBankFile(
+            bankId = 10L,
+            isGroup = true,
+            name = "组",
+            exportedAt = 1L,
+            questions = emptyList()
+        )
+        val child = ShuaBankFile(
+            bankId = 1L,
+            groupId = 10L,
+            groupName = "组",
+            mergedFrom = listOf(2L, 3L),
+            name = "子库",
+            exportedAt = 1L,
+            questions = emptyList()
+        )
+        val bytes = ShuaArchive.build(
+            1L,
+            listOf(group to groupBytes, child to childBytes),
+            "[]".toByteArray()
+        )
+        val manifest = JsonCodec.json
+            .parseToJsonElement(ShuaArchive.read(bytes).getValue(ShuaArchive.MANIFEST).decodeToString())
+            .jsonObject
+        assertEquals(BuildConfig.VERSION_NAME, manifest["appVersion"]!!.jsonPrimitive.content)
+        assertEquals(APP_DATABASE_VERSION, manifest["databaseVersion"]!!.jsonPrimitive.int)
+        val childMeta = manifest["banks"]!!.jsonArray
+            .map { it.jsonObject }
+            .first { it["bankId"]?.jsonPrimitive?.long == 1L }
+        assertEquals(10L, childMeta["groupId"]!!.jsonPrimitive.long)
+        assertEquals(ShuaArchive.sha256(childBytes), childMeta["sha256"]!!.jsonPrimitive.content)
+        assertEquals(2, childMeta["mergedFrom"]!!.jsonArray.size)
+    }}

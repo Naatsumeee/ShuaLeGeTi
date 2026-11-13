@@ -180,4 +180,20 @@ class BankJsonImportTest {
         assertTrue(err is BankJsonImport.ParseException)
         assertTrue(err!!.message!!.contains("没有找到 JSON"))
     }
-}
+
+    @Test
+    fun oldLearningDataJsonIsRejectedAsBank() {
+        val raw = """
+            {
+              "schema": "shualegeti.export.v1",
+              "attempts": [],
+              "wrongBook": [],
+              "favorites": [],
+              "kills": []
+            }
+        """.trimIndent()
+        val err = runCatching { BankJsonImport.parse(raw) }.exceptionOrNull()
+        assertNotNull(err)
+        assertTrue(err is BankJsonImport.ParseException)
+        assertTrue(err!!.message!!.contains("旧版学习数据文件"))
+    }}

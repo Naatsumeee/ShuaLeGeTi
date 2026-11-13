@@ -51,6 +51,7 @@ import com.examhelper.shua.ui.exam.ExamReportScreen
 import com.examhelper.shua.ui.exam.ExamScreen
 import com.examhelper.shua.ui.generate.GenerateScreen
 import com.examhelper.shua.ui.import_.ImportScreen
+import com.examhelper.shua.ui.maintenance.MaintenancePickerScreen
 import com.examhelper.shua.ui.question.SingleQuestionScreen
 import com.examhelper.shua.ui.search.SearchScreen
 import com.examhelper.shua.ui.settings.SettingsScreen
@@ -70,8 +71,8 @@ object Routes {
     const val IMPORT_FILE = "import_file?jobId={jobId}"
     const val GENERATE = "generate/{bankId}"
     const val SEARCH = "search"
-    const val BANK_DETAIL = "bank/{bankId}"
-    const val STUDY_SETUP = "study_setup/{bankId}/{mode}"
+    const val BANK_DETAIL = "bank/{bankId}?allGroup={allGroup}"
+    const val STUDY_SETUP = "study_setup/{bankId}/{mode}?allGroup={allGroup}"
     const val STUDY = "study/{bankId}/{mode}?filter={filter}"
     const val EXAM = "exam/{bankId}?filter={filter}&count={count}"
     const val EXAM_REPORT = "exam_report/{runId}"
@@ -82,11 +83,14 @@ object Routes {
      * 用 query 参数而不是路径段，是因为空字符串没法作为可选路径段。
      */
     const val SINGLE_QUESTION = "single_question/{questionId}?runId={runId}"
-    const val EDITOR = "editor/{bankId}"
+    const val EDITOR = "editor/{bankId}?queueIds={queueIds}&queueIndex={queueIndex}"
+    const val MAINTENANCE = "maintenance/{kind}?ids={ids}"
 
     fun importFile(jobId: String? = null) = "import_file" + (jobId?.let { "?jobId=$it" } ?: "")
-    fun bankDetail(bankId: Long) = "bank/$bankId"
-    fun studySetup(bankId: Long, mode: StudyMode) = "study_setup/$bankId/${mode.name}"
+    fun bankDetail(bankId: Long, allGroup: Boolean = false) = "bank/$bankId" + (if (allGroup) "?allGroup=true" else "")
+    fun maintenance(kind: String, ids: List<Long>) = "maintenance/$kind?ids=${ids.joinToString(",")}"
+    fun editor(bankId: Long, queueIds: List<Long> = emptyList(), queueIndex: Int = -1) = "editor/$bankId" + (if (queueIds.isEmpty()) "" else "?queueIds=${queueIds.joinToString(",")}&queueIndex=$queueIndex")
+    fun studySetup(bankId: Long, mode: StudyMode, allGroup: Boolean = false) = "study_setup/$bankId/${mode.name}" + (if (allGroup) "?allGroup=true" else "")
     fun study(bankId: Long, mode: StudyMode, filterJson: String? = null) =
         "study/$bankId/${mode.name}" + (filterJson?.let { "?filter=${Uri.encode(it)}" } ?: "")
     fun exam(bankId: Long, filterJson: String? = null, count: Int) =
@@ -185,7 +189,10 @@ fun AppRoot(fontScale: Float = 1f) {
                         if (!isTabToTab(initialState.destination.route, targetState.destination.route)) {
                             // 二级页面（详情/刷题/导入）保持系统默认的快速淡入，
                             // 只有一级 tab 之间才做横向跟手过场。
-                            EnterTransition.None
+                            slideInHorizontally(
+                                animationSpec = spring(dampingRatio = 0.82f, stiffness = Spring.StiffnessMediumLow),
+                                initialOffsetX = { full -> full / 4 }
+                            ) + fadeIn(tween(120))
                         } else {
                             val from = tabIndex(initialState.destination.route.orEmpty())
                             val to = tabIndex(targetState.destination.route.orEmpty())
@@ -198,7 +205,10 @@ fun AppRoot(fontScale: Float = 1f) {
                     },
                     exitTransition = {
                         if (!isTabToTab(initialState.destination.route, targetState.destination.route)) {
-                            ExitTransition.None
+                            slideOutHorizontally(
+                                animationSpec = tween(160, easing = androidx.compose.animation.core.FastOutLinearInEasing),
+                                targetOffsetX = { full -> -full / 6 }
+                            ) + fadeOut(tween(110))
                         } else {
                             val from = tabIndex(initialState.destination.route.orEmpty())
                             val to = tabIndex(targetState.destination.route.orEmpty())
@@ -218,7 +228,12 @@ fun AppRoot(fontScale: Float = 1f) {
                                 animationSpec = spring(dampingRatio = 0.84f, stiffness = Spring.StiffnessMedium),
                                 initialOffsetX = { full -> dir * full / 4 }
                             ) + fadeIn(tween(90))
-                        } else fadeIn(tween(160))
+                        } else {
+                            slideInHorizontally(
+                                animationSpec = spring(dampingRatio = 0.84f, stiffness = Spring.StiffnessMedium),
+                                initialOffsetX = { full -> -full / 4 }
+                            ) + fadeIn(tween(100))
+                        }
                     },
                     popExitTransition = {
                         if (isTabToTab(initialState.destination.route, targetState.destination.route)) {
@@ -229,7 +244,12 @@ fun AppRoot(fontScale: Float = 1f) {
                                 animationSpec = tween(150, easing = androidx.compose.animation.core.FastOutLinearInEasing),
                                 targetOffsetX = { full -> -dir * full / 4 }
                             ) + fadeOut(tween(110))
-                        } else fadeOut(tween(120))
+                        } else {
+                            slideOutHorizontally(
+                                animationSpec = tween(160, easing = androidx.compose.animation.core.FastOutLinearInEasing),
+                                targetOffsetX = { full -> full / 6 }
+                            ) + fadeOut(tween(110))
+                        }
                     },
                     modifier = Modifier
                         .fillMaxSize()
@@ -277,33 +297,66 @@ fun AppRoot(fontScale: Float = 1f) {
                         val bankId = entry.arguments?.getString("bankId")?.toLongOrNull() ?: return@composable
                         BankDetailScreen(
                             bankId = bankId,
+                            allGroup = entry.arguments?.getString("allGroup") == "true",
                             onBack = { navController.popBackStack() },
-                            onStartStudy = { mode -> navController.navigate(Routes.studySetup(bankId, mode)) },
-                            onGenerate = { navController.navigate("generate/$bankId") },
-                            onEdit = { navController.navigate("editor/$bankId") },
-                            onOpenGroupChild = { childId -> navController.navigate(Routes.bankDetail(childId)) }
+                            onStartStudy = { mode, allGroupMode -> navController.navigate(Routes.studySetup(bankId, mode, allGroupMode)) },
+                            onGenerate = { ids -> navController.navigate(Routes.maintenance("generate", ids)) },
+                            onEdit = { ids -> navController.navigate(Routes.maintenance("edit", ids)) },
+                            onOpenGroupChild = { childId -> navController.navigate(Routes.bankDetail(childId)) },
+                            onOpenGroupAll = { navController.navigate(Routes.bankDetail(bankId, true)) }
                         )
                     }
                     composable(Routes.STUDY_SETUP) { entry ->
                         val bankId = entry.arguments?.getString("bankId")?.toLongOrNull() ?: return@composable
-                        val modeName = entry.arguments?.getString("mode") ?: "SEQUENTIAL"
+                        val mode = runCatching {
+                            StudyMode.valueOf(entry.arguments?.getString("mode").orEmpty())
+                        }.getOrDefault(StudyMode.SEQUENTIAL)
+                        val allGroup = entry.arguments?.getString("allGroup") == "true"
+                        val goStudy: (String?, Int) -> Unit = { filterJson, examCount ->
+                            val route = if (mode == StudyMode.EXAM) {
+                                Routes.exam(bankId, filterJson, examCount)
+                            } else {
+                                Routes.study(bankId, mode, filterJson)
+                            }
+                            navController.navigate(route)
+                        }
                         StudySetupScreen(
                             bankId = bankId,
-                            modeName = modeName,
+                            modeName = mode.name,
+                            allGroup = allGroup,
+                            onStart = goStudy,
                             onBack = { navController.popBackStack() },
                             onResumeMode = { resumeMode, filterJson ->
-                                if (resumeMode == StudyMode.EXAM) {
-                                    navController.navigate(Routes.exam(bankId, filterJson, 30))
+                                val route = if (resumeMode == StudyMode.EXAM) {
+                                    Routes.exam(bankId, filterJson, 0)
                                 } else {
-                                    navController.navigate(Routes.study(bankId, resumeMode, filterJson))
+                                    Routes.study(bankId, resumeMode, filterJson)
                                 }
+                                navController.navigate(route)
+                            }
+                        )
+                    }
+                    composable(Routes.MAINTENANCE) { entry ->
+                        val kind = entry.arguments?.getString("kind") ?: "generate"
+                        val ids = entry.arguments?.getString("ids").orEmpty().split(',').mapNotNull { it.toLongOrNull() }
+                        MaintenancePickerScreen(
+                            kind = kind,
+                            bankIds = ids,
+                            onBack = { navController.popBackStack() },
+                            onStartOne = { id ->
+                                navController.navigate(if (kind == "generate") "generate/$id" else Routes.editor(id))
                             },
-                            onStart = { filterJson, examCount ->
-                                val mode = runCatching { StudyMode.valueOf(modeName) }.getOrDefault(StudyMode.SEQUENTIAL)
-                                if (mode == StudyMode.EXAM) {
-                                    navController.navigate(Routes.exam(bankId, filterJson, examCount))
-                                } else {
-                                    navController.navigate(Routes.study(bankId, mode, filterJson))
+                            onStartSequence = { sequence ->
+                                if (sequence.isNotEmpty()) {
+                                    if (kind == "generate") {
+                                        com.examhelper.shua.data.generate.GenerateWorker.enqueueSequential(
+                                            com.examhelper.shua.ShuaApp.instance,
+                                            sequence
+                                        )
+                                        navController.popBackStack()
+                                    } else {
+                                        navController.navigate(Routes.editor(sequence.first(), sequence, 0))
+                                    }
                                 }
                             }
                         )
@@ -352,7 +405,20 @@ fun AppRoot(fontScale: Float = 1f) {
                     }
                     composable(Routes.EDITOR) { entry ->
                         val bankId = entry.arguments?.getString("bankId")?.toLongOrNull() ?: return@composable
-                        EditorScreen(bankId = bankId, onBack = { navController.popBackStack() })
+                        val queueIds = entry.arguments?.getString("queueIds").orEmpty()
+                            .split(',')
+                            .mapNotNull { it.toLongOrNull() }
+                        val queueIndex = entry.arguments?.getString("queueIndex")?.toIntOrNull() ?: -1
+                        EditorScreen(bankId = bankId, onBack = {
+                            val next = queueIndex + 1
+                            if (next in queueIds.indices) {
+                                navController.navigate(Routes.editor(queueIds[next], queueIds, next)) {
+                                    popUpTo(entry.destination.id) { inclusive = true }
+                                }
+                            } else {
+                                navController.popBackStack()
+                            }
+                        })
                     }
                 }
             }

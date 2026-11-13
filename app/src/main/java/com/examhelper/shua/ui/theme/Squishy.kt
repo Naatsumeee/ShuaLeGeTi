@@ -49,28 +49,32 @@ fun SquishyButtonSurface(
     }
     Box(
         modifier = modifier
-            .clip(shape)
             .graphicsLayer {
                 scaleX = scale.value
                 scaleY = scale.value
-                // 只做很小的抬升阴影，释放时随 scale 回弹
-                shadowElevation = (1f - scale.value) * 8f
+                this.shape = shape
+                clip = true
+                // 常规态不画外阴影；只有按下时才让圆角按钮轻微抬起。
+                shadowElevation = if (pressed) (1f - scale.value) * 8f else 0f
                 ambientShadowColor = shadowColor
                 spotShadowColor = shadowColor
             }
+            .clip(shape)
             .drawWithContent {
                 drawContent()
-                // 顶部/左上内阴影，模拟按下去时边缘陷进纸面
-                drawRect(
-                    brush = Brush.linearGradient(
-                        0f to shadowColor,
-                        0.22f to Color.Transparent,
-                        0.78f to Color.Transparent,
-                        1f to shadowColor.copy(alpha = shadowColor.alpha * 0.7f),
-                        start = Offset.Zero,
-                        end = Offset(size.width, size.height)
+                if (pressed) {
+                    // 按下时才出现内侧压痕，避免常规态出现整块暗色矩形。
+                    drawRect(
+                        brush = Brush.linearGradient(
+                            0f to shadowColor,
+                            0.22f to Color.Transparent,
+                            0.78f to Color.Transparent,
+                            1f to shadowColor.copy(alpha = shadowColor.alpha * 0.7f),
+                            start = Offset.Zero,
+                            end = Offset(size.width, size.height)
+                        )
                     )
-                )
+                }
             },
         content = content
     )

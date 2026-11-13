@@ -22,6 +22,8 @@ class StudySetupViewModel(
     }.getOrDefault(StudyMode.SEQUENTIAL)
 
     data class UiState(
+        /** 题库组内的子题库；普通题库为空 */
+        val groupBanks: List<QuestionBank> = emptyList(),
         val bank: QuestionBank? = null,
         val chapters: List<String> = emptyList(),
         val typesPresent: List<String> = emptyList(),
@@ -39,6 +41,7 @@ class StudySetupViewModel(
 
     private val container = ShuaApp.instance.container
     private var allCount = 0
+    private var groupQuestions: List<com.examhelper.shua.data.db.Question> = emptyList()
 
     init {
         viewModelScope.launch {
@@ -49,8 +52,13 @@ class StudySetupViewModel(
                 container.bankRepo.getQuestions(bankId)
             }
             allCount = questions.size
+            groupQuestions = questions
+            val groupBanks = if (bank?.isGroup == true) {
+                container.bankRepo.getGroupBanks(bankId)
+            } else emptyList()
             _state.value = UiState(
                 bank = bank,
+                groupBanks = groupBanks,
                 chapters = questions.mapNotNull { it.chapter?.takeIf { c -> c.isNotBlank() } }.distinct(),
                 typesPresent = questions.map { it.type.name }.distinct().sorted(),
                 subtypesPresent = questions.mapNotNull { it.subtype }.distinct().sorted(),
@@ -68,6 +76,32 @@ class StudySetupViewModel(
             runCatching { container.studyRepo.resetProgress(bankId, mode) }
             _state.value = _state.value.copy(saved = _state.value.saved.filterNot { it.mode == mode })
         }
+    }
+
+    fun toggleBank(id: Long) {
+        val current = _state.value.filter
+        val next = if (id in current.bankIds) current.bankIds - id else current.bankIds + id
+        val selected = if (next.isEmpty()) groupQuestions else groupQuestions.filter { it.bankId in next }
+        _state.value = _state.value.copy(
+            filter = current.copy(bankIds = next, chapters = emptyList(), types = emptyList(), subtypes = emptyList()),
+            chapters = selected.mapNotNull { it.chapter?.takeIf { c -> c.isNotBlank() } }.distinct(),
+            typesPresent = selected.map { it.type.name }.distinct().sorted(),
+            subtypesPresent = selected.mapNotNull { it.subtype }.distinct().sorted()
+        )
+        viewModelScope.launch {
+            _state.value = _state.value.copy(matchCount = container.studyRepo.filteredQuestions(bankId, _state.value.filter.copy(bankIds = next, chapters = emptyList(), types = emptyList(), subtypes = emptyList())).size)
+        }
+    }
+
+    fun selectAllBanks() {
+        val ids = _state.value.groupBanks.map { it.id }
+        _state.value = _state.value.copy(
+            filter = _state.value.filter.copy(bankIds = ids, chapters = emptyList(), types = emptyList(), subtypes = emptyList()),
+            chapters = groupQuestions.mapNotNull { it.chapter?.takeIf { c -> c.isNotBlank() } }.distinct(),
+            typesPresent = groupQuestions.map { it.type.name }.distinct().sorted(),
+            subtypesPresent = groupQuestions.mapNotNull { it.subtype }.distinct().sorted(),
+            matchCount = groupQuestions.size
+        )
     }
 
     fun toggleChapter(c: String) = mutateFilter {

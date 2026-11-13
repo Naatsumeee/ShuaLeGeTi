@@ -65,6 +65,9 @@ object Haptics {
     @Volatile
     private var duration: Int = 2
 
+    @Volatile
+    private var lastPlayedAt: Long = 0L
+
     fun setEnabled(value: Boolean) {
         enabled = value
     }
@@ -110,7 +113,16 @@ object Haptics {
                 vibrate(vibrator, ms, VibrationEffect.DEFAULT_AMPLITUDE)
                 return
             }
-            vibrate(vibrator, ms, amplitudeOf())
+            val now = System.currentTimeMillis()
+            val idle = now - lastPlayedAt > 30_000L
+            lastPlayedAt = now
+            val amp = amplitudeOf()
+            if (idle) {
+                // 部分 ROM 空闲后会吞掉第一记短脉冲；预脉冲与真实反馈合成一个波形。
+                vibrateEffect(vibrator, VibrationEffect.createWaveform(longArrayOf(0L, 2L, 12L, ms), intArrayOf(0, 8, 0, amp), -1))
+            } else {
+                vibrate(vibrator, ms, amp)
+            }
         }
     }
 
@@ -163,14 +175,12 @@ object Haptics {
     }.getOrDefault(false)
 
     private fun vibrate(vibrator: Vibrator, ms: Long, amp: Int) {
-        val effect = VibrationEffect.createOneShot(ms, amp)
+        vibrateEffect(vibrator, VibrationEffect.createOneShot(ms, amp))
+    }
+
+    private fun vibrateEffect(vibrator: Vibrator, effect: VibrationEffect) {
         if (Build.VERSION.SDK_INT >= 33) {
-            // 显式标注为触摸反馈：不标的话部分 ROM 会套用系统「触感强度」把
-            // amplitude 覆盖掉（这也是"强度调节没感觉"的第二个来源）。
-            vibrator.vibrate(
-                effect,
-                VibrationAttributes.createForUsage(VibrationAttributes.USAGE_TOUCH)
-            )
+            vibrator.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_TOUCH))
         } else {
             @Suppress("DEPRECATION")
             vibrator.vibrate(effect)

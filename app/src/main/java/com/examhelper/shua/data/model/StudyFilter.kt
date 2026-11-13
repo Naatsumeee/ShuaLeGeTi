@@ -6,6 +6,8 @@ import kotlinx.serialization.encodeToString
 /** 刷题前的多维筛选条件（也作为进度重置的指纹） */
 @Serializable
 data class StudyFilter(
+    /** 选中的子题库 id（空 = 全部；仅题库组范围页使用） */
+    val bankIds: List<Long> = emptyList(),
     /** 选中的章节（空 = 全部） */
     val chapters: List<String> = emptyList(),
     /** 选中的题型 QuestionType.name（空 = 全部） */
@@ -24,7 +26,7 @@ data class StudyFilter(
     val freshAnswer: Boolean = false
 ) {
     val isDefault: Boolean
-        get() = chapters.isEmpty() && types.isEmpty() && subtypes.isEmpty() &&
+        get() = bankIds.isEmpty() && chapters.isEmpty() && types.isEmpty() && subtypes.isEmpty() &&
             status == "ALL" && !freshAnswer
 
     fun fingerprint(): String = JsonCodec.json.encodeToString(this)

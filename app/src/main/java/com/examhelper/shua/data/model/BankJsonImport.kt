@@ -223,6 +223,12 @@ object BankJsonImport {
                 throw ParseException("JSON 格式有误（${it.message?.take(60)}）。可以让 AI 重新输出一次。")
             }
 
+        if (root is JsonObject && (
+                root["schema"].asTextOrNull()?.startsWith("shualegeti.export.") == true ||
+                (root.containsKey("attempts") && root.containsKey("wrongBook"))
+            )) {
+            throw ParseException("这是旧版学习数据文件，不含题库内容，不能作为题库导入；请从“导出学习数据”生成新的 .shua 文件。")
+        }
         // 顶层可能是：对象（含 questions）/ 直接是题目数组 / 单个题目对象
         val questionsEl: JsonArray = when {
             root is JsonArray -> root

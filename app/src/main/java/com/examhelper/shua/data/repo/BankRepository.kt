@@ -300,6 +300,7 @@ class BankRepository(
      */
     suspend fun exportBank(bankId: Long, includeAiGenerated: Boolean = true): ShuaBankFile? {
         val bank = bankDao.getById(bankId) ?: return null
+        val groupName = bank.groupId?.let { bankDao.getById(it)?.name }
         val questions = questionDao.getByBank(bankId)
         val exported = questions.map { q ->
             val stripAi = !includeAiGenerated && q.aiGenerated
@@ -321,6 +322,11 @@ class BankRepository(
             )
         }
         return ShuaBankFile(
+            bankId = bank.id,
+            groupId = bank.groupId,
+            groupName = groupName,
+            isGroup = bank.isGroup,
+            mergedFrom = JsonCodec.decodeIdList(bank.mergedFromJson),
             name = bank.name,
             sourceFileName = bank.sourceFileName,
             exportedAt = System.currentTimeMillis(),

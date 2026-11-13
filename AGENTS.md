@@ -1,6 +1,6 @@
 ﻿# AGENTS.md — 刷了个题 (ShuaGeLeTi) 项目记忆
 
-> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-13（**v1.1.0 已发布**；`main` 另有未发版导入/题库组/动效修复，等待用户测试）。
+> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-14（**v1.1.0 已发布**；`main` 另有未发版导入/题库组/动效修复，等待用户测试）。
 >
 > **文档分工**（别把三份混在一起）：
 > - `AGENTS.md`（本文件，**入库**）—— 项目的长期公共记忆：架构、决策、踩过的坑、待办。所有 Agent 都该读。
@@ -220,20 +220,21 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - **归档**：`banks.archived = true` 的题库不进主列表，只在最下方一行小字「显示已归档题库（N）」/「收起已归档题库」居中显示，点开才渲染。`BankDao.observeAll()` 排序是 `ORDER BY pinned DESC, sortOrder ASC, updatedAt DESC`；整卡长按拖拽会批量写入 `sortOrder`。
 - 改名的 `RenameBankDialog` 用 `OutlinedTextField` + 空值禁用「保存」；`BankListViewModel.renameBank` 会 `trim` 后空则忽略。
 
-## 未发版待测批次（2026-11-13，DB v13）
+## 未发版待测批次（2026-11-14，DB v13）
 
-> 这一批已提交/待推送，**没有发 Release、没有改版本号**。用户要求先推送 APK/源码供测试，确认无误后再发版。
+> 当前工作区待提交，**没有发 Release、没有改版本号**。用户要求先推送 APK/源码供测试，确认无误后再发版。
 
 - **文档导入**：新增纯 JVM `DocxTextExtractor` + `SimpleWordXmlParser`，不再依赖 Android `ContentResolver` 才能读 docx；支持命名空间前缀、表格段落、`tab/br`、XML 实体和解压路径大小写。真实 `docx-sample.docx` 有回归测试。
 - **md/txt 分流**：文件选择器改为 `*/*`，由 `IngestFormatResolver` 按扩展名 → MIME → 文件头/文本启发式判定；无扩展名、通用 MIME、GBK/UTF-16/UTF-8 BOM 都能进正确解析链，不再误送图片 OCR。
 - **长文本导入**：`TextQuestionParser.parseLong` / `ChunkPlanner` 按题目/章节边界分块，块间有行重叠；单行超长时按字符硬切并保留 `min(600, size/10).coerceAtLeast(80)` 字符重叠且保护代理对。Worker 逐块落进度；AI 解析超时/空结果自动对半降载，原始文本硬上限 5,000,000 字符。
 - **离线答案正则**：`OfflineAnswerExtractor` 覆盖 `参考答案：A`、`【正确答案】A`、`答案 A`、`正确答案是A`、`参考答案及解析：A`、选项后同行答案、多选 `A,C,D`、判断题对/错等；答案不会再被吞入最后一个选项。
-- **本地学习数据**：设置页导出为 `.shua`（实际标准 ZIP），内含 `manifest.json`、`banks/*.json`、`learning-records.json`。
-- **题库组**：`banks.groupId` 建立聚合关系，组本身不复制题目；首页只显示顶层题库/组，组内子题库在组详情展示，组卡片题数按子题库实时聚合。删除组只解散容器，子题库回到首页。
+- **本地学习数据**：设置页导出为 `.shua`（实际标准 ZIP），内含 `manifest.json`、`banks/*.json`、`learning-records.json`；manifest 记录应用版本、导出时间、数据库版本、组指针与每个题库的 SHA256，旧版纯学习记录 JSON 不能作为题库导入。
+- **题库组**：`banks.groupId` 建立聚合关系，组本身不复制题目；首页只显示顶层题库/组，组详情只显示“全题库组”和子题库，组卡片题数按子题库实时聚合。全题库组是虚拟聚合入口，不创建真实题库；从它作答、错题、收藏、斩题时记录归属到题目的真实子题库。删除组只解散容器，子题库回到首页。
 - **合并/撤销**：保留原 question id，只迁移归属；attempt/wrong/favorite/kill 的 bankId 跟随。撤销放在 Room 事务里，按快照 `questionId -> 原 bankId` 一次性恢复记录——**不能按原题库循环搬移**，否则同一条记录会被反复搬到最后一本。题库组暂不支持直接合并或嵌套（UI 会明确提示）。
 - **颜色/拖拽**：8 个区分色不含默认橘红和黑白；自定义支持 `#RGB/#RRGGBB/#AARRGGBB`，HSL 二维色盘 + 色相条 + 十六进制实时校验。整张题库卡片长按进入拖拽，跨越相邻卡时即时交换本地顺序，其他项用弹簧让位，松手一次写 `sortOrder`；长按不会再弹旧菜单/误进题库。
 - **动效**：一级 Tab 横向过场与 Dock 同组弹簧参数；问 AI Bottom Sheet 有橡皮筋阻尼/速度吸附；做题主按钮有 0.96 压缩、内阴影和释放回弹。
-- **回归基线**：`./gradlew testDebugUnitTest --rerun-tasks` 当前 **243 项全绿**。设备实证：长按拖拽顺序持久化、编辑批量栏可见、HSL 对话框不溢出、组详情 2 子库/4 题可作答、撤销后记录分别回到原题库。
+- **题库维护**：AI 生成与编辑章节先进入维护选择页；支持单库维护和按子库顺序的一键维护，选择页明确提示耗时与失败率风险。
+- **回归基线**：`./gradlew testDebugUnitTest --rerun-tasks` 当前 **246 项全绿**。设备实证：长按拖拽顺序持久化、编辑批量栏可见、HSL 对话框不溢出、组详情 2 子库/4 题可作答、全题库组范围页可选子库、作答记录落到子题库而非组 id、撤销后记录分别回到原题库。
 
 ## AI 解析流式预览（`ImportPipelineWorker` + `ImportScreen.kt`，v1.0.11）
 

@@ -52,6 +52,7 @@ import com.examhelper.shua.ui.theme.shuaColors
 fun StudySetupScreen(
     bankId: Long,
     modeName: String,
+    allGroup: Boolean = false,
     onStart: (filterJson: String?, examCount: Int) -> Unit,
     onBack: () -> Unit,
     /** 从「回到上次进度」跳到另一个模式的做题页 */
@@ -99,6 +100,12 @@ fun StudySetupScreen(
                     },
                     onForget = { vm.forget(it) }
                 )
+            }
+
+            if (state.groupBanks.isNotEmpty()) {
+                FilterGroup(title = "题库", hint = "不选 = 全部") {
+                    ChipFlow(state.groupBanks.map { it.id to it.name }, state.filter.bankIds, vm::toggleBank)
+                }
             }
 
             if (state.chapters.isNotEmpty()) {
@@ -151,7 +158,7 @@ fun StudySetupScreen(
         StartBar(
             mode = mode,
             matchCount = state.matchCount,
-            total = state.bank?.questionCount ?: 0,
+            total = if (state.filter.bankIds.isNotEmpty()) state.matchCount else state.bank?.questionCount ?: 0,
             startCount = if (mode == StudyMode.EXAM) {
                 if (state.examCount == 0) state.matchCount
                 else state.examCount.coerceAtMost(state.matchCount)

@@ -120,7 +120,7 @@ class ExamViewModel(
                 val correct = if (q.answer.isNullOrBlank()) false
                 else StudyRepository.judgeAnswer(q, userAnswer.ifBlank { "∅" })
                 studyRepo.submitAnswer(
-                    bankId = bankId, question = q, mode = StudyMode.EXAM,
+                    question = q, mode = StudyMode.EXAM,
                     userAnswer = userAnswer, correct = correct,
                     runId = runId, durationMs = durations[q.id]
                 )

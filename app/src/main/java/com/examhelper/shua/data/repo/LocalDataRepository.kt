@@ -47,11 +47,10 @@ class LocalDataRepository(
      */
     suspend fun exportShuaPackage(context: Context, uri: Uri): ExportSummary =
         withContext(Dispatchers.IO) {
-            val recordJson = buildLearningRecordsJson()
             val allBanks = bankDao.observeAll().first()
-            val banks = allBanks.filterNot { it.archived }
-            // 题库组本身不存题目，导出时展开成组内正常题库；否则会生成空组 JSON。
-            val exportable = allBanks.filter { !it.isGroup && !it.archived }
+            val banks = allBanks
+            // 题库组也作为元数据记录导出；子题库通过 groupId 指向它。
+            val exportable = banks
             val exported = exportable.mapNotNull { b ->
                 bankRepo.exportBank(b.id, includeAiGenerated = true)?.let { file ->
                     file to Json { prettyPrint = true; ignoreUnknownKeys = true }
@@ -59,6 +58,8 @@ class LocalDataRepository(
                         .toByteArray(Charsets.UTF_8)
                 }
             }
+            val bankShaById = exported.mapNotNull { (file, bytes) -> file.bankId?.let { it to ShuaArchive.sha256(bytes) } }.toMap()
+            val recordJson = buildLearningRecordsJson(bankShaById)
             val bytes = ShuaArchive.build(System.currentTimeMillis(), exported, recordJson.toByteArray(Charsets.UTF_8))
             context.contentResolver.openOutputStream(uri)?.use { out -> out.write(bytes) }
                 ?: error("无法写入所选文件")
@@ -73,7 +74,7 @@ class LocalDataRepository(
             )
         }
 
-    private suspend fun buildLearningRecordsJson(): String {
+    private suspend fun buildLearningRecordsJson(bankShaById: Map<Long, String> = emptyMap()): String {
         val banks = bankDao.observeAll().first()
         val bankNames = banks.associate { it.id to it.name }
         val attempts = recordDao.allAttempts()
@@ -92,22 +93,22 @@ class LocalDataRepository(
             put("bankCount", banks.size)
             put("questionCount", questions.size)
             put("attempts", buildJsonArray { attempts.forEach { r -> add(buildJsonObject {
-                put("questionId", r.questionId); put("bankId", r.bankId)
+                put("questionId", r.questionId); put("bankId", r.bankId); put("bankSha256", bankShaById[r.bankId] ?: "")
                 put("bankName", bankNames[r.bankId] ?: ""); put("stem", stemOf(r.questionId))
                 put("mode", r.mode.name); put("userAnswer", r.userAnswer); put("correct", r.correct)
                 put("selfRated", r.selfRated); put("durationMs", r.durationMs ?: 0L); put("answeredAt", r.answeredAt)
             }) } })
             put("wrongBook", buildJsonArray { wrong.forEach { r -> add(buildJsonObject {
-                put("questionId", r.questionId); put("bankName", bankNames[r.bankId] ?: "")
+                put("questionId", r.questionId); put("bankId", r.bankId); put("bankSha256", bankShaById[r.bankId] ?: ""); put("bankName", bankNames[r.bankId] ?: "")
                 put("stem", stemOf(r.questionId)); put("wrongCount", r.wrongCount)
                 put("mastered", r.mastered); put("lastWrongAt", r.lastWrongAt)
             }) } })
             put("favorites", buildJsonArray { favorites.forEach { r -> add(buildJsonObject {
-                put("questionId", r.questionId); put("bankName", bankNames[r.bankId] ?: "")
+                put("questionId", r.questionId); put("bankId", r.bankId); put("bankSha256", bankShaById[r.bankId] ?: ""); put("bankName", bankNames[r.bankId] ?: "")
                 put("stem", stemOf(r.questionId)); put("createdAt", r.createdAt)
             }) } })
             put("kills", buildJsonArray { kills.forEach { r -> add(buildJsonObject {
-                put("questionId", r.questionId); put("bankName", bankNames[r.bankId] ?: "")
+                put("questionId", r.questionId); put("bankId", r.bankId); put("bankSha256", bankShaById[r.bankId] ?: ""); put("bankName", bankNames[r.bankId] ?: "")
                 put("stem", stemOf(r.questionId)); put("killedAt", r.killedAt)
             }) } })
         }

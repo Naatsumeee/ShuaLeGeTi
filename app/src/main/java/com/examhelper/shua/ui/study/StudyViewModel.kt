@@ -264,7 +264,7 @@ class StudyViewModel(
         if (hasAnswer) {
             viewModelScope.launch {
                 studyRepo.submitAnswer(
-                    bankId = bankId, question = q, mode = mode,
+                    question = q, mode = mode,
                     userAnswer = answerStr, correct = correct == true,
                     durationMs = duration
                 )
@@ -292,7 +292,7 @@ class StudyViewModel(
         val duration = elapsedMs()
         viewModelScope.launch {
             studyRepo.submitAnswer(
-                bankId = bankId, question = q, mode = mode,
+                question = q, mode = mode,
                 userAnswer = s.textInput.take(200),
                 correct = correct, selfRated = true,
                 durationMs = duration

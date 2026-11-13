@@ -109,7 +109,6 @@ class StudyRepository(
     fun judge(question: Question, userAnswer: String): Boolean = judgeAnswer(question, userAnswer)
 
     suspend fun submitAnswer(
-        bankId: Long,
         question: Question,
         mode: StudyMode,
         userAnswer: String,
@@ -121,7 +120,9 @@ class StudyRepository(
         val existing = recordDao.getWrong(question.id)
         recordDao.submitAnswer(
             AttemptRecord(
-                bankId = bankId,
+                // 题目自己的 bankId 才是学习记录的真实归属。题库组只是聚合入口，
+                // 从「全题库组」作答时也必须落到题目所在的子题库，错题本/统计才不会串组。
+                bankId = question.bankId,
                 questionId = question.id,
                 mode = mode,
                 userAnswer = userAnswer,
@@ -368,12 +369,22 @@ class StudyRepository(
     /** 按筛选条件过滤题库题目 */
     suspend fun filteredQuestions(bankId: Long, filter: com.examhelper.shua.data.model.StudyFilter?): List<Question> {
         val bank = bankRepo.getBank(bankId)
-        val all = if (bank?.isGroup == true) bankRepo.getQuestionsForCard(bank) else bankRepo.getQuestions(bankId)
+        val groupQuestions = if (bank?.isGroup == true) bankRepo.getQuestionsForCard(bank) else bankRepo.getQuestions(bankId)
+        val all = if (filter != null && filter.bankIds.isNotEmpty()) {
+            groupQuestions.filter { it.bankId in filter.bankIds }
+        } else groupQuestions
         if (filter == null || filter.isDefault) return all
         val wrong = recordDao.wrongIds().toSet()
         val favorite = recordDao.favoriteIds().toSet()
         val killed = recordDao.killedIds().toSet()
-        val answered = recordDao.answeredIds(bankId).toSet()
+        // 题库组的题目来自多个子题库；按组 id 查作答记录会永远查不到。
+        // 空 bankIds 也保持有意义的查询语义（返回空集合）。
+        val questionBankIds = all.map { it.bankId }.distinct()
+        val answered = if (questionBankIds.isEmpty()) {
+            emptySet()
+        } else {
+            recordDao.answeredIdsForBanks(questionBankIds).toSet()
+        }
         return all.filter { q ->
             (filter.chapters.isEmpty() || filter.chapters.contains(q.chapter)) &&
                 (filter.types.isEmpty() || filter.types.contains(q.type.name)) &&

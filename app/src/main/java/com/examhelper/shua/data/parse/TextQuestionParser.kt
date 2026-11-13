@@ -283,9 +283,9 @@ object TextQuestionParser {
         }
 
         val letterByNo = mutableMapOf<Int, String>()   // 章号 → 池
-        val proseByNo = mutableMapOf<Int, MutableList<String>>()
+        val proseByNo = mutableMapOf<Int, MutableList<Pair<Int, String>>>()
         val letterWhole = mutableMapOf<Int, String>()
-        val proseWhole = mutableListOf<String>()
+        val proseWhole = mutableListOf<Pair<Int, String>>()
 
         tables.forEach { (name, rows) ->
             val n = chapterNumber(name.orEmpty())
@@ -294,17 +294,27 @@ object TextQuestionParser {
                     letterWhole.putIfAbsent(k, v)
                     if (n != null) letterByNo.putIfAbsent(n * 100000 + k, v)
                 } else if (v.trim().length > 8) {
-                    proseWhole += v
-                    if (n != null) proseByNo.getOrPut(n) { mutableListOf() } += v
+                    proseWhole += k to v
+                    if (n != null) proseByNo.getOrPut(n) { mutableListOf() } += k to v
                 }
             }
         }
 
+        val usedProse = mutableSetOf<String>()
         questions.forEach { q ->
             if (!q.answer.isNullOrBlank()) return@forEach
             val no = chapterNumber(q.chapter.orEmpty())
             val prosePool = no?.let { proseByNo[it] } ?: proseWhole
-            val proseHit = prosePool.firstOrNull { ans -> stemMatchesAnswer(q.stem, ans) }
+            val proseThreshold = if (q.sectionType == QuestionType.TERM || q.sectionType == QuestionType.SHORT_ANSWER) 0.25 else PROSE_MATCH_THRESHOLD
+            val contentHit = prosePool.maxByOrNull { answerProbeScore(q.stem, it.second) }
+                ?.takeIf { answerProbeScore(q.stem, it.second) >= proseThreshold }
+                ?.second
+            val proseHit: String? = contentHit ?: if (
+                q.sectionType == QuestionType.TERM || q.sectionType == QuestionType.SHORT_ANSWER
+            ) {
+                prosePool.firstOrNull { it.first == q.sourceNumber && it.second !in usedProse }?.second
+            } else null
+            proseHit?.let { usedProse += it }
 
             // B1 型题（共用备选答案）自己的 options 是空的，选项在 sharedOptions 里。
             // 只按 q.options 判断会把它们误归到主观题分支，按内容匹配必然失败。
@@ -424,6 +434,7 @@ object TextQuestionParser {
     private fun parseQuestions(text: String, questions: MutableList<ParsedQuestion>) {
         var current: ParsedQuestion? = null
         var currentSection: String? = null
+        var currentSectionType: QuestionType? = null
         // Markdown 标题层级栈：level → 标题。做题时的「章节」取当前标题链，
         // 这样 `# 第一章` 下的 `## 单选` 里的题会记成「第一章 · 单选」，
         // 既不会丢掉上层信息，也不会把整份文档的题都塞进同一个叫「单选」的章里。
@@ -499,6 +510,7 @@ object TextQuestionParser {
             if (chm != null) {
                 flush()
                 headingStack.clear()
+                currentSectionType = null
                 skipObjectiveSection = false
                 val no = chm.groupValues[1]
                 val unit = chm.groupValues[2]
@@ -575,6 +587,15 @@ object TextQuestionParser {
                 // 旧实现在「全文没有第X章」时会退而拿它当章节，结果题库里真的出现了
                 // 名为「（一）名词解释」的章节（用户反复报的那个 bug）。题型分组是章内
                 // 的段，不是章；宁可不分章，也不要给用户一个假章节。
+                currentSectionType = when {
+                    label.contains("名词解释") || line.contains("名词解释") -> QuestionType.TERM
+                    label.contains("简答") || label.contains("问答") || label.contains("论述") -> QuestionType.SHORT_ANSWER
+                    label.contains("填空") -> QuestionType.FILL
+                    label.contains("判断") -> QuestionType.JUDGE
+                    label.contains("多选") -> QuestionType.MULTIPLE
+                    label.contains("单选") -> QuestionType.SINGLE
+                    else -> null
+                }
                 val typeHeading = HeadingClassifier.isPureTypeHeading(label) ||
                     HeadingClassifier.isPureTypeHeading(line)
                 if (!typeHeading && (currentSection.isNullOrBlank() || !hasChapterHeading)) {
@@ -624,7 +645,8 @@ object TextQuestionParser {
                     no == null -> true
                     else -> no in sharedNoFrom!!..sharedNoTo!!
                 }
-                current = ParsedQuestion(chapter = currentSection).apply {
+                current = ParsedQuestion(chapter = currentSection, type = currentSectionType ?: QuestionType.SINGLE).apply {
+                    sectionType = currentSectionType
                     stem = qm.groupValues[2].trim()
                     // 记下原题号：stem 里的题号已被剥掉，但章末答案表按题号索引
                     sourceNumber = no
@@ -849,6 +871,8 @@ object TextQuestionParser {
 
         q.type = when {
             q.options.size == 2 && q.options.all { it.text in trueWords || it.text in falseWords } -> QuestionType.JUDGE
+            q.options.isEmpty() && q.sectionType == QuestionType.TERM -> QuestionType.TERM
+            q.options.isEmpty() && q.sectionType == QuestionType.SHORT_ANSWER -> QuestionType.SHORT_ANSWER
             q.options.isEmpty() -> {
                 val a = q.answer
                 when {

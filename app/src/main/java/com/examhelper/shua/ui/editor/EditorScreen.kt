@@ -1,5 +1,6 @@
 package com.examhelper.shua.ui.editor
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -71,6 +72,7 @@ fun EditorScreen(
     bankId: Long,
     onBack: () -> Unit
 ) {
+    BackHandler(onBack = onBack)
     val vm: EditorViewModel = viewModel()
     val state by vm.state.collectAsState()
     val extra = shuaColors

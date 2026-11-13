@@ -206,14 +206,16 @@ fun GlassIconButton(
     contentDescription: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant
+    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    containerColor: Color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+    borderColor: Color = shuaColors.creamLine
 ) {
     Box(
         modifier
             .size(36.dp)
             .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f))
-            .border(1.dp, shuaColors.creamLine, CircleShape)
+            .background(containerColor)
+            .border(1.dp, borderColor, CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {

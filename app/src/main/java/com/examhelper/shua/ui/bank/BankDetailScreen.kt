@@ -65,11 +65,13 @@ import com.examhelper.shua.ui.theme.shuaColors
 @Composable
 fun BankDetailScreen(
     bankId: Long,
+    allGroup: Boolean = false,
     onBack: () -> Unit,
-    onStartStudy: (StudyMode) -> Unit,
-    onGenerate: () -> Unit,
-    onEdit: () -> Unit,
-    onOpenGroupChild: (Long) -> Unit = {}
+    onStartStudy: (StudyMode, Boolean) -> Unit,
+    onGenerate: (List<Long>) -> Unit,
+    onEdit: (List<Long>) -> Unit,
+    onOpenGroupChild: (Long) -> Unit = {},
+    onOpenGroupAll: () -> Unit = {}
 ) {
     val vm: BankDetailViewModel = viewModel()
     var bank by remember { mutableStateOf<com.examhelper.shua.data.db.QuestionBank?>(null) }
@@ -100,7 +102,7 @@ fun BankDetailScreen(
     }
 
     Column(Modifier.fillMaxSize().safeTopPadding().safeBottomPadding(minBottom = 6.dp)) {
-        CompactTopBar(title = bank?.name ?: "题库", onBack = onBack)
+        CompactTopBar(title = if (allGroup) "全题库组" else bank?.name ?: "题库", onBack = onBack)
 
         LazyColumn(
             Modifier.fillMaxSize(),
@@ -108,13 +110,18 @@ fun BankDetailScreen(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             bank?.let { b ->
-                if (b.isGroup) {
+                if (b.isGroup && !allGroup) {
                     item { SectionLabel("题库组", trailing = "${groupChildren.size} 个题库") }
                     item {
                         PaperCard(Modifier.fillMaxWidth()) {
                             Column {
+                                ModeRow(
+                                    "全题库组",
+                                    "题库组共 $totalQuestions 道题 · 进入聚合题库",
+                                    StudyMode.SEQUENTIAL
+                                ) { onOpenGroupAll() }
                                 groupChildren.forEachIndexed { i, child ->
-                                    if (i > 0) Divider()
+                                    Divider()
                                     ModeRow(
                                         child.name,
                                         "${child.questionCount} 题 · 点击进入该题库",
@@ -125,12 +132,13 @@ fun BankDetailScreen(
                         }
                     }
                 }
+                if (b.isGroup && !allGroup) return@let
                 item {
                     GlassSurface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), elevation = 12.dp) {
                         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Row(verticalAlignment = Alignment.Bottom) {
                                 Text(
-                                    "$totalQuestions",
+                                    if (allGroup) "题库组共 $totalQuestions" else "$totalQuestions",
                                     style = serifTitle(42.sp, FontWeight.Medium),
                                     color = MaterialTheme.colorScheme.primary
                                 )
@@ -173,15 +181,15 @@ fun BankDetailScreen(
                 item {
                     PaperCard(Modifier.fillMaxWidth()) {
                         Column {
-                            ModeRow("标准做题", "作答即判对错，看解析再下一题", StudyMode.SEQUENTIAL, onStartStudy)
+                            ModeRow("标准做题", "作答即判对错，看解析再下一题", StudyMode.SEQUENTIAL, tag = if (allGroup) "全题库组" else null) { onStartStudy(StudyMode.SEQUENTIAL, allGroup) }
                             Divider()
-                            ModeRow("速刷模式", "作答后直出答案，2 秒自动跳题", StudyMode.SPEED, onStartStudy)
+                            ModeRow("速刷模式", "作答后直出答案，2 秒自动跳题", StudyMode.SPEED, tag = if (allGroup) "全题库组" else null) { onStartStudy(StudyMode.SPEED, allGroup) }
                             Divider()
-                            ModeRow("背题模式", "直接展开答案与解析，快速过题", StudyMode.RECITE, onStartStudy)
+                            ModeRow("背题模式", "直接展开答案与解析，快速过题", StudyMode.RECITE, tag = if (allGroup) "全题库组" else null) { onStartStudy(StudyMode.RECITE, allGroup) }
                             Divider()
-                            ModeRow("随机巩固", "乱序抽题不重复，进度可重置", StudyMode.RANDOM, onStartStudy)
+                            ModeRow("随机巩固", "乱序抽题不重复，进度可重置", StudyMode.RANDOM, tag = if (allGroup) "全题库组" else null) { onStartStudy(StudyMode.RANDOM, allGroup) }
                             Divider()
-                            ModeRow("测试模式", "选范围组卷，答题卡跳题，交卷出报告", StudyMode.EXAM, onStartStudy)
+                            ModeRow("测试模式", "选范围组卷，答题卡跳题，交卷出报告", StudyMode.EXAM, tag = if (allGroup) "全题库组" else null) { onStartStudy(StudyMode.EXAM, allGroup) }
                         }
                     }
                 }
@@ -193,27 +201,27 @@ fun BankDetailScreen(
                         Column {
                             ActionRow(
                                 title = if (noAnswer > 0) "AI 生成答案 · 缺 $noAnswer 题" else "AI 重新生成答案",
-                                subtitle = if (b.isGroup) {
+                                subtitle = if (b.isGroup && !allGroup) {
                                     "题库组不直接存题，请进入下方子题库生成"
                                 } else {
                                     "调用已配置模型补全答案与解析，标注置信度；三省六部可交叉验证"
                                 },
-                                onClick = { if (!b.isGroup) onGenerate() }
+                                onClick = { onGenerate(if (b.isGroup) groupChildren.map { it.id } else listOf(bankId)) }
                             )
                             Divider()
                             ActionRow(
                                 title = "编辑题目 / 章节划分",
-                                subtitle = if (b.isGroup) {
+                                subtitle = if (b.isGroup && !allGroup) {
                                     "题库组不直接存题，请进入下方子题库编辑"
                                 } else {
                                     "按页码或题号批量分章，逐题修改题干选项答案解析"
                                 },
-                                onClick = { if (!b.isGroup) onEdit() }
+                                onClick = { onEdit(if (b.isGroup) groupChildren.map { it.id } else listOf(bankId)) }
                             )
                             Divider()
                             ActionRow(
                                 title = "导出题库",
-                                subtitle = if (b.isGroup) {
+                                subtitle = if (b.isGroup && !allGroup) {
                                     "题库组暂不支持整体导出，请进入下方子题库导出"
                                 } else {
                                     "导出为 App 通用 .json，可再次导入"
@@ -354,7 +362,7 @@ private fun CoverageBar(label: String, percent: Int, ratio: String, modifier: Mo
 }
 
 @Composable
-private fun ModeRow(title: String, subtitle: String, mode: StudyMode, onStart: (StudyMode) -> Unit) {
+private fun ModeRow(title: String, subtitle: String, mode: StudyMode, tag: String? = null, onStart: (StudyMode) -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -367,7 +375,13 @@ private fun ModeRow(title: String, subtitle: String, mode: StudyMode, onStart: (
         )
         Spacer(Modifier.width(11.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, style = serifTitle(15.sp, FontWeight.Medium), color = MaterialTheme.colorScheme.onSurface)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(title, style = serifTitle(15.sp, FontWeight.Medium), color = MaterialTheme.colorScheme.onSurface)
+                tag?.let {
+                    Spacer(Modifier.width(6.dp))
+                    SemanticChip(it, ChipTone.Brand)
+                }
+            }
             Spacer(Modifier.height(2.dp))
             Text(
                 subtitle,

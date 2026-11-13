@@ -191,4 +191,26 @@ class TextQuestionParserTest {
         // 补出来的章节必须带章号，且序号连贯
         assertTrue("章节应全部带章号：$chapters", chapters.all { it.contains("第") && it.contains("章") })
     }
-}
+
+    @Test
+    fun `名词解释和简答题答案表不会丢失`() {
+        val text = """
+            第一章 遗传学
+            （一）名词解释
+            1.纯质性
+            （三）简答题
+            1.简述母系遗传的特点。
+            三、参考答案
+            （一）名词解释
+            1.纯质性是指一个细胞或个体中只有一种线粒体DNA。
+            （三）简答题
+            1.母亲把线粒体DNA传给所有子女，但只有女儿能继续传递给下一代。
+        """.trimIndent()
+        val qs = TextQuestionParser.parse(text)
+        val term = qs.first { it.stem.contains("纯质性") }
+        val short = qs.first { it.stem.contains("母系遗传") }
+        assertEquals(QuestionType.TERM, term.type)
+        assertNotNull("名词解释答案丢失", term.answer)
+        assertEquals(QuestionType.SHORT_ANSWER, short.type)
+        assertNotNull("简答题答案丢失", short.answer)
+    }}

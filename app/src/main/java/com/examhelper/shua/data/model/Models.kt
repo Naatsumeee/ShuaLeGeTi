@@ -13,6 +13,8 @@ data class QuestionOption(val key: String, val text: String)
 data class ParsedQuestion(
     var chapter: String? = null,
     var type: QuestionType = QuestionType.SINGLE,
+    /** 当前题型分组的提示，用于区分无选项名词解释与简答题 */
+    var sectionType: QuestionType? = null,
     /** 医学题型子类型 A1/A2/A3/B */
     var subtype: String? = null,
     var stem: String = "",
@@ -43,6 +45,11 @@ data class ParsedQuestion(
 @Serializable
 data class ShuaBankFile(
     val version: Int = 3,
+    val bankId: Long? = null,
+    val groupId: Long? = null,
+    val groupName: String? = null,
+    val isGroup: Boolean = false,
+    val mergedFrom: List<Long> = emptyList(),
     val name: String,
     val sourceFileName: String? = null,
     val exportedAt: Long,

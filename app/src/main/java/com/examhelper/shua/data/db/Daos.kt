@@ -210,6 +210,10 @@ interface RecordDao {
     @Query("SELECT DISTINCT questionId FROM attempt_records WHERE bankId = :bankId")
     suspend fun answeredIds(bankId: Long): List<Long>
 
+    /** 题库组筛选用：一次取出多个子题库的已作答题目 */
+    @Query("SELECT DISTINCT questionId FROM attempt_records WHERE bankId IN (:bankIds)")
+    suspend fun answeredIdsForBanks(bankIds: List<Long>): List<Long>
+
     @Query("SELECT questionId FROM wrong_records WHERE mastered = 0")
     suspend fun wrongIds(): List<Long>
 
