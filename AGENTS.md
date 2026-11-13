@@ -127,10 +127,13 @@ export JAVA_HOME="/c/Program Files/Microsoft/jdk-17.0.20.101-hotspot"; export PA
 ./gradlew assembleDebug testDebugUnitTest          # 构建 + 单测（212 项）
 ./gradlew assembleRelease                          # → app/build/outputs/apk/release/Shualegeti-arm64-v8a-<版本>.apk
 ADB="/c/Users/xutia/AppData/Local/Android/Sdk/platform-tools/adb.exe"
-"$ADB" -s e87a3fe4 install -r app-arm64-v8a-debug.apk   # 装机（debug 包，按 ABI 选包）
+"$ADB" -s e87a3fe4 install -r app-arm64-v8a-debug.apk   # 模拟器/debug 签名机；手机若是正式签名包会拒绝
+"$ADB" -s e87a3fe4 install -r app/build/outputs/apk/release/Shualegeti-arm64-v8a-<版本>.apk  # 当前手机（正式签名）
 TOKEN=$(printf "protocol=https\nhost=github.com\n\n" | git credential fill | grep '^password=' | cut -d= -f2-)
 GH_TOKEN=$TOKEN gh release list                    # GitHub API 操作
 ```
+
+> 2026-11-14 起，`C:\Users\xutia\AppData\Local\Android\Sdk\platform-tools` 已加入当前用户 PATH；新开的终端可直接调用 `adb`。
 
 ### 发版流程（v1.1.0 走通的顺序）
 
