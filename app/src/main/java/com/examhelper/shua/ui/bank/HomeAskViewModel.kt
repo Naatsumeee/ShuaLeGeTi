@@ -38,7 +38,6 @@ class HomeAskViewModel(application: Application) : AndroidViewModel(application)
 
     /** 展开 / 收起面板 */
     fun toggle() {
-        Haptics.tap()
         val next = !_open.value
         _open.value = next
         if (next && _state.value.askModelName == null) {

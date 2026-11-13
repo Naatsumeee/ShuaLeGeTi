@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.AlertDialog
@@ -65,9 +66,11 @@ import com.examhelper.shua.data.db.Question
 import com.examhelper.shua.data.db.StudyMode
 import com.examhelper.shua.data.db.WrongRecord
 import com.examhelper.shua.data.model.StudyFilter
+import com.examhelper.shua.data.model.PdfExportSource
 import com.examhelper.shua.ui.bank.typeLabel
 import com.examhelper.shua.ui.theme.ChipTone
 import com.examhelper.shua.ui.theme.CompactTopBar
+import com.examhelper.shua.ui.theme.GlassIconButton
 import com.examhelper.shua.ui.theme.Latex
 import com.examhelper.shua.ui.theme.Markdown
 import com.examhelper.shua.ui.theme.MonoText
@@ -196,7 +199,8 @@ fun WrongBookScreen(
     /** 错题重刷 / 随机抽检：复用题库刷题的同款做题页（study 路由 + 筛选指纹） */
     onStartStudy: (bankId: Long, mode: StudyMode, filterJson: String) -> Unit = { _, _, _ -> },
     /** 点某一道题 → 单题详情页（完整题干/选项/参考答案/解析） */
-    onOpenQuestion: ((questionId: Long) -> Unit)? = null
+    onOpenQuestion: ((questionId: Long) -> Unit)? = null,
+    onExportPdf: (PdfExportSource) -> Unit = {}
 ) {
     val vm: LibraryViewModel = viewModel()
     val lists by vm.lists.collectAsState()
@@ -219,7 +223,23 @@ fun WrongBookScreen(
     ) {
         CompactTopBar(
             title = "错题本",
-        )
+        ) {
+            GlassIconButton(
+                icon = Icons.Filled.PictureAsPdf,
+                contentDescription = "输出错题 PDF",
+                onClick = {
+                    onExportPdf(
+                        when (tab) {
+                            0 -> PdfExportSource.UNMASTERED
+                            1 -> PdfExportSource.MASTERED
+                            2 -> PdfExportSource.FLAGGED
+                            3 -> PdfExportSource.FAVORITES
+                            else -> PdfExportSource.KILLED
+                        }
+                    )
+                }
+            )
+        }
 
         // 数字 + 小字标签的分段控件
         val tabDefs = listOf(

@@ -1,9 +1,17 @@
 package com.examhelper.shua.ui.bank
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -137,9 +145,6 @@ fun BankListScreen(
     var dragOffsetY by remember { mutableFloatStateOf(0f) }
     var suppressClickFor by remember { mutableStateOf<Long?>(null) }
     val itemGapPx = with(LocalDensity.current) { 12.dp.toPx() }
-    val editScale by animateFloatAsState(if (editMode) 0.95f else 1f, spring(dampingRatio = 0.78f, stiffness = Spring.StiffnessMediumLow), label = "editScale")
-    val editAlpha by animateFloatAsState(if (editMode) 0.72f else 1f, spring(dampingRatio = 0.88f, stiffness = Spring.StiffnessMedium), label = "editAlpha")
-
     LaunchedEffect(askOpen) { if (askOpen) askSheetState.show() }
 
     BackHandler(enabled = editMode) {
@@ -292,8 +297,7 @@ fun BankListScreen(
             LazyColumn(
                     modifier = Modifier
                         .weight(1f)
-                        .fillMaxWidth()
-                        .graphicsLayer { scaleX = editScale; scaleY = editScale; alpha = editAlpha },
+                        .fillMaxWidth(),
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 96.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     state = listState
@@ -335,6 +339,17 @@ fun BankListScreen(
                     }
                     itemsIndexed(orderedBanks, key = { _, it -> it.id }) { _, bank ->
                         val dragging = draggingBankId == bank.id
+                        val dimmed = editMode && bank.id !in selected
+                        val itemAlpha by animateFloatAsState(
+                            targetValue = if (dimmed) 0.72f else 1f,
+                            animationSpec = spring(dampingRatio = 0.88f, stiffness = Spring.StiffnessMedium),
+                            label = "bankEditAlpha"
+                        )
+                        val itemScale by animateFloatAsState(
+                            targetValue = if (dimmed) 0.98f else 1f,
+                            animationSpec = spring(dampingRatio = 0.78f, stiffness = Spring.StiffnessMediumLow),
+                            label = "bankEditScale"
+                        )
                         val cardShape = remember { RoundedCornerShape(20.dp) }
                         val visualOffset by animateFloatAsState(
                             targetValue = if (dragging) dragOffsetY else 0f,
@@ -352,8 +367,9 @@ fun BankListScreen(
                             Modifier
                                 .zIndex(if (dragging) 2f else 0f)
                                 .graphicsLayer {
+                                    alpha = itemAlpha
                                     translationY = visualOffset
-                                    val scale = if (dragging) 1.012f else 1f
+                                    val scale = (if (dragging) 1.012f else 1f) * itemScale
                                     scaleX = scale
                                     scaleY = scale
                                     shape = cardShape
@@ -701,19 +717,25 @@ private fun BankCard(
             .clickable(onClick = onClick),
         shape = shape
     ) {
-        Row(Modifier.padding(16.dp).height(IntrinsicSize.Min), verticalAlignment = Alignment.CenterVertically) {
-            if (editMode) {
-                Box(
-                    Modifier
-                        .size(22.dp)
-                        .clip(RoundedCornerShape(7.dp))
-                        .background(if (checked) extra.terracotta else Color.Transparent)
-                        .border(1.5.dp, if (checked) extra.terracotta else extra.inkFaint, RoundedCornerShape(7.dp)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (checked) Icon(Icons.Filled.Check, null, tint = Color.White, modifier = Modifier.size(15.dp))
+        Row(Modifier.padding(16.dp).height(IntrinsicSize.Min).animateContentSize(), verticalAlignment = Alignment.CenterVertically) {
+            AnimatedVisibility(
+                visible = editMode,
+                enter = expandHorizontally() + fadeIn(),
+                exit = shrinkHorizontally() + fadeOut()
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier
+                            .size(22.dp)
+                            .clip(RoundedCornerShape(7.dp))
+                            .background(if (checked) extra.terracotta else Color.Transparent)
+                            .border(1.5.dp, if (checked) extra.terracotta else extra.inkFaint, RoundedCornerShape(7.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (checked) Icon(Icons.Filled.Check, null, tint = Color.White, modifier = Modifier.size(15.dp))
+                    }
+                    Spacer(Modifier.width(10.dp))
                 }
-                Spacer(Modifier.width(10.dp))
             }
             // 左侧书脊：宽度从 3dp 加到 5dp；整行高度撑开，名称换行时自动拉长
             Box(
@@ -767,8 +789,8 @@ private fun BankCard(
                     }
                 }
             }
-            Box {
-                if (editMode) {
+            Crossfade(targetState = editMode, animationSpec = tween(150), label = "bankCardAction") { editing ->
+                if (editing) {
                     Icon(
                         Icons.Filled.DragHandle,
                         contentDescription = "长按卡片拖动排序",
@@ -779,40 +801,42 @@ private fun BankCard(
                             .background(if (dragging) shuaColors.terracottaSoft else Color.Transparent)
                     )
                 } else {
-                    com.examhelper.shua.ui.theme.GlassIconButton(
-                        icon = Icons.Filled.MoreVert,
-                        contentDescription = "更多",
-                        onClick = { menuOpen = true }
-                    )
-                }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    Box {
+                        com.examhelper.shua.ui.theme.GlassIconButton(
+                            icon = Icons.Filled.MoreVert,
+                            contentDescription = "更多",
+                            onClick = { menuOpen = true }
+                        )
+                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                     DropdownMenuItem(
                         text = { Text(if (bank.pinned) "取消置顶" else "置顶") },
                         leadingIcon = { Icon(Icons.Filled.PushPin, contentDescription = null) },
                         onClick = { menuOpen = false; onPin() }
                     )
-                    DropdownMenuItem(
+                            DropdownMenuItem(
                         text = { Text("编辑题库名称") },
                         leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
                         onClick = { menuOpen = false; onRename() }
                     )
-                    if (bank.mergedFromJson != null) {
+                            if (bank.mergedFromJson != null) {
                         DropdownMenuItem(
                             text = { Text("撤销合并") },
                             leadingIcon = { Icon(Icons.Filled.Undo, null) },
                             onClick = { menuOpen = false; onUndoMerge() }
                         )
                     }
-                    DropdownMenuItem(
+                            DropdownMenuItem(
                         text = { Text(if (bank.archived) "取消归档" else "归档") },
                         leadingIcon = { Icon(Icons.Filled.Archive, contentDescription = null) },
                         onClick = { menuOpen = false; onArchive() }
                     )
-                    DropdownMenuItem(
+                            DropdownMenuItem(
                         text = { Text("删除题库", color = extra.sage) },
                         leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null, tint = extra.sage) },
                         onClick = { menuOpen = false; onDelete() }
                     )
+                        }
+                    }
                 }
             }
         }

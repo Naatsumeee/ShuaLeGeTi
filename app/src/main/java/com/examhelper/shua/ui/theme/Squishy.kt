@@ -14,6 +14,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.foundation.background
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -33,6 +34,7 @@ fun SquishyButtonSurface(
     shape: Shape,
     modifier: Modifier = Modifier,
     shadowColor: Color = Color(0x55000000),
+    backgroundColor: Color = Color.Transparent,
     content: @Composable BoxScope.() -> Unit
 ) {
     val pressed by interactionSource.collectIsPressedAsState()
@@ -60,10 +62,10 @@ fun SquishyButtonSurface(
                 spotShadowColor = shadowColor
             }
             .clip(shape)
+            .background(backgroundColor)
             .drawWithContent {
-                drawContent()
                 if (pressed) {
-                    // 按下时才出现内侧压痕，避免常规态出现整块暗色矩形。
+                    // 内阴影先画，再画内容；否则透明渐变会盖住文字。
                     drawRect(
                         brush = Brush.linearGradient(
                             0f to shadowColor,
@@ -75,6 +77,7 @@ fun SquishyButtonSurface(
                         )
                     )
                 }
+                drawContent()
             },
         content = content
     )

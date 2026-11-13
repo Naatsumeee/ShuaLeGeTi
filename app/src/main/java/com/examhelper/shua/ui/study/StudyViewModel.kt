@@ -671,12 +671,10 @@ class StudyViewModel(
         val s = _state.value
         // 收起永远允许（哪怕题目已经切换/卸载），否则面板会卡在屏幕上关不掉
         if (s.askOpen) {
-            Haptics.click()
             _state.value = s.copy(askOpen = false, askError = null)
             return
         }
         if (s.session?.question == null) return
-        Haptics.click()
         _state.value = s.copy(askOpen = true, askError = null)
         // 面板上写明这次走哪个模型：用户配了多个模型时不该靠猜
         if (s.askModelName == null) {

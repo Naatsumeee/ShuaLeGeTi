@@ -1151,7 +1151,10 @@ private fun DeepSolveRow(state: StudyUiState, q: Question, vm: StudyViewModel) {
                     Modifier
                         .clip(RoundedCornerShape(10.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                        .clickable { vm.toggleAsk() }
+                        .clickable {
+                            com.examhelper.shua.ui.sound.Haptics.tap()
+                            vm.toggleAsk()
+                        }
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -1384,13 +1387,14 @@ private fun BottomControls(
                         interactionSource = nextInteraction,
                         shape = RoundedCornerShape(13.dp),
                         shadowColor = Color.Black.copy(alpha = if (nextPressed) 0.30f else 0.16f),
+                        backgroundColor = if (canNext) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 44.dp)
-                            .background(
-                                if (canNext) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.surfaceVariant
-                            )
                             .clickable(
                                 interactionSource = nextInteraction,
                                 indication = null,

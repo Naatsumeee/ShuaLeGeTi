@@ -2,6 +2,8 @@ package com.examhelper.shua.ui.study
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,6 +42,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,6 +57,7 @@ import com.examhelper.shua.ui.theme.monoStyle
 import com.examhelper.shua.ui.theme.safeBottomPadding
 import com.examhelper.shua.ui.theme.serifTitle
 import com.examhelper.shua.ui.theme.shuaColors
+import com.examhelper.shua.ui.sound.Haptics
 
 /**
  * 做题页顶栏常驻的「问 AI」按钮。
@@ -64,13 +68,23 @@ import com.examhelper.shua.ui.theme.shuaColors
 @Composable
 fun AskAiButton(compact: Boolean, active: Boolean, onClick: () -> Unit) {
     val extra = shuaColors
-    val bg = if (active) extra.terracotta else extra.terracottaSoft
-    val fg = if (active) MaterialTheme.colorScheme.onPrimary else extra.terracotta
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    LaunchedEffect(pressed) {
+        if (pressed) Haptics.tap()
+    }
+    val highlighted = active || pressed
+    val bg = if (highlighted) extra.terracotta else extra.terracottaSoft
+    val fg = if (highlighted) MaterialTheme.colorScheme.onPrimary else extra.terracotta
     Row(
         Modifier
             .clip(RoundedCornerShape(12.dp))
             .background(bg)
-            .clickable(onClick = onClick)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                onClick = onClick
+            )
             .padding(horizontal = if (compact) 8.dp else 10.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

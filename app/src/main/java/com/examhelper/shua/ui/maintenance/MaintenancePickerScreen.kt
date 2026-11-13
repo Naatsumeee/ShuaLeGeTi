@@ -60,6 +60,7 @@ fun MaintenancePickerScreen(
     val repo = ShuaApp.instance.container.bankRepo
     var banks by remember { mutableStateOf<List<QuestionBank>>(emptyList()) }
     var selected by remember(bankIds) { mutableStateOf(bankIds.toSet()) }
+    var started by remember { mutableStateOf(false) }
     val isAi = kind == "generate"
     val extra = shuaColors
 
@@ -125,18 +126,26 @@ fun MaintenancePickerScreen(
                 Button(
                     onClick = {
                         val ids = selected.toList()
+                        started = true
                         if (ids.size == 1) onStartOne(ids.first()) else if (ids.isNotEmpty()) onStartSequence(ids)
                     },
-                    enabled = selected.isNotEmpty(),
+                    enabled = selected.isNotEmpty() && !started,
                     modifier = Modifier.fillMaxWidth().height(46.dp),
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = extra.terracotta)
                 ) {
-                    Text("开始维护所选 · ${selected.size} 本", color = Color.White, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (started) "已启动 · ${selected.size} 本" else "开始维护所选 · ${selected.size} 本",
+                        color = Color.White,
+                        fontWeight = FontWeight.SemiBold
+                    )
                 }
                 Button(
-                    onClick = { bankIds.takeIf { it.isNotEmpty() }?.let(onStartSequence) },
-                    enabled = bankIds.size > 1,
+                    onClick = {
+                        started = true
+                        bankIds.takeIf { it.isNotEmpty() }?.let(onStartSequence)
+                    },
+                    enabled = bankIds.size > 1 && !started,
                     modifier = Modifier.fillMaxWidth().height(42.dp),
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(
@@ -144,7 +153,14 @@ fun MaintenancePickerScreen(
                         contentColor = MaterialTheme.colorScheme.onSurface
                     )
                 ) {
-                    Text("一键维护全部 · ${bankIds.size} 本")
+                    Text(if (started) "已启动 · ${bankIds.size} 本" else "一键维护全部 · ${bankIds.size} 本")
+                }
+                if (started) {
+                    Text(
+                        "后台任务已启动，可按顺序在进度页查看；失败部分可返回后重新启动。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = extra.terracotta
+                    )
                 }
                 Text(
                     "一键维护会按顺序逐本处理，但总耗时较长，单本失败或中断的概率也会增高；建议先分别维护重要题库。",

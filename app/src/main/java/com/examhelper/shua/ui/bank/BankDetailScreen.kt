@@ -111,17 +111,22 @@ fun BankDetailScreen(
         ) {
             bank?.let { b ->
                 if (b.isGroup && !allGroup) {
+                    item { SectionLabel("全题库组", trailing = "1 个题库") }
+                    item {
+                        PaperCard(Modifier.fillMaxWidth()) {
+                            ModeRow(
+                                "全题库组",
+                                "题库组共 $totalQuestions 道题 · 进入聚合题库",
+                                StudyMode.SEQUENTIAL
+                            ) { onOpenGroupAll() }
+                        }
+                    }
                     item { SectionLabel("题库组", trailing = "${groupChildren.size} 个题库") }
                     item {
                         PaperCard(Modifier.fillMaxWidth()) {
                             Column {
-                                ModeRow(
-                                    "全题库组",
-                                    "题库组共 $totalQuestions 道题 · 进入聚合题库",
-                                    StudyMode.SEQUENTIAL
-                                ) { onOpenGroupAll() }
                                 groupChildren.forEachIndexed { i, child ->
-                                    Divider()
+                                    if (i > 0) Divider()
                                     ModeRow(
                                         child.name,
                                         "${child.questionCount} 题 · 点击进入该题库",
@@ -137,8 +142,16 @@ fun BankDetailScreen(
                     GlassSurface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), elevation = 12.dp) {
                         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Row(verticalAlignment = Alignment.Bottom) {
+                                if (allGroup) {
+                                    Text(
+                                        "题库组共",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(bottom = 8.dp, end = 5.dp)
+                                    )
+                                }
                                 Text(
-                                    if (allGroup) "题库组共 $totalQuestions" else "$totalQuestions",
+                                    "$totalQuestions",
                                     style = serifTitle(42.sp, FontWeight.Medium),
                                     color = MaterialTheme.colorScheme.primary
                                 )

@@ -161,4 +161,12 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     testImplementation(kotlin("test"))
+    testImplementation("org.robolectric:robolectric:4.14.1")
+}
+
+android {
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+        unitTests.isIncludeAndroidResources = true
+    }
 }

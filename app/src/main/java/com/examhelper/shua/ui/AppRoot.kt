@@ -61,6 +61,7 @@ import com.examhelper.shua.ui.study.StudySetupScreen
 import com.examhelper.shua.ui.theme.DockTab
 import com.examhelper.shua.ui.theme.LiquidDock
 import com.examhelper.shua.ui.wrongbook.WrongBookScreen
+import com.examhelper.shua.ui.wrongbook.WrongBookPdfExportScreen
 
 object Routes {
     const val BANKS = "banks"
@@ -85,10 +86,12 @@ object Routes {
     const val SINGLE_QUESTION = "single_question/{questionId}?runId={runId}"
     const val EDITOR = "editor/{bankId}?queueIds={queueIds}&queueIndex={queueIndex}"
     const val MAINTENANCE = "maintenance/{kind}?ids={ids}"
+    const val PDF_EXPORT = "pdf_export/{source}"
 
     fun importFile(jobId: String? = null) = "import_file" + (jobId?.let { "?jobId=$it" } ?: "")
     fun bankDetail(bankId: Long, allGroup: Boolean = false) = "bank/$bankId" + (if (allGroup) "?allGroup=true" else "")
     fun maintenance(kind: String, ids: List<Long>) = "maintenance/$kind?ids=${ids.joinToString(",")}"
+    fun pdfExport(source: com.examhelper.shua.data.model.PdfExportSource) = "pdf_export/${source.name}"
     fun editor(bankId: Long, queueIds: List<Long> = emptyList(), queueIndex: Int = -1) = "editor/$bankId" + (if (queueIds.isEmpty()) "" else "?queueIds=${queueIds.joinToString(",")}&queueIndex=$queueIndex")
     fun studySetup(bankId: Long, mode: StudyMode, allGroup: Boolean = false) = "study_setup/$bankId/${mode.name}" + (if (allGroup) "?allGroup=true" else "")
     fun study(bankId: Long, mode: StudyMode, filterJson: String? = null) =
@@ -274,7 +277,8 @@ fun AppRoot(fontScale: Float = 1f) {
                             onStartStudy = { bankId, mode, filterJson ->
                                 navController.navigate(Routes.study(bankId, mode, filterJson))
                             },
-                            onOpenQuestion = { qid -> navController.navigate(Routes.singleQuestion(qid, null)) }
+                            onOpenQuestion = { qid -> navController.navigate(Routes.singleQuestion(qid, null)) },
+                            onExportPdf = { source -> navController.navigate(Routes.pdfExport(source)) }
                         )
                     }
                     composable(Routes.STATS) { StatsScreen(contentPadding = PaddingValues(top = topInset)) }
@@ -344,7 +348,18 @@ fun AppRoot(fontScale: Float = 1f) {
                             bankIds = ids,
                             onBack = { navController.popBackStack() },
                             onStartOne = { id ->
-                                navController.navigate(if (kind == "generate") "generate/$id" else Routes.editor(id))
+                                if (kind == "generate") {
+                                    com.examhelper.shua.data.generate.GenerateWorker.enqueue(
+                                        context = com.examhelper.shua.ShuaApp.instance,
+                                        bankId = id,
+                                        forceAll = false,
+                                        concurrency = 3,
+                                        scope = com.examhelper.shua.data.generate.GenerateScope.MISSING
+                                    )
+                                    navController.navigate("generate/$id")
+                                } else {
+                                    navController.navigate(Routes.editor(id))
+                                }
                             },
                             onStartSequence = { sequence ->
                                 if (sequence.isNotEmpty()) {
@@ -353,13 +368,15 @@ fun AppRoot(fontScale: Float = 1f) {
                                             com.examhelper.shua.ShuaApp.instance,
                                             sequence
                                         )
-                                        navController.popBackStack()
                                     } else {
                                         navController.navigate(Routes.editor(sequence.first(), sequence, 0))
                                     }
                                 }
                             }
                         )
+                    }
+                    composable(Routes.PDF_EXPORT) {
+                        WrongBookPdfExportScreen(onBack = { navController.popBackStack() })
                     }
                     composable(Routes.STUDY) { entry ->
                         val bankId = entry.arguments?.getString("bankId")?.toLongOrNull() ?: return@composable
