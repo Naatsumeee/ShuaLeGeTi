@@ -186,6 +186,22 @@ rm -f tok askpass.sh cred.txt                      # 用完立刻删
 
 关键是 `git -c credential.helper=` 把会挂起的 helper 清空，改由 `GIT_ASKPASS` 供密码。
 
+### `push` 报 TLS 错误但读正常（**2026-11-13 实测**）
+
+症状：`git ls-remote` 秒回，`git push` 却报
+`fatal: unable to access ...: TLS connect error: error:0A000126:SSL routines::unexpected eof while reading`，
+重试三次全失败；`Test-NetConnection github.com -Port 443` 是通的。
+
+原因：HTTP/2 在部分受限网络下握手后即被中断。**加一个参数就好**：
+
+```bash
+git -c http.version=HTTP/1.1 -c credential.helper= \
+  -c http.extraheader="AUTHORIZATION: basic $(printf "x-access-token:$TOKEN" | base64 -w0)" \
+  push origin main
+```
+
+注意 `ls-remote` 能通**不能**说明推送没问题——读走的是匿名短连接，写的协商过程更长。
+
 ## 历史里程碑
 
 M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI 生成+置信度 → M4 模式补全 → M5 三省六部 → M6 错题本/统计/收藏/导出 → 后台解析+提速 → A1/A2/A3/B 型题+筛选+斩题+测试模式+热力图+搜索 → 纸感主题 → 导出增强（AI 内容开关+章节汇总+完整往返）→ 生成后台化+断点续传+费用透明 → 字体/配色/错题本重设计 → RapidOCR 上线 → 16KB 页对齐修复（NDK 重编）→ **v1.0.0** → 视觉层 v2 重做（暖纸+液态玻璃+底部悬浮 Dock+设置页音效/暗黑/数据管理）→ v1.0.1~v1.0.3（顶栏统一、底栏重写、Serif 加粗、暗绿正确色、震动与音效拆分、左右滑切题、AI 深度解题、LaTeX 自研渲染、回到上次进度、更新日志）→ v1.0.4（问 AI 追问面板+常驻入口）→ v1.0.5（8 bug 修复 + 成本显示/错题本章节重刷/热力图增强/名词解释独立题型）→ **v1.0.6**（LaTeX 渲染器全量重写 + Markdown 渲染器，公式与 Markdown 全站混排）→ **v1.0.7**（Markdown 题库导入+复制格式化提示词、RapidOCR 升 PP-OCRv5、分块解析防断裂+跨段答案回填、成本按官方峰谷分时、深度解题重试与 $$ 公式修复、问 AI 键盘遮挡修复、切题平移动画、热力图气泡跟手）。
