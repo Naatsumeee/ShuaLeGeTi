@@ -84,6 +84,9 @@ class HomeAskViewModel(application: Application) : AndroidViewModel(application)
                     // 与做题页「追问 AI」同档：读设置页的思考强度（默认 Low）。
                     // 1500 的输出预算经不起 high 的思考开销，开了反而答到一半就截断。
                     reasoningEffort = container.settings.settings.first().reasoningEffort,
+                    usageContext = com.examhelper.shua.data.llm.AiUsageContext(
+                        com.examhelper.shua.data.llm.AiUsageCategory.ASK_AI
+                    ),
                     onDelta = { delta ->
                         buf.append(delta)
                         push()

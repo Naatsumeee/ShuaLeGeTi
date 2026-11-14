@@ -12,6 +12,8 @@ import com.examhelper.shua.data.llm.LlmClient
 import com.examhelper.shua.data.repo.LocalDataRepository
 import com.examhelper.shua.data.settings.OcrEngine
 import com.examhelper.shua.data.settings.SettingsStore
+import com.examhelper.shua.data.update.UpdateChecker
+import com.examhelper.shua.data.update.UpdateInfo
 import com.examhelper.shua.ui.sound.Haptics
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -255,6 +257,39 @@ class SettingsViewModel(
     private val _usage = MutableStateFlow(UsageState())
     val usage: StateFlow<UsageState> = _usage
 
+    data class UpdateState(
+        val checking: Boolean = false,
+        val info: UpdateInfo? = null
+    )
+
+    private val _update = MutableStateFlow(UpdateState())
+    val update: StateFlow<UpdateState> = _update
+
+    fun checkUpdate() {
+        if (_update.value.checking) return
+        _update.value = UpdateState(checking = true)
+        viewModelScope.launch {
+            runCatching { UpdateChecker.latest() }.fold(
+                onSuccess = { info ->
+                    _update.value = UpdateState(checking = false)
+                    if (UpdateChecker.isNewer(com.examhelper.shua.BuildConfig.VERSION_NAME, info.version)) {
+                        _update.value = UpdateState(info = info)
+                    } else {
+                        _message.value = "当前已是最新版本"
+                    }
+                },
+                onFailure = {
+                    _update.value = UpdateState(checking = false)
+                    _message.value = "网络问题导致查询失败，请前往作者 @Natsume 抖音主页获取最新版本信息"
+                }
+            )
+        }
+    }
+
+    fun dismissUpdate() {
+        _update.value = UpdateState()
+    }
+
     /**
      * 统计近 [days] 天用量。
      *
@@ -280,8 +315,7 @@ class SettingsViewModel(
             val window = runCatching {
                 com.examhelper.shua.data.llm.UsageStats.compute(
                     snapshotDao = db.balanceSnapshotDao(),
-                    importDao = db.importJobDao(),
-                    generateDao = db.generateJobDao(),
+                    aiUsageDao = db.aiUsageDao(),
                     providerId = provider.id,
                     days = days,
                     model = provider.model

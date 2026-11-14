@@ -42,7 +42,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -70,9 +69,6 @@ fun AskAiButton(compact: Boolean, active: Boolean, onClick: () -> Unit) {
     val extra = shuaColors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    LaunchedEffect(pressed) {
-        if (pressed) Haptics.tap()
-    }
     val highlighted = active || pressed
     val bg = if (highlighted) extra.terracotta else extra.terracottaSoft
     val fg = if (highlighted) MaterialTheme.colorScheme.onPrimary else extra.terracotta
@@ -83,7 +79,10 @@ fun AskAiButton(compact: Boolean, active: Boolean, onClick: () -> Unit) {
             .clickable(
                 interactionSource = interaction,
                 indication = null,
-                onClick = onClick
+                onClick = {
+                    Haptics.tap()
+                    onClick()
+                }
             )
             .padding(horizontal = if (compact) 8.dp else 10.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically

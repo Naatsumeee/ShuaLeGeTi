@@ -1,12 +1,15 @@
 package com.examhelper.shua
 
 import com.examhelper.shua.data.model.PdfAnswerMode
+import com.examhelper.shua.data.model.PdfAnswerPlacement
+import com.examhelper.shua.data.model.PdfExportOptions
 import com.examhelper.shua.data.model.PdfExportSource
 import com.examhelper.shua.data.model.PdfQuestion
 import com.examhelper.shua.data.model.WrongBookExport
 import com.examhelper.shua.data.pdf.WrongBookPdfRenderer
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.text.PDFTextStripper
 import org.junit.Before
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -15,6 +18,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.RobolectricTestRunner
 import java.io.File
+import java.text.Normalizer
 
 @RunWith(RobolectricTestRunner::class)
 class WrongBookPdfRendererTest {
@@ -36,8 +40,13 @@ class WrongBookPdfRendererTest {
 
         val bytes = WrongBookPdfRenderer.render(
             title = "题库-第一章",
+            bankName = "题库",
             export = export,
-            mode = PdfAnswerMode.CONCENTRATED,
+            options = PdfExportOptions(
+                includeAnswers = true,
+                mode = PdfAnswerMode.DEEP,
+                placement = PdfAnswerPlacement.AT_END
+            ),
             sansFont = File("src/main/assets/pdf/NotoSansSC-Bold.ttf").inputStream(),
             serifFont = File("src/main/assets/pdf/NotoSerifSC-Regular.ttf").inputStream()
         )
@@ -48,6 +57,15 @@ class WrongBookPdfRendererTest {
             val box = doc.getPage(0).mediaBox
             assertEquals(595.28f, box.width, 0.1f)
             assertEquals(841.89f, box.height, 0.1f)
+            assertEquals(76.34647f, WrongBookPdfRenderer.TOP_MARGIN, 0.01f)
+            val firstPage = PDFTextStripper().apply { startPage = 1; endPage = 1 }.getText(doc)
+                .let { Normalizer.normalize(it, Normalizer.Form.NFKC) }
+            val secondPage = PDFTextStripper().apply { startPage = 2; endPage = 2 }.getText(doc)
+                .let { Normalizer.normalize(it, Normalizer.Form.NFKC) }
+            assertTrue(firstPage.contains("题库-第一章"))
+            assertTrue(secondPage.contains("题库"))
+            assertTrue(!secondPage.contains("题库-第一章"))
+            assertTrue("second=[$secondPage]", Regex("""(?m)^2$""").containsMatchIn(secondPage))
         }
     }
 
@@ -56,8 +74,9 @@ class WrongBookPdfRendererTest {
         val error = runCatching {
             WrongBookPdfRenderer.render(
                 title = "题库",
+                bankName = "题库",
                 export = WrongBookExport(PdfExportSource.UNMASTERED, emptyList()),
-                mode = PdfAnswerMode.NONE,
+                options = PdfExportOptions(includeAnswers = false),
                 sansFont = File("src/main/assets/pdf/NotoSansSC-Bold.ttf").inputStream(),
                 serifFont = File("src/main/assets/pdf/NotoSerifSC-Regular.ttf").inputStream()
             )

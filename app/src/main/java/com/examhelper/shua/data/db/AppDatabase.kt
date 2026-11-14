@@ -23,7 +23,7 @@ class Converters {
     fun toStudyMode(value: String): StudyMode = StudyMode.valueOf(value)
 }
 
-const val APP_DATABASE_VERSION = 13
+const val APP_DATABASE_VERSION = 15
 
 @Database(
     entities = [
@@ -38,6 +38,7 @@ const val APP_DATABASE_VERSION = 13
         ImportJob::class,
         GenerateJob::class,
         BalanceSnapshot::class
+        ,AiUsageRecord::class
     ],
     version = APP_DATABASE_VERSION,
     exportSchema = false
@@ -52,6 +53,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun importJobDao(): ImportJobDao
     abstract fun generateJobDao(): GenerateJobDao
     abstract fun balanceSnapshotDao(): BalanceSnapshotDao
+    abstract fun aiUsageDao(): AiUsageDao
 
     companion object {
         /** v1 鈫?v2锛氶鍨嬪瓙绫诲瀷/鍏辩敤棰樺共/鍏辩敤閫夐」銆佷綔绛?runId/鐢ㄦ椂銆佹柀棰樿〃銆佸鍏ヤ换鍔¤〃銆佽繘搴︾瓫閫夋寚绾?*/
@@ -310,6 +312,61 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v13 → v14：统一 AI 调用账本（每条请求一行，带任务编号和时间戳）。 */
+        private val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `ai_usage_records` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`callId` TEXT NOT NULL, " +
+                        "`taskId` TEXT NOT NULL, " +
+                        "`providerId` INTEGER NOT NULL, " +
+                        "`providerName` TEXT NOT NULL, " +
+                        "`model` TEXT NOT NULL, " +
+                        "`category` TEXT NOT NULL, " +
+                        "`cacheHitTokens` INTEGER NOT NULL DEFAULT 0, " +
+                        "`cacheMissTokens` INTEGER NOT NULL DEFAULT 0, " +
+                        "`outputTokens` INTEGER NOT NULL DEFAULT 0, " +
+                        "`createdAt` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_ai_usage_records_providerId_createdAt` " +
+                        "ON `ai_usage_records` (`providerId`, `createdAt`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_ai_usage_records_taskId` " +
+                        "ON `ai_usage_records` (`taskId`)"
+                )
+                // 旧版本只有任务汇总，没有逐次调用账本；迁移时先补成一行 legacy 任务，
+                // 保证升级后的历史估算不会突然归零。
+                db.execSQL(
+                    "INSERT INTO `ai_usage_records` " +
+                        "(`callId`,`taskId`,`providerId`,`providerName`,`model`,`category`," +
+                        "`cacheHitTokens`,`cacheMissTokens`,`outputTokens`,`createdAt`) " +
+                        "SELECT 'legacy-import-' || id, 'import:' || id, 0, '', '', 'IMPORT_PARSE', " +
+                        "cacheHitTokens, cacheMissTokens, outputTokens, createdAt FROM import_jobs " +
+                        "WHERE cacheHitTokens + cacheMissTokens + outputTokens > 0"
+                )
+                db.execSQL(
+                    "INSERT INTO `ai_usage_records` " +
+                        "(`callId`,`taskId`,`providerId`,`providerName`,`model`,`category`," +
+                        "`cacheHitTokens`,`cacheMissTokens`,`outputTokens`,`createdAt`) " +
+                        "SELECT 'legacy-generate-' || bankId, 'legacy-generate:' || bankId || ':' || updatedAt, " +
+                        "0, '', '', 'ANSWER_GENERATE', cacheHitTokens, cacheMissTokens, outputTokens, updatedAt " +
+                        "FROM generate_jobs WHERE cacheHitTokens + cacheMissTokens + outputTokens > 0"
+                )
+            }
+        }
+
+        /** v14 → v15：区分极简解析与普通/深度解析，避免把旧解析误当成极简解析。 */
+        private val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE questions ADD COLUMN minimalSolved INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -323,7 +380,8 @@ abstract class AppDatabase : RoomDatabase() {
                     .addMigrations(
                         MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
                         MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
-                        MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13
+                        MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13,
+                        MIGRATION_13_14, MIGRATION_14_15
                     )
                     .fallbackToDestructiveMigration()
                     .build()

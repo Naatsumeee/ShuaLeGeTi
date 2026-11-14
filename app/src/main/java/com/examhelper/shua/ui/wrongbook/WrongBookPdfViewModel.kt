@@ -12,12 +12,15 @@ import com.examhelper.shua.data.llm.ChatMessage
 import com.examhelper.shua.data.llm.Prompts
 import com.examhelper.shua.data.model.JsonCodec
 import com.examhelper.shua.data.model.PdfAnswerMode
+import com.examhelper.shua.data.model.PdfAnswerPlacement
 import com.examhelper.shua.data.model.PdfExportRequest
 import com.examhelper.shua.data.model.PdfExportScope
 import com.examhelper.shua.data.model.PdfExportSource
+import com.examhelper.shua.data.model.PdfExportOptions
 import com.examhelper.shua.data.model.PdfQuestion
 import com.examhelper.shua.data.model.WrongBookExport
 import com.examhelper.shua.data.pdf.WrongBookPdfRenderer
+import com.examhelper.shua.data.pdf.PdfExportNaming
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -51,10 +54,15 @@ class WrongBookPdfViewModel(
         val chapters: List<String> = emptyList(),
         val selectedChapters: Set<String> = emptySet(),
         val scope: PdfExportScope = PdfExportScope.BANK,
+        val includeAnswers: Boolean = true,
         val answerMode: PdfAnswerMode = PdfAnswerMode.DEEP,
+        val answerPlacement: PdfAnswerPlacement = PdfAnswerPlacement.AFTER_EACH,
         val deepRunning: Boolean = false,
         val deepMessage: String? = null,
         val deepFailed: Set<Long> = emptySet(),
+        val minimalRunning: Boolean = false,
+        val minimalMessage: String? = null,
+        val minimalFailed: Set<Long> = emptySet(),
         val generating: Boolean = false,
         val message: String? = null,
         val error: String? = null
@@ -67,6 +75,10 @@ class WrongBookPdfViewModel(
         }
 
         fun selectedBankName(): String = banks.firstOrNull { it.first == selectedBankId }?.second.orEmpty()
+
+        fun missingAnalysisCount(): Int = if (includeAnswers) {
+            WrongBookExport(source, selectedQuestions()).missingAnalysisIds(answerMode).size
+        } else 0
     }
 
     private val _state = MutableStateFlow(UiState(source = source))
@@ -139,6 +151,14 @@ class WrongBookPdfViewModel(
         _state.value = _state.value.copy(answerMode = mode)
     }
 
+    fun setAnswerPlacement(placement: PdfAnswerPlacement) {
+        _state.value = _state.value.copy(answerPlacement = placement)
+    }
+
+    fun setOnlyQuestions(onlyQuestions: Boolean) {
+        _state.value = _state.value.copy(includeAnswers = !onlyQuestions)
+    }
+
     /** 只维护最终导出范围内的错题解析，不自动触发 PDF，也不动范围外题目。 */
     fun startDeepSolve() {
         val selected = _state.value.selectedQuestions()
@@ -167,7 +187,11 @@ class WrongBookPdfViewModel(
                             ChatMessage("user", buildPrompt(entity))
                         ),
                         maxTokens = 4096,
-                        reasoningEffort = settings.settings.first().reasoningEffort
+                        reasoningEffort = settings.settings.first().reasoningEffort,
+                        usageContext = com.examhelper.shua.data.llm.AiUsageContext(
+                            com.examhelper.shua.data.llm.AiUsageCategory.DEEP_SOLVE,
+                            "pdf-deep:${q.id}:${java.util.UUID.randomUUID()}"
+                        )
                     )
                     val parsed = parseDeepSolve(result.content)
                     if (parsed.analysis.isNullOrBlank()) error("模型未返回解析")
@@ -190,6 +214,64 @@ class WrongBookPdfViewModel(
         }
     }
 
+    fun startMinimalSolve() {
+        val selected = _state.value.selectedQuestions()
+        if (_state.value.minimalRunning || selected.isEmpty()) return
+        val pendingIds = selected.filter { !it.minimalSolved || it.analysis.isNullOrBlank() }.map { it.id }.toSet()
+        if (pendingIds.isEmpty()) {
+            _state.value = _state.value.copy(minimalMessage = "所选错题都已经有解析")
+            return
+        }
+        _state.value = _state.value.copy(
+            minimalRunning = true,
+            minimalMessage = "准备生成 ${pendingIds.size} 道题的极简解析",
+            minimalFailed = emptySet()
+        )
+        viewModelScope.launch(Dispatchers.IO) {
+            val provider = runCatching { resolveProvider() }.getOrElse { e ->
+                _state.value = _state.value.copy(minimalRunning = false, minimalMessage = e.message ?: "未配置 AI 模型")
+                return@launch
+            }
+            var done = 0
+            val failed = mutableSetOf<Long>()
+            for (q in selected) {
+                if (q.minimalSolved && !q.analysis.isNullOrBlank()) continue
+                val entity = questionEntities[q.id] ?: continue
+                runCatching {
+                    val result = llmClient.chatWithMessages(
+                        provider = provider,
+                        messages = listOf(
+                            ChatMessage("system", Prompts.MINIMAL_SOLVE_DEFAULT),
+                            ChatMessage("user", buildPrompt(entity))
+                        ),
+                        maxTokens = 180,
+                        reasoningEffort = com.examhelper.shua.data.llm.ReasoningEffort.NONE,
+                        usageContext = com.examhelper.shua.data.llm.AiUsageContext(
+                            com.examhelper.shua.data.llm.AiUsageCategory.MINIMAL_SOLVE,
+                            "pdf-minimal:${q.id}:${java.util.UUID.randomUUID()}"
+                        )
+                    )
+                    val parsed = parseDeepSolve(result.content)
+                    if (parsed.analysis.isNullOrBlank()) error("模型未返回极简解析")
+                    val updated = container.studyRepo.applyMinimalSolve(entity, parsed.analysis.take(60))
+                    questionEntities = questionEntities + (entity.id to updated)
+                    _state.value = _state.value.copy(
+                        questions = _state.value.questions.map { if (it.id == updated.id) updated.toPdfQuestion() else it }
+                    )
+                }.onFailure { failed += q.id }
+                done++
+                _state.value = _state.value.copy(
+                    minimalMessage = "极简解析：$done/${pendingIds.size}，失败 ${failed.size}"
+                )
+            }
+            _state.value = _state.value.copy(
+                minimalRunning = false,
+                minimalFailed = failed,
+                minimalMessage = "已完成，失败 ${failed.size} 道；可再次点击只重试失败部分"
+            )
+        }
+    }
+
     fun exportPdf(context: Context, uri: Uri) {
         val selected = _state.value.selectedQuestions()
         if (_state.value.generating || selected.isEmpty()) return
@@ -201,12 +283,19 @@ class WrongBookPdfViewModel(
                 val title = WrongBookExport.title(bankName, _state.value.selectedChapters.sorted())
                 val bytes = WrongBookPdfRenderer.render(
                     title = title,
+                    bankName = bankName,
                     export = WrongBookExport(_state.value.source, selected),
-                    mode = _state.value.answerMode,
+                    options = PdfExportOptions(
+                        includeAnswers = _state.value.includeAnswers,
+                        mode = _state.value.answerMode,
+                        placement = _state.value.answerPlacement
+                    ),
                     sansFont = context.assets.open("pdf/NotoSansSC-Bold.ttf"),
                     serifFont = context.assets.open("pdf/NotoSerifSC-Regular.ttf"),
-                    notice = _state.value.deepFailed.takeIf { it.isNotEmpty() }
-                        ?.let { "本次深度解析失败 ${it.size} 道，缺失解析在对应题目中标注为“无”。" }
+                    notice = buildList {
+                        if (_state.value.deepFailed.isNotEmpty()) add("本次深度解析失败 ${_state.value.deepFailed.size} 道")
+                        if (_state.value.minimalFailed.isNotEmpty()) add("本次极简解析失败 ${_state.value.minimalFailed.size} 道")
+                    }.takeIf { it.isNotEmpty() }?.joinToString("；", postfix = "，缺失解析在对应题目中标注为“无”。")
                 )
                 context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
                     ?: error("无法写入 PDF")
@@ -220,8 +309,7 @@ class WrongBookPdfViewModel(
 
     fun suggestedName(): String {
         val name = _state.value.selectedBankName().ifBlank { "错题本" }
-        val title = WrongBookExport.title(name, _state.value.selectedChapters.sorted())
-        return title.replace(Regex("""[\\/:*?"<>|]"""), "_").take(80) + ".pdf"
+        return PdfExportNaming.fileName(name)
     }
 
     private suspend fun resolveProvider() = providerDao.getPrimary()
@@ -239,7 +327,8 @@ class WrongBookPdfViewModel(
             options = opts.map { "${it.key}. ${it.text}" },
             answer = answer,
             analysis = analysis,
-            deepSolved = deepSolved
+            deepSolved = deepSolved,
+            minimalSolved = minimalSolved
         )
     }
 

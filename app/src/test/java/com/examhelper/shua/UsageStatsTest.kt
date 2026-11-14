@@ -2,6 +2,7 @@ package com.examhelper.shua
 
 import com.examhelper.shua.data.generate.Cost
 import com.examhelper.shua.data.llm.UsageStats
+import com.examhelper.shua.data.db.AiUsageRecord
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -116,5 +117,37 @@ class UsageStatsTest {
         assertFalse(w.isEmpty)
         assertEquals(20000L, w.totalTokens)
         assertEquals(80, Cost.hitRateOrNull(w.hitTokens, w.missTokens))
+    }
+
+    @Test
+    fun `本地估算汇总所有 AI 类别并按各自模型计价`() {
+        val calls = listOf(
+            AiUsageRecord(
+                id = 1, callId = "c1", taskId = "task-import", providerId = 1,
+                providerName = "主部", model = "deepseek-flash", category = "IMPORT_PARSE",
+                cacheHitTokens = 10_000, cacheMissTokens = 20_000, outputTokens = 5_000,
+                createdAt = 1L
+            ),
+            AiUsageRecord(
+                id = 2, callId = "c2", taskId = "task-ask", providerId = 1,
+                providerName = "主部", model = "deepseek-v4-pro", category = "ASK_AI",
+                cacheHitTokens = 1_000, cacheMissTokens = 2_000, outputTokens = 500,
+                createdAt = 2L
+            ),
+            AiUsageRecord(
+                id = 3, callId = "c3", taskId = "task-ask", providerId = 2,
+                providerName = "其他部", model = "deepseek-flash", category = "DEEP_SOLVE",
+                cacheHitTokens = 0, cacheMissTokens = 500, outputTokens = 200,
+                createdAt = 3L
+            )
+        )
+
+        val estimate = UsageStats.estimate(calls, fallbackModel = null)
+
+        assertEquals(2, estimate.taskCount)
+        assertEquals(11_000L, estimate.hitTokens)
+        assertEquals(22_500L, estimate.missTokens)
+        assertEquals(5_700L, estimate.outTokens)
+        assertTrue((estimate.spent ?: 0.0) > 0.0)
     }
 }

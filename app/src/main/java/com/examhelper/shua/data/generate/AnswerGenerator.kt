@@ -80,7 +80,8 @@ class AnswerGenerator(
      * high 的思考开销很容易把预算吃掉，表现是整批返回空、题意全丢。
      */
     private val reasoningEffort: com.examhelper.shua.data.llm.ReasoningEffort? =
-        com.examhelper.shua.data.llm.ReasoningEffort.LOW
+        com.examhelper.shua.data.llm.ReasoningEffort.LOW,
+    private val usageTaskId: String = "generate:${java.util.UUID.randomUUID()}"
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -105,7 +106,11 @@ class AnswerGenerator(
             jsonMode = true,
             temperature = 0.1,
             maxTokens = 3000,
-            reasoningEffort = reasoningEffort
+            reasoningEffort = reasoningEffort,
+            usageContext = com.examhelper.shua.data.llm.AiUsageContext(
+                com.examhelper.shua.data.llm.AiUsageCategory.ANSWER_GENERATE,
+                usageTaskId
+            )
         )
         val content = result.content
         val cleaned = LlmQuestionParser.stripCodeFence(content)

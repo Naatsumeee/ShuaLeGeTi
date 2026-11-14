@@ -13,7 +13,7 @@ import com.examhelper.shua.ShuaApp
  *
  * ## 两个旋钮必须彻底拆开（v1.0.12 后的修正）
  *
- * - **强度 1–10**：只决定 [VibrationEffect] 的 amplitude，不动毫秒。
+ * - **强度 1–10**：决定 [VibrationEffect] 的 amplitude 与脉冲密度，不改总毫秒。
  * - **时长 1–10**：只决定震动的毫秒数，不动 amplitude。
  *
  * 上一版把「强度」也乘进了时长（0.88/1.0/1.12 倍），本意是让强的那一下多走几个
@@ -34,7 +34,7 @@ import com.examhelper.shua.ShuaApp
  *    现在只在明确要打断时取消。
  * 2. 不带 `VibrationAttributes` 的震动走 `USAGE_UNKNOWN`，部分 ROM 会按
  *    **电话/通知** 通道套用系统「触感强度」，覆盖掉 app 传入的 amplitude。
- *    API 33+ 显式标 `USAGE_TOUCH`。
+ *    API 33+ 显式标 `USAGE_MEDIA`：实测部分 ROM 会压缩 `USAGE_TOUCH` 的振幅。
  */
 object Haptics {
 
@@ -108,20 +108,24 @@ object Haptics {
             val vibrator = resolve(ctx) ?: return
             if (!vibrator.hasVibrator()) return
             val ms = durationOf(beat)
-            if (!vibrator.hasAmplitudeControl()) {
-                // 转子马达：只能靠时长表达强弱，amplitude 会被系统忽略
-                vibrate(vibrator, ms, VibrationEffect.DEFAULT_AMPLITUDE)
-                return
-            }
+            val hasAmplitude = vibrator.hasAmplitudeControl()
             val now = System.currentTimeMillis()
             val idle = now - lastPlayedAt > 30_000L
             lastPlayedAt = now
             val amp = amplitudeOf()
-            if (idle) {
+            if (idle && hasAmplitude) {
                 // 部分 ROM 空闲后会吞掉第一记短脉冲；预脉冲与真实反馈合成一个波形。
-                vibrateEffect(vibrator, VibrationEffect.createWaveform(longArrayOf(0L, 2L, 12L, ms), intArrayOf(0, 8, 0, amp), -1))
+                vibrateEffect(
+                    vibrator,
+                    VibrationEffect.createWaveform(
+                        longArrayOf(0L, 2L, 12L) + strengthWaveform(ms, amp, hasAmplitude).first,
+                        intArrayOf(0, 8, 0) + strengthWaveform(ms, amp, hasAmplitude).second,
+                        -1
+                    )
+                )
             } else {
-                vibrate(vibrator, ms, amp)
+                val (timings, amplitudes) = strengthWaveform(ms, amp, hasAmplitude)
+                vibrateEffect(vibrator, VibrationEffect.createWaveform(timings, amplitudes, -1))
             }
         }
     }
@@ -178,9 +182,30 @@ object Haptics {
         vibrateEffect(vibrator, VibrationEffect.createOneShot(ms, amp))
     }
 
+    /**
+     * 同样总时长内，高档位使用更多脉冲。不能只依赖 amplitude：部分 ROM 会把
+     * USAGE_TOUCH 的振幅统一压缩，用户无论怎么调都感觉一样。
+     */
+    private fun strengthWaveform(ms: Long, amp: Int, hasAmplitude: Boolean): Pair<LongArray, IntArray> {
+        val pulses = 1 + (strength - 1) / 3
+        val gap = if (pulses > 1) 2L else 0L
+        val pulseMs = ((ms - gap * (pulses - 1)) / pulses).coerceAtLeast(2L)
+        val timings = LongArray(pulses * 2 - 1)
+        val amplitudes = IntArray(timings.size)
+        for (i in 0 until pulses) {
+            timings[i * 2] = pulseMs
+            amplitudes[i * 2] = if (hasAmplitude) amp else VibrationEffect.DEFAULT_AMPLITUDE
+            if (i < pulses - 1) {
+                timings[i * 2 + 1] = gap
+                amplitudes[i * 2 + 1] = 0
+            }
+        }
+        return timings to amplitudes
+    }
+
     private fun vibrateEffect(vibrator: Vibrator, effect: VibrationEffect) {
         if (Build.VERSION.SDK_INT >= 33) {
-            vibrator.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_TOUCH))
+            vibrator.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_MEDIA))
         } else {
             @Suppress("DEPRECATION")
             vibrator.vibrate(effect)

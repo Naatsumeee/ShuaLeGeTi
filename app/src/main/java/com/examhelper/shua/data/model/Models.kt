@@ -36,6 +36,8 @@ data class ParsedQuestion(
     var sourcePage: Int? = null,
     /** 导入标准题库文件时还原 AI 元数据 */
     var aiGenerated: Boolean = false,
+    var deepSolved: Boolean = false,
+    var minimalSolved: Boolean = false,
     var confidence: Int? = null,
     var agreement: String? = null,
     var dissent: List<DissentEntry> = emptyList()
@@ -83,6 +85,8 @@ data class ShuaQuestionJson(
     val analysis: String? = null,
     val sourcePage: Int? = null,
     val aiGenerated: Boolean = false,
+    val deepSolved: Boolean = false,
+    val minimalSolved: Boolean = false,
     val confidence: Int? = null,
     val agreement: String? = null,
     val dissent: List<DissentEntry> = emptyList()

@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -54,7 +55,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -62,6 +65,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.examhelper.shua.BuildConfig
+import com.examhelper.shua.R
 import com.examhelper.shua.data.db.LlmProvider
 import com.examhelper.shua.data.settings.OcrEngine
 import com.examhelper.shua.ui.theme.ChipTone
@@ -88,6 +92,7 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
     val test by vm.test.collectAsState()
     val bal by vm.balance.collectAsState()
     val usage by vm.usage.collectAsState()
+    val update by vm.update.collectAsState()
     val message by vm.message.collectAsState()
     var editing by remember { mutableStateOf<LlmProvider?>(null) }
     var showAdd by remember { mutableStateOf(false) }
@@ -96,6 +101,12 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
     var showPrompts by remember { mutableStateOf(false) }
     /** 用量情况的时间窗口：7 / 30 天 */
     var usageDays by remember { mutableIntStateOf(7) }
+    var fontDraft by remember { mutableFloatStateOf(ui.fontScale) }
+    var lastFontStep by remember { mutableIntStateOf((ui.fontScale * 20).roundToInt()) }
+    LaunchedEffect(ui.fontScale) {
+        fontDraft = ui.fontScale
+        lastFontStep = (ui.fontScale * 20).roundToInt()
+    }
 
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(message) {
@@ -147,17 +158,9 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                                 // 转子马达（或系统禁用了振幅控制）时，amplitude 会被系统忽略，
                                 // 「强度」滑块怎么拖都是同一个手感。与其让用户反复试，
                                 // 不如在这里直说 —— 这正是以前「强度调节失效」最容易被误判的来源。
-                                if (!Haptics.supportsAmplitude()) {
-                                    Text(
-                                        "当前设备的马达不支持振幅调节，强度滑块可能感觉不出差别，时长仍然有效。",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = extra.amber,
-                                        modifier = Modifier.padding(bottom = 10.dp)
-                                    )
-                                }
                                 HapticSliderRow(
                                     title = "震动强度",
-                                    hint = "只影响振幅（震得多重）",
+                                    hint = "振幅 + 脉冲密度（震得多重）",
                                     value = ui.hapticStrength,
                                     onChange = vm::setHapticStrength
                                 )
@@ -203,11 +206,22 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                                     fontWeight = FontWeight.Medium,
                                     modifier = Modifier.weight(1f)
                                 )
-                                MonoText("${(ui.fontScale * 100).toInt()}%", color = extra.terracotta)
+                                MonoText("${(fontDraft * 100).toInt()}%", color = extra.terracotta)
                             }
                             Slider(
-                                value = ui.fontScale,
-                                onValueChange = { vm.setFontScale((it * 20).toInt() / 20f) },
+                                value = fontDraft,
+                                onValueChange = {
+                                    val stepped = (it * 20).roundToInt() / 20f
+                                    if (stepped != fontDraft) {
+                                        fontDraft = stepped
+                                        val step = (stepped * 20).roundToInt()
+                                        if (step != lastFontStep) {
+                                            lastFontStep = step
+                                            Haptics.tick()
+                                        }
+                                    }
+                                },
+                                onValueChangeFinished = { vm.setFontScale(fontDraft) },
                                 valueRange = 0.8f..1.5f
                             )
                         }
@@ -451,8 +465,8 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                                     )
                                 }
                                 Text(
-                                    "「实际消费」= 窗口内余额下降量累加（充值的回升段跳过），可与官方账单对照；" +
-                                        "「本地估算」按记录的 token 与峰谷单价计算，端点不透传缓存字段时会偏高。",
+                                    "「实际消费」= 当前主模型账号的余额下降量，DeepSeek 目前不提供按 API Key 单独查询消费的接口；" +
+                                        "「本地估算」汇总本机所有 AI 调用（导入解析、答案生成、问 AI、深度/极简解析），按每次调用的模型、时间和 token 计算。",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.outline
                                 )
@@ -611,7 +625,15 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
 
             // ================= 关于 =================
             item { SectionLabel("关于") }
-            item { AboutCard(onOpen = vm::openUrl) }
+            item {
+                AboutCard(
+                    onOpen = vm::openUrl,
+                    checkingUpdate = update.checking,
+                    updateInfo = update.info,
+                    onCheckUpdate = vm::checkUpdate,
+                    onDismissUpdate = vm::dismissUpdate
+                )
+            }
             }
         }
 
@@ -963,29 +985,27 @@ private fun PromptEditor(
 }
 
 @Composable
-private fun AboutCard(onOpen: (String) -> Unit) {
+private fun AboutCard(
+    onOpen: (String) -> Unit,
+    checkingUpdate: Boolean,
+    updateInfo: com.examhelper.shua.data.update.UpdateInfo?,
+    onCheckUpdate: () -> Unit,
+    onDismissUpdate: () -> Unit
+) {
     val extra = shuaColors
     var showChangelog by remember { mutableStateOf(false) }
     PaperCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp)) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier
-                        .size(44.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(extra.terracotta),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("题", style = serifTitle(20.sp, FontWeight.Medium), color = MaterialTheme.colorScheme.onPrimary)
-                }
+                Image(
+                    painter = painterResource(R.mipmap.ic_launcher),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(48.dp).clip(RoundedCornerShape(14.dp))
+                )
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text("刷了个题", style = serifTitle(18.sp, FontWeight.Medium))
-                    Text(
-                        "离线题库 · 四种刷题模式 · 三省六部 AI 校验",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                 }
                 SemanticChip("v${BuildConfig.VERSION_NAME}", ChipTone.Brand)
             }
@@ -996,6 +1016,11 @@ private fun AboutCard(onOpen: (String) -> Unit) {
             AboutLine("反馈邮箱", CONTACT_EMAIL, onClick = { onOpen("mailto:$CONTACT_EMAIL") })
             AboutLine("项目地址", PROJECT_URL, onClick = { onOpen(PROJECT_URL) })
             AboutLine("版本", "v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", onClick = null)
+            AboutLine(
+                "检查更新",
+                if (checkingUpdate) "正在查询 GitHub Release…" else "检查是否有新版本",
+                onClick = if (checkingUpdate) null else onCheckUpdate
+            )
             AboutLine(
                 "更新日志",
                 "查看历次版本改动（共 ${RELEASE_NOTES.size} 个版本）",
@@ -1028,6 +1053,26 @@ private fun AboutCard(onOpen: (String) -> Unit) {
 
     if (showChangelog) {
         ChangelogDialog(notes = RELEASE_NOTES, onDismiss = { showChangelog = false })
+    }
+
+    updateInfo?.let { info ->
+        AlertDialog(
+            onDismissRequest = onDismissUpdate,
+            title = { Text("检查到新版本") },
+            text = {
+                Text(
+                    "检查到新版本 v${info.version}，是否下载更新？\n\n更新日志：\n" +
+                        info.notes.ifBlank { "暂无更新说明" }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onOpen(info.downloadUrl.ifBlank { info.releaseUrl })
+                    onDismissUpdate()
+                }) { Text("下载更新") }
+            },
+            dismissButton = { TextButton(onClick = onDismissUpdate) { Text("稍后") } }
+        )
     }
 }
 

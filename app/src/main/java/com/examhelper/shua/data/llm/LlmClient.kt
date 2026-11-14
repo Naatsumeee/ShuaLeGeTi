@@ -199,7 +199,8 @@ class LlmClient(
         .readTimeout(300, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
         // 不设 callTimeout：它会把重试等待也算进去，反而更容易误杀长请求
-        .build()
+        .build(),
+    private val usageRecorder: suspend (LlmProvider, AiUsageContext, ChatUsage) -> Unit = { _, _, _ -> }
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
@@ -210,8 +211,9 @@ class LlmClient(
         userPrompt: String,
         jsonMode: Boolean = false,
         temperature: Double? = provider.temperature.toDouble(),
-        maxTokens: Int? = null
-    ): String = chatWithUsage(provider, systemPrompt, userPrompt, jsonMode, temperature, maxTokens).content
+        maxTokens: Int? = null,
+        usageContext: AiUsageContext = AiUsageContext()
+    ): String = chatWithUsage(provider, systemPrompt, userPrompt, jsonMode, temperature, maxTokens, usageContext = usageContext).content
 
     suspend fun chatWithUsage(
         provider: LlmProvider,
@@ -220,7 +222,8 @@ class LlmClient(
         jsonMode: Boolean = false,
         temperature: Double? = provider.temperature.toDouble(),
         maxTokens: Int? = null,
-        reasoningEffort: ReasoningEffort? = null
+        reasoningEffort: ReasoningEffort? = null,
+        usageContext: AiUsageContext = AiUsageContext()
     ): ChatResult = chatWithMessages(
         provider = provider,
         messages = listOf(
@@ -230,7 +233,8 @@ class LlmClient(
         jsonMode = jsonMode,
         temperature = temperature,
         maxTokens = maxTokens,
-        reasoningEffort = reasoningEffort
+        reasoningEffort = reasoningEffort,
+        usageContext = usageContext
     )
 
     /**
@@ -243,9 +247,10 @@ class LlmClient(
         jsonMode: Boolean = false,
         temperature: Double? = provider.temperature.toDouble(),
         maxTokens: Int? = null,
-        reasoningEffort: ReasoningEffort? = null
+        reasoningEffort: ReasoningEffort? = null,
+        usageContext: AiUsageContext = AiUsageContext()
     ): ChatResult = withContext(Dispatchers.IO) {
-        runCatching { chatOnce(provider, messages, jsonMode, temperature, maxTokens, reasoningEffort) }
+        val result = runCatching { chatOnce(provider, messages, jsonMode, temperature, maxTokens, reasoningEffort) }
             .recoverCatching {
                 // 两级降级，顺序不能反：
                 // 先去掉 reasoning_effort —— 不认这个字段的端点（Ollama、部分中转）
@@ -260,6 +265,8 @@ class LlmClient(
                 } else throw it
             }
             .getOrThrow()
+        runCatching { usageRecorder(provider, usageContext, result.usage) }
+        result
     }
 
     /**
@@ -278,6 +285,7 @@ class LlmClient(
         temperature: Double? = provider.temperature.toDouble(),
         maxTokens: Int? = null,
         reasoningEffort: ReasoningEffort? = null,
+        usageContext: AiUsageContext = AiUsageContext(),
         onReasoning: (String) -> Unit = {},
         onDelta: (String) -> Unit = {}
     ): ChatResult = chatStreamMessages(
@@ -290,6 +298,7 @@ class LlmClient(
         temperature = temperature,
         maxTokens = maxTokens,
         reasoningEffort = reasoningEffort,
+        usageContext = usageContext,
         onReasoning = onReasoning,
         onDelta = onDelta
     )
@@ -301,6 +310,7 @@ class LlmClient(
         temperature: Double? = provider.temperature.toDouble(),
         maxTokens: Int? = null,
         reasoningEffort: ReasoningEffort? = null,
+        usageContext: AiUsageContext = AiUsageContext(),
         onReasoning: (String) -> Unit = {},
         onDelta: (String) -> Unit = {}
     ): ChatResult = withContext(Dispatchers.IO) {
@@ -308,7 +318,7 @@ class LlmClient(
         // 界面上表现为「回答重复了两遍」，比直接报错更让人困惑。
         var emitted = false
         val trackDelta: (String) -> Unit = { d -> emitted = true; onDelta(d) }
-        runCatching {
+        val result = runCatching {
             streamOnce(provider, messages, jsonMode, temperature, maxTokens, reasoningEffort, onReasoning, trackDelta)
         }.recoverCatching { first ->
             // 部分兼容端点不认 response_format / max_tokens / stream_options，
@@ -323,6 +333,8 @@ class LlmClient(
             if (emitted) throw first
             streamOnce(provider, messages, false, temperature, null, null, onReasoning, trackDelta)
         }.getOrThrow()
+        runCatching { usageRecorder(provider, usageContext, result.usage) }
+        result
     }
 
     private fun streamOnce(
@@ -473,7 +485,8 @@ class LlmClient(
             provider,
             systemPrompt = "You are a connectivity test. Reply with exactly: PONG",
             userPrompt = "ping",
-            temperature = 0.0
+            temperature = 0.0,
+            usageContext = AiUsageContext(AiUsageCategory.CONNECTION_TEST)
         ).trim().take(50)
     }
 }

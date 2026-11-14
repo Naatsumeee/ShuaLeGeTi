@@ -129,6 +129,7 @@ fun StudyScreen(
     val vm: StudyViewModel = viewModel()
     val state by vm.state.collectAsState()
     var showSheet by remember { mutableStateOf(false) }
+    var askClosing by remember { mutableStateOf(false) }
     val pageScope = rememberCoroutineScope()
     val askSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
     val extra = shuaColors
@@ -164,7 +165,18 @@ fun StudyScreen(
                     IconAction(Icons.Filled.Refresh, "重置", extra.inkFaint) { vm.resetRandom() }
                 }
                 // 常驻「问 AI」入口：任何时候都能就当前题目提问
-                AskAiButton(compact = compact, active = state.askOpen) { vm.toggleAsk() }
+                AskAiButton(compact = compact, active = state.askOpen && !askClosing) {
+                    if (state.askOpen) {
+                        askClosing = true
+                        pageScope.launch {
+                            askSheetState.hide()
+                            vm.toggleAsk()
+                            askClosing = false
+                        }
+                    } else {
+                        vm.toggleAsk()
+                    }
+                }
             }
 
             when {
@@ -560,7 +572,11 @@ fun StudyScreen(
     // ---- 问 AI 追问面板 ----
     if (state.askOpen) {
         ModalBottomSheet(
-            onDismissRequest = { pageScope.launch { askSheetState.hide(); vm.toggleAsk() } },
+            onDismissRequest = {
+                com.examhelper.shua.ui.sound.Haptics.tap()
+                askClosing = true
+                pageScope.launch { askSheetState.hide(); vm.toggleAsk(); askClosing = false }
+            },
             containerColor = MaterialTheme.colorScheme.surface,
             // 键盘弹起时面板自动上移，输入框不会被遮挡
             // 半屏/全屏/关闭三档锚点，跟手阻尼与松手速度吸附由 Material3 完成。
@@ -577,7 +593,11 @@ fun StudyScreen(
                 ),
                 onAsk = vm::ask,
                 onClear = vm::clearAsk,
-                onDismiss = { pageScope.launch { askSheetState.hide(); vm.toggleAsk() } }
+                onDismiss = {
+                    com.examhelper.shua.ui.sound.Haptics.tap()
+                    askClosing = true
+                    pageScope.launch { askSheetState.hide(); vm.toggleAsk(); askClosing = false }
+                }
             )
         }
     }

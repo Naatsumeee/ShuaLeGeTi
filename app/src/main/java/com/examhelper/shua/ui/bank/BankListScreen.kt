@@ -8,6 +8,8 @@ import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
@@ -144,6 +146,7 @@ fun BankListScreen(
     var draggingBankId by remember { mutableStateOf<Long?>(null) }
     var dragOffsetY by remember { mutableFloatStateOf(0f) }
     var suppressClickFor by remember { mutableStateOf<Long?>(null) }
+    var askClosing by remember { mutableStateOf(false) }
     val itemGapPx = with(LocalDensity.current) { 12.dp.toPx() }
     LaunchedEffect(askOpen) { if (askOpen) askSheetState.show() }
 
@@ -163,18 +166,20 @@ fun BankListScreen(
                 .padding(top = contentPadding.calculateTopPadding() + 4.dp)
         ) {
             CompactTopBar(title = "刷题") {
-                com.examhelper.shua.ui.theme.GlassIconButton(
-                    icon = Icons.Filled.Edit,
-                    contentDescription = if (editMode) "退出编辑" else "编辑题库",
-                    tint = if (editMode) extra.terracottaDeep else MaterialTheme.colorScheme.onSurfaceVariant,
-                    containerColor = if (editMode) extra.terracottaSoft else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-                    onClick = {
-                        Haptics.tap()
-                        editMode = !editMode
-                        if (!editMode) selected.clear()
-                    }
-                )
-                Spacer(Modifier.width(6.dp))
+                if (allBanks.isNotEmpty()) {
+                    com.examhelper.shua.ui.theme.GlassIconButton(
+                        icon = Icons.Filled.Edit,
+                        contentDescription = if (editMode) "退出编辑" else "编辑题库",
+                        tint = if (editMode) extra.terracottaDeep else MaterialTheme.colorScheme.onSurfaceVariant,
+                        containerColor = if (editMode) extra.terracottaSoft else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                        onClick = {
+                            Haptics.tap()
+                            editMode = !editMode
+                            if (!editMode) selected.clear()
+                        }
+                    )
+                    Spacer(Modifier.width(6.dp))
+                }
                 com.examhelper.shua.ui.theme.GlassIconButton(
                     icon = Icons.Filled.Search,
                     contentDescription = "搜索",
@@ -184,8 +189,19 @@ fun BankListScreen(
                 // 问 AI：与刷题页同一套按钮与面板，只是没有「当前题目」上下文
                 com.examhelper.shua.ui.study.AskAiButton(
                     compact = true,
-                    active = askOpen,
-                    onClick = { askVm.toggle() }
+                    active = askOpen && !askClosing,
+                    onClick = {
+                        if (askOpen) {
+                            askClosing = true
+                            reorderScope.launch {
+                                askSheetState.hide()
+                                askVm.toggle()
+                                askClosing = false
+                            }
+                        } else {
+                            askVm.toggle()
+                        }
+                    }
                 )
                 Spacer(Modifier.width(6.dp))
                 // 导入入口放标题栏，紧挨搜索键右边 —— 原来右下角的悬浮按钮
@@ -341,12 +357,12 @@ fun BankListScreen(
                         val dragging = draggingBankId == bank.id
                         val dimmed = editMode && bank.id !in selected
                         val itemAlpha by animateFloatAsState(
-                            targetValue = if (dimmed) 0.72f else 1f,
+                            targetValue = if (dimmed) 0.48f else 1f,
                             animationSpec = spring(dampingRatio = 0.88f, stiffness = Spring.StiffnessMedium),
                             label = "bankEditAlpha"
                         )
                         val itemScale by animateFloatAsState(
-                            targetValue = if (dimmed) 0.98f else 1f,
+                            targetValue = if (dimmed) 0.965f else 1f,
                             animationSpec = spring(dampingRatio = 0.78f, stiffness = Spring.StiffnessMediumLow),
                             label = "bankEditScale"
                         )
@@ -512,7 +528,17 @@ fun BankListScreen(
                         }
                     }
             }
-            if (editMode && selected.isNotEmpty()) {
+            AnimatedVisibility(
+                visible = editMode && selected.isNotEmpty(),
+                enter = slideInVertically(
+                    animationSpec = spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow),
+                    initialOffsetY = { it }
+                ) + fadeIn(tween(120)),
+                exit = slideOutVertically(
+                    animationSpec = tween(150),
+                    targetOffsetY = { it }
+                ) + fadeOut(tween(100))
+            ) {
                 BatchActionBar(
                     selected = selected.toList(),
                     onMerge = {
@@ -667,7 +693,11 @@ fun BankListScreen(
     // 首页问 AI 面板：与刷题页同一个组件，样式与交互完全一致
     if (askOpen) {
         ModalBottomSheet(
-            onDismissRequest = { reorderScope.launch { askSheetState.hide(); askVm.toggle() } },
+            onDismissRequest = {
+                Haptics.tap()
+                askClosing = true
+                reorderScope.launch { askSheetState.hide(); askVm.toggle(); askClosing = false }
+            },
             containerColor = MaterialTheme.colorScheme.surface,
             // 保留半展开锚点：内容较高时可在半屏/全屏/关闭三档间拖动，
             // 松手由 Material3 按 velocity 自动选择最近锚点。
@@ -679,7 +709,11 @@ fun BankListScreen(
                 ),
                 onAsk = askVm::ask,
                 onClear = askVm::clear,
-                onDismiss = { reorderScope.launch { askSheetState.hide(); askVm.toggle() } }
+                onDismiss = {
+                    Haptics.tap()
+                    askClosing = true
+                    reorderScope.launch { askSheetState.hide(); askVm.toggle(); askClosing = false }
+                }
             )
         }
     }
@@ -715,7 +749,8 @@ private fun BankCard(
             .then(dragModifier)
             // 长按整张卡片进入拖拽；普通点击仍是进入题库，编辑模式下点击 = 勾选。
             .clickable(onClick = onClick),
-        shape = shape
+        shape = shape,
+        borderColor = if (editMode && checked) extra.terracotta.copy(alpha = 0.68f) else extra.creamLine
     ) {
         Row(Modifier.padding(16.dp).height(IntrinsicSize.Min).animateContentSize(), verticalAlignment = Alignment.CenterVertically) {
             AnimatedVisibility(
@@ -789,25 +824,26 @@ private fun BankCard(
                     }
                 }
             }
-            Crossfade(targetState = editMode, animationSpec = tween(150), label = "bankCardAction") { editing ->
-                if (editing) {
-                    Icon(
-                        Icons.Filled.DragHandle,
-                        contentDescription = "长按卡片拖动排序",
-                        tint = if (dragging) shuaColors.terracotta else MaterialTheme.colorScheme.outline,
-                        modifier = Modifier
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .background(if (dragging) shuaColors.terracottaSoft else Color.Transparent)
-                    )
-                } else {
-                    Box {
-                        com.examhelper.shua.ui.theme.GlassIconButton(
-                            icon = Icons.Filled.MoreVert,
-                            contentDescription = "更多",
-                            onClick = { menuOpen = true }
+            Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) {
+                Crossfade(targetState = editMode, animationSpec = tween(150), label = "bankCardAction") { editing ->
+                    if (editing) {
+                        Icon(
+                            Icons.Filled.DragHandle,
+                            contentDescription = "长按卡片拖动排序",
+                            tint = if (dragging) shuaColors.terracotta else MaterialTheme.colorScheme.outline,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(if (dragging) shuaColors.terracottaSoft else Color.Transparent)
                         )
-                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    } else {
+                        Box {
+                            com.examhelper.shua.ui.theme.GlassIconButton(
+                                icon = Icons.Filled.MoreVert,
+                                contentDescription = "更多",
+                                onClick = { menuOpen = true }
+                            )
+                            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                     DropdownMenuItem(
                         text = { Text(if (bank.pinned) "取消置顶" else "置顶") },
                         leadingIcon = { Icon(Icons.Filled.PushPin, contentDescription = null) },
@@ -835,6 +871,7 @@ private fun BankCard(
                         leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null, tint = extra.sage) },
                         onClick = { menuOpen = false; onDelete() }
                     )
+                            }
                         }
                     }
                 }

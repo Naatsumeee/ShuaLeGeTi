@@ -494,3 +494,15 @@ interface BalanceSnapshotDao {
     @Query("DELETE FROM balance_snapshots WHERE sampledAt < :before")
     suspend fun purgeBefore(before: Long): Int
 }
+
+@Dao
+interface AiUsageDao {
+    @Insert
+    suspend fun insert(record: AiUsageRecord)
+
+    @Query("SELECT * FROM ai_usage_records WHERE createdAt >= :since ORDER BY createdAt ASC")
+    suspend fun since(since: Long): List<AiUsageRecord>
+
+    @Query("DELETE FROM ai_usage_records WHERE createdAt < :before")
+    suspend fun purgeBefore(before: Long)
+}

@@ -1,6 +1,7 @@
 package com.examhelper.shua.data.pdf
 
-import com.examhelper.shua.data.model.PdfAnswerMode
+import com.examhelper.shua.data.model.PdfAnswerPlacement
+import com.examhelper.shua.data.model.PdfExportOptions
 import com.examhelper.shua.data.model.PdfQuestion
 import com.examhelper.shua.data.model.WrongBookExport
 import com.tom_roush.pdfbox.pdmodel.PDDocument
@@ -13,17 +14,20 @@ import java.io.InputStream
 
 /** 错题本 PDF 的最小排版器；字体由调用方提供，便于 Android assets 与 JVM 测试共用。 */
 object WrongBookPdfRenderer {
-    private const val MARGIN = 48f
+    internal const val TOP_MARGIN = 76.34647f
+    private const val SIDE_MARGIN = 48f
+    private const val BOTTOM_MARGIN = 48f
+    private const val HEADER_Y = 36f
+    private const val FOOTER_Y = 22f
     private const val TITLE_SIZE = 20f
     private const val BODY_SIZE = 12f
     private const val LINE_GAP = 5f
-    private const val PAGE_MARKER_Q = "QuestionPage"
-    private const val PAGE_MARKER_A = "AnswerPage"
 
     fun render(
         title: String,
+        bankName: String,
         export: WrongBookExport,
-        mode: PdfAnswerMode,
+        options: PdfExportOptions,
         sansFont: InputStream,
         serifFont: InputStream,
         notice: String? = null
@@ -32,18 +36,17 @@ object WrongBookPdfRenderer {
         return PDDocument().use { doc ->
             val sans = PDType0Font.load(doc, sansFont)
             val serif = PDType0Font.load(doc, serifFont)
-            val writer = Writer(doc, sans, serif, title, notice)
-            writer.page(PAGE_MARKER_Q, title)
-            export.questionBlocks(mode).forEachIndexed { i, block ->
+            val writer = Writer(doc, sans, serif, title, bankName, notice)
+            writer.newQuestionPage(firstPage = true)
+            export.questionBlocks(options).forEachIndexed { i, block ->
                 writer.heading("${i + 1}. ${export.questions[i].stem}")
                 block.lineSequence().drop(1).forEach(writer::line)
                 writer.space(8f)
             }
-            if (mode == PdfAnswerMode.CONCENTRATED) {
-                writer.newPage()
-                writer.page(PAGE_MARKER_A)
+            if (options.includeAnswers && options.placement == PdfAnswerPlacement.AT_END) {
+                writer.newAnswerPage()
                 writer.heading("答案与解析")
-                export.answerLines(mode).forEach { answer ->
+                export.answerLines(options).forEach { answer ->
                     answer.lines().forEach(writer::line)
                     writer.space(6f)
                 }
@@ -61,41 +64,59 @@ object WrongBookPdfRenderer {
         private val sans: PDType0Font,
         private val serif: PDType0Font,
         private val title: String,
+        private val bankName: String,
         private val notice: String?
     ) {
         private var page: PDPage? = null
         private var stream: PDPageContentStream? = null
         private var y = 0f
 
-        fun newPage() {
-            y = MARGIN
-            closeStream()
-        }
+        fun newQuestionPage(firstPage: Boolean = false) = newPage(firstPage, title)
 
-        fun page(marker: String, pageTitle: String = title) {
+        fun newAnswerPage() = newPage(firstPage = false, pageTitle = "答案与解析")
+
+        private fun newPage(firstPage: Boolean, pageTitle: String) {
             closeStream()
             page = PDPage(PDRectangle.A4).also { doc.addPage(it) }
-            stream = PDPageContentStream(doc, page).also { s ->
-                s.beginText()
-                s.setFont(sans, 1f)
-                s.newLineAtOffset(MARGIN, MARGIN)
-                s.showText(marker)
-                s.endText()
-            }
-            y = page!!.mediaBox.height - MARGIN
-            if (pageTitle.isNotBlank()) title(pageTitle)
+            stream = PDPageContentStream(doc, page)
+            y = page!!.mediaBox.height - TOP_MARGIN
+            if (firstPage) title(pageTitle) else header()
             notice?.takeIf { it.isNotBlank() }?.let { line(it) }
+            footer(doc.numberOfPages)
         }
 
         private fun title(text: String) {
             withStream { s ->
                 s.beginText()
                 s.setFont(sans, TITLE_SIZE)
-                s.newLineAtOffset(MARGIN, y)
+                s.newLineAtOffset(SIDE_MARGIN, y)
                 s.showText(text)
                 s.endText()
             }
             y -= TITLE_SIZE + 14f
+        }
+
+        private fun header() {
+            if (bankName.isBlank()) return
+            withStream { s ->
+                s.beginText()
+                s.setFont(sans, 9f)
+                s.newLineAtOffset(SIDE_MARGIN, page!!.mediaBox.height - HEADER_Y)
+                s.showText(bankName)
+                s.endText()
+            }
+        }
+
+        private fun footer(pageNumber: Int) {
+            val text = pageNumber.toString()
+            val width = serif.getStringWidth(text) / 1000f * 9f
+            withStream { s ->
+                s.beginText()
+                s.setFont(serif, 9f)
+                s.newLineAtOffset((page!!.mediaBox.width - width) / 2f, FOOTER_Y)
+                s.showText(text)
+                s.endText()
+            }
         }
 
         fun heading(text: String) = line(text, bold = true)
@@ -112,7 +133,7 @@ object WrongBookPdfRenderer {
                 withStream { s ->
                     s.beginText()
                     s.setFont(if (bold) sans else serif, size)
-                    s.newLineAtOffset(MARGIN, y)
+                    s.newLineAtOffset(SIDE_MARGIN, y)
                     s.showText(part)
                     s.endText()
                 }
@@ -125,14 +146,12 @@ object WrongBookPdfRenderer {
         }
 
         private fun ensureSpace(size: Float) {
-            if (y >= MARGIN + size) return
-            val marker = PAGE_MARKER_Q
-            closeStream()
-            page(PAGE_MARKER_Q)
+            if (y >= BOTTOM_MARGIN + size) return
+            newQuestionPage()
         }
 
         private fun wrap(text: String, font: PDType0Font, size: Float): List<String> {
-            val max = page!!.mediaBox.width - MARGIN * 2
+            val max = page!!.mediaBox.width - SIDE_MARGIN * 2
             val out = mutableListOf<String>()
             var current = StringBuilder()
             text.forEach { c ->

@@ -32,7 +32,7 @@ Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）�
 ## 技术栈与关键决策
 
 - Kotlin + Jetpack Compose（BOM 2024.12.01）+ Material3；MVVM（ViewModel 用 @JvmOverloads/SavedStateHandle 构造，无 DI 框架，`ShuaApp.instance.container` 手工容器）
-- **Room v13**（`data/db/`：Entities/Daos/AppDatabase，迁移 1→2→…→13 全部注册在 `AppDatabase.addMigrations`）。`fallbackToDestructiveMigration` **仍在**，新增字段必须写正式迁移，否则老用户升级即丢库。各版本加了什么：v2 `subtype`/`sharedStem`/`sharedOptionsJson`/`attempt_records.runId`/`durationMs`/`study_progress.filterJson`；v3 `sourcePage`；v4 `originalAnswer`；v5 `aiAnswer`/`answerVerified`/`deepSolved`；v6 三个 token 字段；v7 余额快照（已废弃）；v8 `import_jobs.streamTail`/`banks.pinned`/`banks.archived`；v9 `wrong_records.flagged`（重点标记，与「已掌握」互相独立）；**v10 是数据迁移**（`MIGRATION_9_10` 用 `HeadingClassifier.cleanChapter` 把库里已有的脏章节名就地洗掉，不重导）；**v11 也是数据迁移**（再洗一次 + `unifyChapterNames` 归一）；v12 新增 `balance_snapshots` 表（余额快照，供「用量情况」的窗口累计）；**v13** 给 `banks` 新增 `groupId`/`isGroup`/`accentColor`/`note`/`sortOrder`/`mergedFromJson`/`mergeSnapshotJson`
+- **Room v15**（`data/db/`：Entities/Daos/AppDatabase，迁移 1→2→…→15 全部注册在 `AppDatabase.addMigrations`）。`fallbackToDestructiveMigration` **仍在**，新增字段必须写正式迁移，否则老用户升级即丢库。各版本加了什么：v2 `subtype`/`sharedStem`/`sharedOptionsJson`/`attempt_records.runId`/`durationMs`/`study_progress.filterJson`；v3 `sourcePage`；v4 `originalAnswer`；v5 `aiAnswer`/`answerVerified`/`deepSolved`；v6 三个 token 字段；v7 余额快照（已废弃）；v8 `import_jobs.streamTail`/`banks.pinned`/`banks.archived`；v9 `wrong_records.flagged`（重点标记，与「已掌握」互相独立）；**v10 是数据迁移**（`MIGRATION_9_10` 用 `HeadingClassifier.cleanChapter` 把库里已有的脏章节名就地洗掉，不重导）；**v11 也是数据迁移**（再洗一次 + `unifyChapterNames` 归一）；v12 新增 `balance_snapshots` 表；**v13** 给 `banks` 新增组/颜色/备注/排序/合并快照字段；**v14** 新增 `ai_usage_records` 统一 AI 调用账本（`callId`/`taskId`/模型/token/时间戳）；**v15** 给 `questions` 新增 `minimalSolved`，极简解析不再与普通/深度解析混为一谈
 - 双 OCR 引擎（`data/ocr/`）：**默认 RapidOCR**（PP-OCRv5 ONNX，v1.0.11 起）+ ML Kit 中文 bundled（备选，轻量）；OCR 后做**双栏阅读顺序重排**（`MlKitOcrEngine.rebuildReadingOrder`，扫描试卷是左右双栏）；RapidOCR 额外跑**版面分析**（见「版面分析」节）
 - RapidOCR 为**源码模块** `rapidocr-src/OcrLibrary`（Apache-2.0，已入库 ~93MB）：NDK r27 + `ANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON` + onnxruntime **1.20**（16KB 页对齐，Maven 的 AAR 抽取）+ opencv-mobile 3.4.15（`src/sdk/`）。**16KB 页对齐是硬要求**（用户手机是 16KB 设备），换依赖时必须验证 PT_LOAD p_align=16384
 - 后台任务 = WorkManager 前台服务（dataSync 类型）：`ImportPipelineWorker`（导入/解析，断点续传按"已落盘分块"）与 `GenerateWorker`（AI 生成，断点续传按"已答即跳过"）；进度写 Room 表（import_jobs/generate_jobs），UI 观察 Flow
@@ -223,7 +223,7 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - **归档**：`banks.archived = true` 的题库不进主列表，只在最下方一行小字「显示已归档题库（N）」/「收起已归档题库」居中显示，点开才渲染。`BankDao.observeAll()` 排序是 `ORDER BY pinned DESC, sortOrder ASC, updatedAt DESC`；整卡长按拖拽会批量写入 `sortOrder`。
 - 改名的 `RenameBankDialog` 用 `OutlinedTextField` + 空值禁用「保存」；`BankListViewModel.renameBank` 会 `trim` 后空则忽略。
 
-## 未发版待测批次（2026-11-14，DB v13）
+## 未发版待测批次（2026-11-14，DB v15）
 
 > 当前工作区待提交，**没有发 Release、没有改版本号**。用户要求先推送 APK/源码供测试，确认无误后再发版。
 
@@ -237,8 +237,11 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - **颜色/拖拽**：8 个区分色不含默认橘红和黑白；自定义支持 `#RGB/#RRGGBB/#AARRGGBB`，HSL 二维色盘 + 色相条 + 十六进制实时校验。整张题库卡片长按进入拖拽，跨越相邻卡时即时交换本地顺序，其他项用弹簧让位，松手一次写 `sortOrder`；长按不会再弹旧菜单/误进题库。
 - **动效**：一级 Tab 横向过场与 Dock 同组弹簧参数；问 AI Bottom Sheet 有橡皮筋阻尼/速度吸附；做题主按钮有 0.96 压缩、内阴影和释放回弹。
 - **题库维护**：AI 生成与编辑章节先进入维护选择页；支持单库维护和按子库顺序的一键维护，选择页明确提示耗时与失败率风险。
-- **错题 PDF**：错题本标题栏增加“输出错题 PDF”，继承当前选项卡；导出页可按题库/章节多选，支持深度解析、极简解析、仅答案、文末集中答案、无答案五种模式；批量深度解析是独立维护入口，成功后写回原题库，失败不阻断 PDF 并标注失败题数。A4 PDF 使用内置 Noto Sans/Serif SC，标题 20pt Sans Bold，正文 12pt Serif。
-- **回归基线**：`./gradlew testDebugUnitTest --rerun-tasks` 当前 **253 项全绿**。设备实证：长按拖拽顺序持久化、编辑批量栏可见、HSL 对话框不溢出、组详情分区为“全题库组/题库组”、全题库组范围页可选子库、作答记录落到子题库而非组 id、错题 PDF 入口与导出页可打开、维护按钮显示已启动状态。
+- **错题 PDF**：错题本标题栏增加“输出错题 PDF”，继承当前选项卡；导出页可按题库/章节多选，答案解析可选题后/文末，并支持深度解析、极简解析、仅答案或仅导题目。Markdown 在排版前清洗；首页显示完整标题，后续页左上题库名、页脚页码；上边距 76.35pt；A4 使用内置 Noto Sans/Serif SC，标题 20pt Sans Bold，正文 12pt Serif。深度/极简批量维护都只处理最终导出范围，失败不阻断 PDF 且可续跑。
+- **AI 用量账本**：所有导入/生成/问 AI/深度解题/极简解析调用统一写 `ai_usage_records`，本地估算按每次调用自己的时间戳和编号计算；DeepSeek 官方只有账号级余额接口，没有 API Key 级消费查询。
+- **设置/更新**：关于页使用应用图标并清理副标题；检查更新读取 GitHub latest release，失败时提示到作者抖音主页；字体大小滑杆松手才应用、跨档震动；震动强度用振幅和脉冲密度共同表达。
+- **交互修复**：空题库首页不渲染编辑按钮；编辑模式未选项透明度 0.48、已选项恢复对比度；菜单/拖拽横条固定容器消除跳动；批量操作栏弹性上滑；问 AI 开关的颜色与震动即时响应。
+- **回归基线**：`./gradlew testDebugUnitTest --rerun-tasks` 当前 **261 项全绿**；模拟器已从 Room v13 连续迁移到 v15，`minimalSolved` 列和 `ai_usage_records` 表存在，空题库首页 UI 层级确认无“编辑题库”按钮。真机震动强度和完整手势体感仍需用户设备复测。
 
 ## AI 解析流式预览（`ImportPipelineWorker` + `ImportScreen.kt`，v1.0.11）
 

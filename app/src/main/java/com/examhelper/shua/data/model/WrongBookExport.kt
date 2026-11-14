@@ -14,10 +14,16 @@ enum class PdfExportScope { BANK, CHAPTERS }
 enum class PdfAnswerMode {
     DEEP,
     MINIMAL,
-    ANSWER_ONLY,
-    CONCENTRATED,
-    NONE
+    ANSWER_ONLY
 }
+
+enum class PdfAnswerPlacement { AFTER_EACH, AT_END }
+
+data class PdfExportOptions(
+    val includeAnswers: Boolean = true,
+    val mode: PdfAnswerMode = PdfAnswerMode.DEEP,
+    val placement: PdfAnswerPlacement = PdfAnswerPlacement.AFTER_EACH
+)
 
 data class PdfExportRequest(
     val bankId: Long,
@@ -35,7 +41,8 @@ data class PdfQuestion(
     val options: List<String>,
     val answer: String?,
     val analysis: String?,
-    val deepSolved: Boolean
+    val deepSolved: Boolean,
+    val minimalSolved: Boolean = false
 )
 
 data class WrongBookExport(
@@ -47,31 +54,34 @@ data class WrongBookExport(
             (request.scope == PdfExportScope.BANK || q.chapter in request.chapters)
     }
 
-    fun answerLines(mode: PdfAnswerMode): List<String> = questions.mapIndexed { i, q ->
+    fun answerLines(options: PdfExportOptions): List<String> = questions.mapIndexed { i, q ->
         buildString {
             append(i + 1).append(".【答案】").append(q.answer?.takeIf { it.isNotBlank() } ?: "无")
-            if (mode == PdfAnswerMode.CONCENTRATED) {
-                append('\n').append("【解析】").append(q.analysis?.takeIf { it.isNotBlank() } ?: "无")
+            if (options.mode != PdfAnswerMode.ANSWER_ONLY) {
+                val analysis = analysisFor(q, options.mode)
+                append('\n').append("【解析】").append(analysis?.let(::plainText) ?: "无")
             }
         }
     }
 
-    fun questionBlocks(mode: PdfAnswerMode): List<String> = questions.mapIndexed { i, q ->
+    fun questionBlocks(options: PdfExportOptions): List<String> = questions.mapIndexed { i, q ->
         buildString {
-            append(i + 1).append(". ").append(q.stem)
-            q.options.forEach { append('\n').append(it) }
-            if (mode != PdfAnswerMode.NONE && mode != PdfAnswerMode.CONCENTRATED) {
+            append(i + 1).append(". ").append(plainText(q.stem))
+            q.options.forEach { append('\n').append(plainText(it)) }
+            if (options.includeAnswers && options.placement == PdfAnswerPlacement.AFTER_EACH) {
                 append('\n').append("【答案】").append(q.answer?.takeIf { it.isNotBlank() } ?: "无")
-                val analysis = when (mode) {
-                    PdfAnswerMode.DEEP -> q.analysis?.takeIf { q.deepSolved && it.isNotBlank() }
-                    PdfAnswerMode.MINIMAL -> minimal(q.analysis)
-                    else -> null
-                }
-                if (mode == PdfAnswerMode.DEEP || mode == PdfAnswerMode.MINIMAL) {
-                    append('\n').append("【解析】").append(analysis ?: "无")
+                if (options.mode != PdfAnswerMode.ANSWER_ONLY) {
+                    append('\n').append("【解析】")
+                        .append(analysisFor(q, options.mode)?.let(::plainText) ?: "无")
                 }
             }
         }
+    }
+
+    fun missingAnalysisIds(mode: PdfAnswerMode): List<Long> = when (mode) {
+        PdfAnswerMode.ANSWER_ONLY -> emptyList()
+        PdfAnswerMode.DEEP -> questions.filter { !it.deepSolved || it.analysis.isNullOrBlank() }.map { it.id }
+        PdfAnswerMode.MINIMAL -> questions.filter { !it.minimalSolved || it.analysis.isNullOrBlank() }.map { it.id }
     }
 
     companion object {
@@ -95,10 +105,52 @@ data class WrongBookExport(
             }
         }
 
-        private fun minimal(raw: String?): String? = raw
+        private fun analysisFor(q: PdfQuestion, mode: PdfAnswerMode): String? = when (mode) {
+            PdfAnswerMode.DEEP -> q.analysis?.takeIf { q.deepSolved && it.isNotBlank() }
+            PdfAnswerMode.MINIMAL -> minimal(q.analysis?.takeIf { q.minimalSolved })
+            PdfAnswerMode.ANSWER_ONLY -> null
+        }
+
+        private fun minimal(raw: String?): String? = raw?.let(::plainText)
             ?.lineSequence()
             ?.map { it.trim().trimStart('#', '-', '*', ' ') }
             ?.firstOrNull { it.isNotBlank() }
             ?.take(30)
+
+        private val fenceRe = Regex("""^\s*(```|~~~).*$""")
+        private val headingRe = Regex("""^\s*#{1,6}\s*""")
+        private val bulletRe = Regex("""^\s*[-*+]\s+""")
+        private val tableSepRe = Regex("""^\s*\|?[\s:|-]+\|?\s*$""")
+        private val boldRe = Regex("""(\*\*|__)(.+?)\1""")
+        private val italicRe = Regex("""(?<!\*)\*([^*\n]+)\*(?!\*)""")
+        private val codeRe = Regex("""`([^`\n]+)`""")
+        private val linkRe = Regex("""\[([^\]]+)]\([^)]*\)""")
+        private val tagRe = Regex("""</?[A-Za-z][^>]*>""")
+        private val fracRe = Regex("""\\frac\{([^{}]+)}\{([^{}]+)}""")
+        private val sqrtRe = Regex("""\\sqrt\{([^{}]+)}""")
+
+        fun plainText(raw: String): String = raw
+            .replace("\r\n", "\n")
+            .lines()
+            .mapNotNull { source ->
+                if (fenceRe.matches(source) || tableSepRe.matches(source)) return@mapNotNull null
+                var line = source
+                    .replace(headingRe, "")
+                    .replace(bulletRe, "• ")
+                    .replace(fracRe, "($1)/($2)")
+                    .replace(sqrtRe, "√($1)")
+                    .replace(boldRe, "$2")
+                    .replace(italicRe, "$1")
+                    .replace(codeRe, "$1")
+                    .replace(linkRe, "$1")
+                    .replace(tagRe, "")
+                    .replace("|", "  ")
+                    .trimEnd()
+                line = line.trimStart().removePrefix("> ")
+                line
+            }
+            .joinToString("\n")
+            .replace(Regex("""\n{3,}"""), "\n\n")
+            .trim()
     }
 }

@@ -93,6 +93,8 @@ data class Question(
     val answerVerified: Boolean = false,
     /** 该题解析是否经「深度解题」升级过 */
     val deepSolved: Boolean = false,
+    /** 该题解析是否由「极简解析」生成 */
+    val minimalSolved: Boolean = false,
     val analysis: String? = null,
     /** 答案解析是否由 AI 生成 */
     val aiGenerated: Boolean = false,
@@ -278,4 +280,26 @@ data class BalanceSnapshot(
     val amount: Double,
     val currency: String = "CNY",
     val sampledAt: Long = System.currentTimeMillis()
+)
+
+/** 每次 AI 请求的本地账本；用于跨导入/生成/问 AI/深度解题统一估算。 */
+@Entity(
+    tableName = "ai_usage_records",
+    indices = [Index(value = ["providerId", "createdAt"]), Index("taskId")]
+)
+data class AiUsageRecord(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    /** 单次调用的唯一编号 */
+    val callId: String,
+    /** 一次用户任务（导入/生成/单次追问）的编号 */
+    val taskId: String,
+    val providerId: Long,
+    val providerName: String,
+    val model: String,
+    /** IMPORT_PARSE / ANSWER_GENERATE / ASK_AI / DEEP_SOLVE / MINIMAL_SOLVE / CONNECTION_TEST / OTHER */
+    val category: String,
+    val cacheHitTokens: Long = 0,
+    val cacheMissTokens: Long = 0,
+    val outputTokens: Long = 0,
+    val createdAt: Long = System.currentTimeMillis()
 )

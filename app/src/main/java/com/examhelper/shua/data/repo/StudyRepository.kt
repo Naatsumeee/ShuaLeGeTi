@@ -333,6 +333,7 @@ class StudyRepository(
         val updated = question.copy(
             analysis = analysis,
             deepSolved = true,
+            minimalSolved = false,
             // 深度解题的结论作为最终答案（用户明确要求：与最初解析不一致时以它为准）
             answer = newAnswer ?: question.answer,
             aiAnswer = newAnswer ?: question.aiAnswer,
@@ -347,6 +348,18 @@ class StudyRepository(
                 sameAsBank -> true
                 else -> question.answerVerified
             }
+        )
+        bankRepo.updateQuestion(updated)
+        return updated
+    }
+
+    /** 极简解析只更新解析，不把题目标记为深度解题。 */
+    suspend fun applyMinimalSolve(question: Question, analysis: String): Question {
+        val updated = question.copy(
+            analysis = analysis,
+            aiGenerated = true,
+            deepSolved = false,
+            minimalSolved = true
         )
         bankRepo.updateQuestion(updated)
         return updated

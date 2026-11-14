@@ -153,7 +153,8 @@ class GenerateWorker(
             val generator = AnswerGenerator(
                 container.llmClient,
                 customPrompt.ifBlank { defaultPrompt },
-                answerEffort
+                answerEffort,
+                usageTaskId = "generate:$bankId:${System.currentTimeMillis()}"
             )
 
             // 断点续传 + 生成范围：

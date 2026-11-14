@@ -4,6 +4,8 @@ import com.examhelper.shua.data.db.BalanceSnapshot
 import com.examhelper.shua.data.db.BalanceSnapshotDao
 import com.examhelper.shua.data.db.GenerateJobDao
 import com.examhelper.shua.data.db.ImportJobDao
+import com.examhelper.shua.data.db.AiUsageDao
+import com.examhelper.shua.data.db.AiUsageRecord
 import com.examhelper.shua.data.db.LlmProvider
 import com.examhelper.shua.data.generate.Cost
 
@@ -22,8 +24,8 @@ import com.examhelper.shua.data.generate.Cost
  *    余额上升视为充值，整段跳过。结算延迟只有几分钟，7/30 天窗口足够把它稀释掉，
  *    所以这个数字能和官方账单对上。
  *
- * 2. **本地 token 估算（参考）**：用 `import_jobs` / `generate_jobs` 里记录的
- *    hit/miss/output token，按每条记录自己的时间戳判峰谷价再累加。
+     * 2. **本地 token 估算（参考）**：用 `ai_usage_records` 里每次 AI 调用的
+     *    hit/miss/output token，按每次调用自己的时间戳和模型判峰谷价再累加。
  *    它的强项是立刻给出结果、且能拆出 token 构成；弱项是依赖端点透传缓存字段。
  *
  * 两者并列展示，差值本身也是信息：差得远说明端点没透传缓存字段，或价目表变了。
@@ -61,6 +63,14 @@ object UsageStats {
         val isEmpty: Boolean get() = !hasActual && !hasEstimate
     }
 
+    data class Estimate(
+        val spent: Double?,
+        val hitTokens: Long,
+        val missTokens: Long,
+        val outTokens: Long,
+        val taskCount: Int
+    )
+
     /**
      * 采一次余额快照。端点不支持查余额（中转站）、key 无效、网络失败都静默跳过 ——
      * 用量统计是附加信息，绝不能因为它失败而影响任务本身。
@@ -95,8 +105,7 @@ object UsageStats {
      */
     suspend fun compute(
         snapshotDao: BalanceSnapshotDao,
-        importDao: ImportJobDao,
-        generateDao: GenerateJobDao,
+        aiUsageDao: AiUsageDao,
         providerId: Long,
         days: Int,
         model: String?
@@ -114,40 +123,51 @@ object UsageStats {
         val actual: Double? = if (series.size < 2) null else sumDecreases(series.map { it.amount })
         val currency = series.lastOrNull()?.currency ?: "CNY"
         // ---- ② 本地 token 估算 ----
-        val imports = runCatching { importDao.since(since) }.getOrDefault(emptyList())
-            .filter { it.cacheHitTokens + it.cacheMissTokens + it.outputTokens > 0 }
-        val generates = runCatching { generateDao.since(since) }.getOrDefault(emptyList())
-            .filter { it.cacheHitTokens + it.cacheMissTokens + it.outputTokens > 0 }
+        val calls = runCatching { aiUsageDao.since(since) }.getOrDefault(emptyList())
 
-        var hit = 0L
-        var miss = 0L
-        var out = 0L
-        var estimate = 0.0
-        var priced = false
-        imports.forEach { j ->
-            hit += j.cacheHitTokens; miss += j.cacheMissTokens; out += j.outputTokens
-            // 每条按自己的时间判峰谷：一批生成跑了半小时、跨了 18:00，按结束时刻统一
-            // 算成高峰会把空闲时段的活多算一倍
-            Cost.yuan(j.cacheHitTokens, j.cacheMissTokens, j.outputTokens, model, j.createdAt)
-                ?.let { estimate += it; priced = true }
-        }
-        generates.forEach { j ->
-            hit += j.cacheHitTokens; miss += j.cacheMissTokens; out += j.outputTokens
-            Cost.yuan(j.cacheHitTokens, j.cacheMissTokens, j.outputTokens, model, j.updatedAt)
-                ?.let { estimate += it; priced = true }
-        }
+        val estimate = estimate(calls, model)
 
         return Window(
             days = days,
             actualSpent = actual,
-            estimateSpent = if (priced) estimate else null,
-            hitTokens = hit,
-            missTokens = miss,
-            outTokens = out,
-            taskCount = imports.size + generates.size,
+            estimateSpent = estimate.spent,
+            hitTokens = estimate.hitTokens,
+            missTokens = estimate.missTokens,
+            outTokens = estimate.outTokens,
+            taskCount = estimate.taskCount,
             currency = currency,
             snapshotCount = series.size,
             coveredSince = series.firstOrNull()?.sampledAt
+        )
+    }
+
+    fun estimate(calls: List<AiUsageRecord>, fallbackModel: String?): Estimate {
+        var hit = 0L
+        var miss = 0L
+        var out = 0L
+        var spent = 0.0
+        var priced = false
+        calls.forEach { call ->
+            hit += call.cacheHitTokens
+            miss += call.cacheMissTokens
+            out += call.outputTokens
+            Cost.yuan(
+                call.cacheHitTokens,
+                call.cacheMissTokens,
+                call.outputTokens,
+                call.model.takeIf { it.isNotBlank() } ?: fallbackModel,
+                call.createdAt
+            )?.let {
+                spent += it
+                priced = true
+            }
+        }
+        return Estimate(
+            spent = if (priced) spent else null,
+            hitTokens = hit,
+            missTokens = miss,
+            outTokens = out,
+            taskCount = calls.map { it.taskId }.distinct().size
         )
     }
 
@@ -177,5 +197,10 @@ object UsageStats {
     suspend fun purge(dao: BalanceSnapshotDao, days: Int = 40) {
         val cutoff = System.currentTimeMillis() - days * 24L * 60 * 60 * 1000
         runCatching { dao.purgeBefore(cutoff) }
+    }
+
+    suspend fun purge(aiUsageDao: AiUsageDao, days: Int = 60) {
+        val cutoff = System.currentTimeMillis() - days * 24L * 60 * 60 * 1000
+        runCatching { aiUsageDao.purgeBefore(cutoff) }
     }
 }

@@ -345,7 +345,8 @@ class ImportPipelineWorker(
             val customParsePrompt = container.settings.settings.first().customParsePrompt
             val parser = LlmQuestionParser(
                 container.llmClient,
-                customParsePrompt.ifBlank { com.examhelper.shua.data.llm.Prompts.PARSE_DEFAULT }
+                customParsePrompt.ifBlank { com.examhelper.shua.data.llm.Prompts.PARSE_DEFAULT },
+                usageTaskId = "import:$jobId"
             )
             var okCount = doneChunks.size
             var failCount = 0

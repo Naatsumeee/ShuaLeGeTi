@@ -195,6 +195,8 @@ object BankJsonImport {
                 ?: obj["解析"].asTextOrNull(),
             sourcePage = obj["sourcePage"].asIntOrNull() ?: obj["page"].asIntOrNull(),
             aiGenerated = obj["aiGenerated"].asBoolOrNull() ?: false,
+            deepSolved = obj["deepSolved"].asBoolOrNull() ?: false,
+            minimalSolved = obj["minimalSolved"].asBoolOrNull() ?: false,
             confidence = obj["confidence"].asIntOrNull(),
             agreement = obj["agreement"].asTextOrNull()
         )

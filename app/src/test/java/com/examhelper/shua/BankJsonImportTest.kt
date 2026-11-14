@@ -21,7 +21,8 @@ class BankJsonImportTest {
               "questions": [
                 {"type":"SINGLE","stem":"阿莫西林属于哪一类？",
                  "options":[{"key":"A","text":"青霉素类"},{"key":"B","text":"头孢类"}],
-                 "answer":"A","analysis":"β-内酰胺类抗生素","chapter":"第三章 抗菌药物"}
+                 "answer":"A","analysis":"β-内酰胺类抗生素","chapter":"第三章 抗菌药物",
+                 "deepSolved":true,"minimalSolved":false}
               ]
             }
         """.trimIndent()
@@ -34,6 +35,8 @@ class BankJsonImportTest {
         assertEquals("第三章 抗菌药物", q.chapter)
         assertEquals(2, q.options.size)
         assertEquals("青霉素类", q.options[0].text)
+        assertTrue(q.deepSolved)
+        assertTrue(!q.minimalSolved)
     }
 
     @Test

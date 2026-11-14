@@ -256,6 +256,8 @@ class BankRepository(
             analysis = analysis,
             sourcePage = sourcePage,
             aiGenerated = aiGenerated,
+            deepSolved = deepSolved,
+            minimalSolved = minimalSolved,
             confidence = confidence,
             agreement = agreement,
             dissentJson = dissent.takeIf { it.isNotEmpty() }?.let(JsonCodec::encodeDissent)
@@ -316,6 +318,8 @@ class BankRepository(
                 analysis = if (stripAi) null else q.analysis,
                 sourcePage = q.sourcePage,
                 aiGenerated = if (stripAi) false else q.aiGenerated,
+                deepSolved = if (stripAi) false else q.deepSolved,
+                minimalSolved = if (stripAi) false else q.minimalSolved,
                 confidence = if (stripAi) null else q.confidence,
                 agreement = if (stripAi) null else q.agreement,
                 dissent = if (stripAi) emptyList() else JsonCodec.decodeDissent(q.dissentJson)
@@ -368,6 +372,8 @@ class BankRepository(
         analysis = analysis,
         sourcePage = sourcePage,
         aiGenerated = aiGenerated,
+        deepSolved = deepSolved,
+        minimalSolved = minimalSolved,
         confidence = confidence,
         agreement = agreement,
         dissent = dissent

@@ -16,7 +16,8 @@ import kotlinx.serialization.json.Json
  */
 class LlmQuestionParser(
     private val llmClient: LlmClient = LlmClient(),
-    private val systemPrompt: String = com.examhelper.shua.data.llm.Prompts.PARSE_DEFAULT
+    private val systemPrompt: String = com.examhelper.shua.data.llm.Prompts.PARSE_DEFAULT,
+    private val usageTaskId: String = "import:${java.util.UUID.randomUUID()}"
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -129,6 +130,10 @@ class LlmQuestionParser(
                     temperature = 0.1,
                     maxTokens = PARSE_MAX_TOKENS,
                     reasoningEffort = PARSE_REASONING,
+                    usageContext = com.examhelper.shua.data.llm.AiUsageContext(
+                        com.examhelper.shua.data.llm.AiUsageCategory.IMPORT_PARSE,
+                        usageTaskId
+                    ),
                     onDelta = onDelta
                 )
             } else {
@@ -139,7 +144,11 @@ class LlmQuestionParser(
                     jsonMode = true,
                     temperature = 0.1,
                     maxTokens = PARSE_MAX_TOKENS,
-                    reasoningEffort = PARSE_REASONING
+                    reasoningEffort = PARSE_REASONING,
+                    usageContext = com.examhelper.shua.data.llm.AiUsageContext(
+                        com.examhelper.shua.data.llm.AiUsageCategory.IMPORT_PARSE,
+                        usageTaskId
+                    )
                 )
             }
         } catch (e: Exception) {
