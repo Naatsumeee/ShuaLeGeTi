@@ -115,7 +115,6 @@ data class WrongBookExport(
             ?.lineSequence()
             ?.map { it.trim().trimStart('#', '-', '*', ' ') }
             ?.firstOrNull { it.isNotBlank() }
-            ?.take(30)
 
         private val fenceRe = Regex("""^\s*(```|~~~).*$""")
         private val headingRe = Regex("""^\s*#{1,6}\s*""")

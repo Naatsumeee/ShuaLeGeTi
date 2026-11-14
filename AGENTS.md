@@ -1,6 +1,6 @@
 ﻿# AGENTS.md — 刷了个题 (ShuaGeLeTi) 项目记忆
 
-> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-14（**v1.1.0 已发布**；`main` 已有未发版导入/题库组/PDF/动效批次，崩溃修复 `a2af75d`，等待用户测试）。
+> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-14（**v1.1.0 已发布**；`main` 已有未发版导入/题库组/PDF/动效批次，当前测试批次 `294db34`，等待用户测试）。
 >
 > **文档分工**（别把三份混在一起）：
 > - `AGENTS.md`（本文件，**入库**）—— 项目的长期公共记忆：架构、决策、踩过的坑、待办。所有 Agent 都该读。
@@ -124,7 +124,7 @@ RapidOCR 识别一页分两步：**先版面分析，再识别文字**。模型�
 
 ```bash
 export JAVA_HOME="/c/Program Files/Microsoft/jdk-17.0.20.101-hotspot"; export PATH="$JAVA_HOME/bin:$PATH"
-./gradlew assembleDebug testDebugUnitTest          # 构建 + 单测（212 项）
+./gradlew assembleDebug testDebugUnitTest          # 构建 + 单测（270 项）
 ./gradlew assembleRelease                          # → app/build/outputs/apk/release/Shualegeti-arm64-v8a-<版本>.apk
 ADB="/c/Users/xutia/AppData/Local/Android/Sdk/platform-tools/adb.exe"
 "$ADB" -s e87a3fe4 install -r app-arm64-v8a-debug.apk   # 模拟器/debug 签名机；手机若是正式签名包会拒绝
@@ -137,19 +137,19 @@ GH_TOKEN=$TOKEN gh release list                    # GitHub API 操作
 
 ### 发版流程（v1.1.0 走通的顺序）
 
-1. `app/build.gradle.kts` 改 `versionCode` / `versionName`（**每次发版都必须递增 versionCode**，否则装不上）
+1. `app/build.gradle.kts` 只改 `versionName`；`versionCode = 1000 + git rev-list --count HEAD` 自动生成，同一提交重复构建保持一致
 2. `ui/settings/Changelog.kt` 顶部插一条 ReleaseNote：上一条 `current = false`，新条 `current = true`；
    文案面向用户（写"能感知到什么"，不写实现）。**「共 N 个版本」是 `RELEASE_NOTES.size` 自动算的，不用改。**
 3. 全量单测通过 → `./gradlew assembleRelease`
 4. `apksigner verify --print-certs` 确认签名 DN 是 `CN=ShuaGeLeTi`（不是 `CN=Android Debug`）
-5. `aapt dump badging` 确认 versionCode / versionName
+5. `aapt dump badging` 确认 versionCode / versionName；GitHub Release 说明**第一行必须写 `versionCode: N`**，N 与 APK 一致
 6. commit → push main
 7. `git tag -a vX.Y.Z -m "..."` + push tag → `gh release create vX.Y.Z --verify-tag --title ... --notes-file ... <apk>`
    （`--target <短SHA>` 会被 GitHub 拒绝为 `target_commitish is invalid`，所以先推 tag 再 `--verify-tag`）
 
 **重发同名版本时还有四步**（v1.1.0 第二次发版走通过）：
 
-- `versionName` 保持不变、**`versionCode` 必须再 +1**，否则老用户装不上
+- `versionName` 保持不变；修复提交会让 Git 提交数自动 +1，因此 versionCode 自动递增
 - `Changelog.kt` 顶部那条是**改**不是新增（同一个版本号只能有一条 `current = true`）
 - 删旧资产再传新包：`gh release delete-asset <tag> <old> --yes` → `gh release upload <tag> <new>`
 - **tag 必须移到含修复的提交**，否则从 tag 下源码的人拿到的还是有 bug 的版本：
@@ -225,7 +225,7 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 
 ## 未发版待测批次（2026-11-14，DB v15）
 
-> 批次已提交并推送为 `50f76b8`，**没有发 Release、没有改版本号**。用户要求先测试源码/APK，确认无误后再发版。
+> 当前批次提交 `294db34`，**没有发新 Release**。v1.1.0 线上 Release 已补 `versionCode: 15`；用户要求先测试源码/APK，确认无误后再发版。
 
 - **文档导入**：新增纯 JVM `DocxTextExtractor` + `SimpleWordXmlParser`，不再依赖 Android `ContentResolver` 才能读 docx；支持命名空间前缀、表格段落、`tab/br`、XML 实体和解压路径大小写。真实 `docx-sample.docx` 有回归测试。
 - **md/txt 分流**：文件选择器改为 `*/*`，由 `IngestFormatResolver` 按扩展名 → MIME → 文件头/文本启发式判定；无扩展名、通用 MIME、GBK/UTF-16/UTF-8 BOM 都能进正确解析链，不再误送图片 OCR。
@@ -237,11 +237,12 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - **颜色/拖拽**：8 个区分色不含默认橘红和黑白；自定义支持 `#RGB/#RRGGBB/#AARRGGBB`，HSL 二维色盘 + 色相条 + 十六进制实时校验。整张题库卡片长按进入拖拽，跨越相邻卡时即时交换本地顺序，其他项用弹簧让位，松手一次写 `sortOrder`；长按不会再弹旧菜单/误进题库。
 - **动效**：一级 Tab 横向过场与 Dock 同组弹簧参数；问 AI Bottom Sheet 有橡皮筋阻尼/速度吸附；做题主按钮有 0.96 压缩、内阴影和释放回弹。
 - **题库维护**：AI 生成与编辑章节先进入维护选择页；支持单库维护和按子库顺序的一键维护，选择页明确提示耗时与失败率风险。
-- **错题 PDF**：错题本标题栏增加“输出错题 PDF”，继承当前选项卡；导出页可按题库/章节多选，答案解析可选题后/文末，并支持深度解析、极简解析、仅答案或仅导题目。Markdown 在排版前清洗；首页显示完整标题，后续页左上题库名、页脚页码；上边距 76.35pt；A4 使用内置 Noto Sans/Serif SC，标题 20pt Sans Bold，正文 12pt Serif。**Android ICU 正则比 JVM 严格：`\frac`/`\sqrt` 里的字面 `{` `}` 必须成对转义，否则 `WrongBookExport` 初始化即崩。** 深度/极简批量维护都只处理最终导出范围，失败不阻断 PDF 且可续跑。
+- **错题 PDF**：错题本标题栏增加“输出错题 PDF”，继承当前选项卡；导出页已压缩重排：来源+题库下拉、范围主次按钮、按章节次级下拉、仅导题目主题色选中、位置两按钮、解析程度同一行。条件区域用 spring 展开/收起，其余控件用 `animateContentSize` 平滑让位。Markdown 在排版前清洗；首页显示完整标题，后续页左上题库名、页脚页码；上边距 76.35pt；A4 使用内置 Noto Sans/Serif SC，标题 20pt Sans Bold，正文 12pt Serif。**Android ICU 正则比 JVM 严格：`\frac`/`\sqrt` 里的字面 `{` `}` 必须成对转义，否则 `WrongBookExport` 初始化即崩。**
+- **解析后台维护**：`PdfAnalysisWorker` 走 WorkManager 前台任务，逐题写库，切屏/锁屏不中断；返回导出页通过唯一任务 Flow 恢复状态。开始前若已有对应解析，弹窗让用户选“仍重新生成 / 跳过已有解析”。极简解析输出预算 512 token，提示词要求 60 字内但不得截断，导出不再按 30 字硬切。
 - **AI 用量账本**：所有导入/生成/问 AI/深度解题/极简解析调用统一写 `ai_usage_records`，本地估算按每次调用自己的时间戳和编号计算；DeepSeek 官方只有账号级余额接口，没有 API Key 级消费查询。
-- **设置/更新**：关于页使用矢量前景图标 + 绿色底，**不能把 adaptive-icon XML 直接传给 Compose `painterResource`（它只接受 `<vector>`，否则稳定崩溃）**；检查更新读取 GitHub latest release，失败时提示到作者抖音主页；字体大小滑杆松手才应用、跨档震动；震动强度用振幅和脉冲密度共同表达。
+- **设置/更新**：关于页使用矢量前景图标 + 绿色底，**不能把 adaptive-icon XML 直接传给 Compose `painterResource`（它只接受 `<vector>`，否则稳定崩溃）**；检查更新同时比较 versionName 与 Release 说明里的 `versionCode:N`，本机任一项更高都提示最新；网络失败显示 HTTP 状态码，连接失败明确显示无状态码。字体大小滑杆松手才应用、跨档震动；震动强度用振幅和脉冲密度共同表达。
 - **交互修复**：空题库首页不渲染编辑按钮；编辑模式未选项透明度 0.48、已选项恢复对比度；菜单/拖拽横条固定容器消除跳动；批量操作栏弹性上滑；问 AI 开关的颜色与震动即时响应。
-- **回归基线**：`./gradlew testDebugUnitTest --rerun-tasks` 当前 **263 项全绿**；模拟器已从 Room v13 连续迁移到 v15，`minimalSolved` 列和 `ai_usage_records` 表存在，空题库首页 UI 层级确认无“编辑题库”按钮；1001 条错题压力数据下 PDF 导出页可正常打开；关于页图标资源测试确认使用 Compose 可加载的 `<vector>`。真机震动强度和完整手势体感仍需用户设备复测。
+- **回归基线**：`./gradlew testDebugUnitTest --rerun-tasks` 当前 **270 项全绿**；模拟器已从 Room v13 连续迁移到 v15，`minimalSolved` 列和 `ai_usage_records` 表存在，空题库首页 UI 层级确认无“编辑题库”按钮；1001 条错题压力数据下 PDF 新布局可正常打开，章节选择/仅导题目/动画已实测；解析维护后台任务在离开页面后重新进入仍能恢复状态；关于页图标资源测试确认使用 Compose 可加载的 `<vector>`；Git 提交数生成 versionCode 和 HTTP 错误提示已实测。真机震动强度和完整手势体感仍需用户设备复测。
 
 ## AI 解析流式预览（`ImportPipelineWorker` + `ImportScreen.kt`，v1.0.11）
 
@@ -363,7 +364,7 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - **`AnswerSheet` 的两个排版缺口**：① Java 的 `\s` **不含全角空格 U+3000**，`1.B　2.D` 这种最常见的中文分隔会被判「有实义残留」→ 落到主观题分支得到伪数据；② `A1型：1.B 2.D` 这类题型分组前缀会让整行不合格、整组答案全丢。两者都已修（`fillerRe` 补 `\u3000`、新增 `typeLabelRe` 剥前缀）。
 - **提示词必须要求模型输出题号**：`QuestionDto.number` 新增并写进 `PARSE_DEFAULT` 规则 2（「number 必填，原样照抄原文数字，不要改写成全书连续编号，题号不要留在 stem 里」）。这是绑定可靠的前提。
 - 实测：AI 链路答案覆盖 **31/336 → 281/336（83%）**，客观题绑定 205/211 且**零错填**；离线链路维持 345/346。护栏单测：`AnswerBinderTest.kt`（12 项）+ `AnswerCoverageRealFileTest.kt`（真实素材，客观题零错填 + 端到端覆盖率 ≥ 80%）。
-- **改这块必须 `--rerun-tasks` 跑全量**（现为 212 项）。
+- **改这块必须 `--rerun-tasks` 跑全量**（现为 270 项）。
 
 ### 11. AI 成本优化（已落地，全部实测）
 

@@ -274,15 +274,22 @@ class SettingsViewModel(
             runCatching { withContext(Dispatchers.IO) { UpdateChecker.latest() } }.fold(
                 onSuccess = { info ->
                     _update.value = UpdateState(checking = false)
-                    if (UpdateChecker.isNewer(com.examhelper.shua.BuildConfig.VERSION_NAME, info.version)) {
+                    if (
+                        UpdateChecker.isUpdateAvailable(
+                            currentVersion = com.examhelper.shua.BuildConfig.VERSION_NAME,
+                            currentCode = com.examhelper.shua.BuildConfig.VERSION_CODE,
+                            latestVersion = info.version,
+                            latestCode = info.versionCode
+                        )
+                    ) {
                         _update.value = UpdateState(info = info)
                     } else {
                         _message.value = "当前已是最新版本"
                     }
                 },
-                onFailure = {
+                onFailure = { error ->
                     _update.value = UpdateState(checking = false)
-                    _message.value = "网络问题导致查询失败，请前往作者 @Natsume 抖音主页获取最新版本信息"
+                    _message.value = UpdateChecker.errorMessage(error)
                 }
             )
         }

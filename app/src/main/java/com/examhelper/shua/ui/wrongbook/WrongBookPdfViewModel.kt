@@ -6,29 +6,33 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import com.examhelper.shua.ShuaApp
+import com.examhelper.shua.data.analysis.AnalysisLevel
+import com.examhelper.shua.data.analysis.PdfAnalysisPlan
+import com.examhelper.shua.data.analysis.PdfAnalysisWorker
 import com.examhelper.shua.data.db.Question
-import com.examhelper.shua.data.llm.ChatMessage
-import com.examhelper.shua.data.llm.Prompts
 import com.examhelper.shua.data.model.JsonCodec
 import com.examhelper.shua.data.model.PdfAnswerMode
 import com.examhelper.shua.data.model.PdfAnswerPlacement
+import com.examhelper.shua.data.model.PdfExportOptions
 import com.examhelper.shua.data.model.PdfExportRequest
 import com.examhelper.shua.data.model.PdfExportScope
 import com.examhelper.shua.data.model.PdfExportSource
-import com.examhelper.shua.data.model.PdfExportOptions
 import com.examhelper.shua.data.model.PdfQuestion
 import com.examhelper.shua.data.model.WrongBookExport
-import com.examhelper.shua.data.pdf.WrongBookPdfRenderer
 import com.examhelper.shua.data.pdf.PdfExportNaming
+import com.examhelper.shua.data.pdf.WrongBookPdfRenderer
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.Serializable
 
 class WrongBookPdfViewModel(
     application: Application,
@@ -41,9 +45,12 @@ class WrongBookPdfViewModel(
     private val questionDao = container.database.questionDao()
     private val bankDao = container.database.bankDao()
     private val recordDao = container.database.recordDao()
-    private val providerDao = container.database.providerDao()
-    private val llmClient = container.llmClient
-    private val settings = container.settings
+
+    data class MaintenancePrompt(
+        val level: AnalysisLevel,
+        val questionIds: List<Long>,
+        val existingCount: Int
+    )
 
     data class UiState(
         val loading: Boolean = true,
@@ -57,12 +64,11 @@ class WrongBookPdfViewModel(
         val includeAnswers: Boolean = true,
         val answerMode: PdfAnswerMode = PdfAnswerMode.DEEP,
         val answerPlacement: PdfAnswerPlacement = PdfAnswerPlacement.AFTER_EACH,
-        val deepRunning: Boolean = false,
-        val deepMessage: String? = null,
-        val deepFailed: Set<Long> = emptySet(),
-        val minimalRunning: Boolean = false,
-        val minimalMessage: String? = null,
-        val minimalFailed: Set<Long> = emptySet(),
+        val maintenanceRunning: Boolean = false,
+        val maintenanceLevel: AnalysisLevel? = null,
+        val maintenanceMessage: String? = null,
+        val maintenanceFailed: Int = 0,
+        val maintenancePrompt: MaintenancePrompt? = null,
         val generating: Boolean = false,
         val message: String? = null,
         val error: String? = null
@@ -74,16 +80,20 @@ class WrongBookPdfViewModel(
             )
         }
 
-        fun selectedBankName(): String = banks.firstOrNull { it.first == selectedBankId }?.second.orEmpty()
+        fun selectedBankName(): String =
+            banks.firstOrNull { it.first == selectedBankId }?.second.orEmpty()
 
         fun missingAnalysisCount(): Int = if (includeAnswers) {
             WrongBookExport(source, selectedQuestions()).missingAnalysisIds(answerMode).size
-        } else 0
+        } else {
+            0
+        }
     }
 
     private val _state = MutableStateFlow(UiState(source = source))
     val state: StateFlow<UiState> = _state
     private var questionEntities: Map<Long, Question> = emptyMap()
+    private var maintenanceJob: Job? = null
 
     init {
         viewModelScope.launch { load() }
@@ -94,12 +104,13 @@ class WrongBookPdfViewModel(
         questionEntities = questions.associateBy { it.id }
         val banks = bankDao.observeAll().first()
         val presentBankIds = questions.map { it.bankId }.distinct()
-        val names = presentBankIds.mapNotNull { id -> banks.firstOrNull { it.id == id }?.let { id to it.name } }
-            .sortedBy { it.second }
+        val names = presentBankIds.mapNotNull { id ->
+            banks.firstOrNull { it.id == id }?.let { id to it.name }
+        }.sortedBy { it.second }
         val firstBank = names.firstOrNull()?.first
         val pdfQuestions = questions.map { it.toPdfQuestion() }
         val chapters = pdfQuestions.filter { it.bankId == firstBank }
-            .mapNotNull { it.chapter?.takeIf { c -> c.isNotBlank() } }
+            .mapNotNull { it.chapter?.takeIf(String::isNotBlank) }
             .distinct()
             .sorted()
         _state.value = UiState(
@@ -110,6 +121,7 @@ class WrongBookPdfViewModel(
             questions = pdfQuestions,
             chapters = chapters
         )
+        firstBank?.let(::observeMaintenance)
     }
 
     private suspend fun loadSourceQuestions(): List<Question> {
@@ -126,7 +138,7 @@ class WrongBookPdfViewModel(
 
     fun selectBank(bankId: Long) {
         val chapters = _state.value.questions.filter { it.bankId == bankId }
-            .mapNotNull { it.chapter?.takeIf { c -> c.isNotBlank() } }
+            .mapNotNull { it.chapter?.takeIf(String::isNotBlank) }
             .distinct()
             .sorted()
         _state.value = _state.value.copy(
@@ -134,6 +146,7 @@ class WrongBookPdfViewModel(
             chapters = chapters,
             selectedChapters = emptySet()
         )
+        observeMaintenance(bankId)
     }
 
     fun setScope(scope: PdfExportScope) {
@@ -159,117 +172,118 @@ class WrongBookPdfViewModel(
         _state.value = _state.value.copy(includeAnswers = !onlyQuestions)
     }
 
-    /** 只维护最终导出范围内的错题解析，不自动触发 PDF，也不动范围外题目。 */
-    fun startDeepSolve() {
+    fun startDeepSolve() = requestMaintenance(AnalysisLevel.DEEP)
+
+    fun startMinimalSolve() = requestMaintenance(AnalysisLevel.MINIMAL)
+
+    private fun requestMaintenance(level: AnalysisLevel) {
+        if (_state.value.maintenanceRunning) return
         val selected = _state.value.selectedQuestions()
-        if (_state.value.deepRunning || selected.isEmpty()) return
-        val pendingIds = selected.filterNot { it.deepSolved }.map { it.id }.toSet()
-        if (pendingIds.isEmpty()) {
-            _state.value = _state.value.copy(deepMessage = "所选错题都已经有深度解析")
-            return
-        }
-        _state.value = _state.value.copy(deepRunning = true, deepMessage = "准备生成 ${pendingIds.size} 道题的深度解析", deepFailed = emptySet())
-        viewModelScope.launch(Dispatchers.IO) {
-            val provider = runCatching { resolveProvider() }.getOrElse { e ->
-                _state.value = _state.value.copy(deepRunning = false, deepMessage = e.message ?: "未配置 AI 模型")
-                return@launch
-            }
-            var done = 0
-            val failed = mutableSetOf<Long>()
-            for (q in selected) {
-                if (q.deepSolved) continue
-                val entity = questionEntities[q.id] ?: continue
-                runCatching {
-                    val result = llmClient.chatWithMessages(
-                        provider = provider,
-                        messages = listOf(
-                            ChatMessage("system", Prompts.DEEP_SOLVE_DEFAULT),
-                            ChatMessage("user", buildPrompt(entity))
-                        ),
-                        maxTokens = 4096,
-                        reasoningEffort = settings.settings.first().reasoningEffort,
-                        usageContext = com.examhelper.shua.data.llm.AiUsageContext(
-                            com.examhelper.shua.data.llm.AiUsageCategory.DEEP_SOLVE,
-                            "pdf-deep:${q.id}:${java.util.UUID.randomUUID()}"
-                        )
-                    )
-                    val parsed = parseDeepSolve(result.content)
-                    if (parsed.analysis.isNullOrBlank()) error("模型未返回解析")
-                    val updated = container.studyRepo.applyDeepSolve(entity, parsed.analysis, parsed.answer)
-                    questionEntities = questionEntities + (entity.id to updated)
-                    _state.value = _state.value.copy(
-                        questions = _state.value.questions.map { if (it.id == updated.id) updated.toPdfQuestion() else it }
-                    )
-                }.onFailure { failed += q.id }
-                done++
-                _state.value = _state.value.copy(
-                    deepMessage = "深度解析：$done/${pendingIds.size}，失败 ${failed.size}"
-                )
-            }
+        if (selected.isEmpty()) return
+        val ids = selected.map { it.id }
+        val existing = PdfAnalysisPlan.create(
+            ids.mapNotNull(questionEntities::get),
+            level,
+            skipExisting = true
+        ).existingCount
+        if (existing > 0) {
             _state.value = _state.value.copy(
-                deepRunning = false,
-                deepFailed = failed,
-                deepMessage = "已完成，失败 ${failed.size} 道；可再次点击只重试失败部分"
+                maintenancePrompt = MaintenancePrompt(level, ids, existing)
             )
+        } else {
+            launchMaintenance(level, ids, forceAll = false)
         }
     }
 
-    fun startMinimalSolve() {
-        val selected = _state.value.selectedQuestions()
-        if (_state.value.minimalRunning || selected.isEmpty()) return
-        val pendingIds = selected.filter { !it.minimalSolved || it.analysis.isNullOrBlank() }.map { it.id }.toSet()
-        if (pendingIds.isEmpty()) {
-            _state.value = _state.value.copy(minimalMessage = "所选错题都已经有解析")
+    fun confirmMaintenance(regenerate: Boolean) {
+        val prompt = _state.value.maintenancePrompt ?: return
+        _state.value = _state.value.copy(maintenancePrompt = null)
+        val plan = PdfAnalysisPlan.create(
+            prompt.questionIds.mapNotNull(questionEntities::get),
+            prompt.level,
+            skipExisting = !regenerate
+        )
+        if (plan.targets.isEmpty()) {
+            _state.value = _state.value.copy(
+                maintenanceMessage = "所选题目都已有所需解析，本次未生成"
+            )
             return
         }
-        _state.value = _state.value.copy(
-            minimalRunning = true,
-            minimalMessage = "准备生成 ${pendingIds.size} 道题的极简解析",
-            minimalFailed = emptySet()
+        launchMaintenance(prompt.level, plan.targets.map { it.id }, forceAll = regenerate)
+    }
+
+    fun dismissMaintenancePrompt() {
+        _state.value = _state.value.copy(maintenancePrompt = null)
+    }
+
+    private fun launchMaintenance(level: AnalysisLevel, ids: List<Long>, forceAll: Boolean) {
+        val bankId = _state.value.selectedBankId ?: return
+        val name = PdfAnalysisWorker.enqueue(
+            context = getApplication(),
+            source = source.name,
+            bankId = bankId,
+            questionIds = ids,
+            level = level,
+            forceAll = forceAll
         )
-        viewModelScope.launch(Dispatchers.IO) {
-            val provider = runCatching { resolveProvider() }.getOrElse { e ->
-                _state.value = _state.value.copy(minimalRunning = false, minimalMessage = e.message ?: "未配置 AI 模型")
-                return@launch
-            }
-            var done = 0
-            val failed = mutableSetOf<Long>()
-            for (q in selected) {
-                if (q.minimalSolved && !q.analysis.isNullOrBlank()) continue
-                val entity = questionEntities[q.id] ?: continue
-                runCatching {
-                    val result = llmClient.chatWithMessages(
-                        provider = provider,
-                        messages = listOf(
-                            ChatMessage("system", Prompts.MINIMAL_SOLVE_DEFAULT),
-                            ChatMessage("user", buildPrompt(entity))
-                        ),
-                        maxTokens = 180,
-                        reasoningEffort = com.examhelper.shua.data.llm.ReasoningEffort.NONE,
-                        usageContext = com.examhelper.shua.data.llm.AiUsageContext(
-                            com.examhelper.shua.data.llm.AiUsageCategory.MINIMAL_SOLVE,
-                            "pdf-minimal:${q.id}:${java.util.UUID.randomUUID()}"
-                        )
-                    )
-                    val parsed = parseDeepSolve(result.content)
-                    if (parsed.analysis.isNullOrBlank()) error("模型未返回极简解析")
-                    val updated = container.studyRepo.applyMinimalSolve(entity, parsed.analysis.take(60))
-                    questionEntities = questionEntities + (entity.id to updated)
+        _state.value = _state.value.copy(
+            maintenanceRunning = true,
+            maintenanceLevel = level,
+            maintenanceMessage = "已转入后台维护，切换页面不会中断",
+            maintenanceFailed = 0
+        )
+        observeWorker(name)
+    }
+
+    private fun observeMaintenance(bankId: Long) {
+        observeWorker(PdfAnalysisWorker.uniqueName(source.name, bankId))
+    }
+
+    private fun observeWorker(name: String) {
+        maintenanceJob?.cancel()
+        maintenanceJob = viewModelScope.launch {
+            WorkManager.getInstance(getApplication())
+                .getWorkInfosForUniqueWorkFlow(name)
+                .collect { infos ->
+                    val info = infos.firstOrNull()
+                    if (info == null) {
+                        _state.value = _state.value.copy(maintenanceRunning = false)
+                        return@collect
+                    }
+                    val level = info.progress.getString(PdfAnalysisWorker.KEY_LEVEL)
+                        ?.let { runCatching { AnalysisLevel.valueOf(it) }.getOrNull() }
+                    val running = info.state == WorkInfo.State.ENQUEUED ||
+                        info.state == WorkInfo.State.RUNNING ||
+                        info.state == WorkInfo.State.BLOCKED
+                    val message = info.progress.getString(PdfAnalysisWorker.KEY_MESSAGE)
+                        ?: when (info.state) {
+                            WorkInfo.State.ENQUEUED -> "等待后台开始…"
+                            WorkInfo.State.RUNNING -> "后台维护中…"
+                            WorkInfo.State.SUCCEEDED -> "题目解析维护完成"
+                            WorkInfo.State.FAILED -> "题目解析维护失败，可重试"
+                            WorkInfo.State.CANCELLED -> "题目解析维护已取消"
+                            else -> null
+                        }
                     _state.value = _state.value.copy(
-                        questions = _state.value.questions.map { if (it.id == updated.id) updated.toPdfQuestion() else it }
+                        maintenanceRunning = running,
+                        maintenanceLevel = level ?: _state.value.maintenanceLevel,
+                        maintenanceMessage = message,
+                        maintenanceFailed = info.progress.getInt(PdfAnalysisWorker.KEY_FAILED, 0)
                     )
-                }.onFailure { failed += q.id }
-                done++
-                _state.value = _state.value.copy(
-                    minimalMessage = "极简解析：$done/${pendingIds.size}，失败 ${failed.size}"
-                )
-            }
-            _state.value = _state.value.copy(
-                minimalRunning = false,
-                minimalFailed = failed,
-                minimalMessage = "已完成，失败 ${failed.size} 道；可再次点击只重试失败部分"
-            )
+                    if (info.state.isFinished) refreshAnalysisQuestions()
+                }
         }
+    }
+
+    private suspend fun refreshAnalysisQuestions() {
+        val ids = questionEntities.keys.toList()
+        if (ids.isEmpty()) return
+        questionEntities = questionDao.getByIds(ids).associateBy { it.id }
+        _state.value = _state.value.copy(
+            questions = _state.value.questions.mapNotNull { old ->
+                questionEntities[old.id]?.toPdfQuestion()
+            }
+        )
     }
 
     fun exportPdf(context: Context, uri: Uri) {
@@ -293,9 +307,17 @@ class WrongBookPdfViewModel(
                     sansFont = context.assets.open("pdf/NotoSansSC-Bold.ttf"),
                     serifFont = context.assets.open("pdf/NotoSerifSC-Regular.ttf"),
                     notice = buildList {
-                        if (_state.value.deepFailed.isNotEmpty()) add("本次深度解析失败 ${_state.value.deepFailed.size} 道")
-                        if (_state.value.minimalFailed.isNotEmpty()) add("本次极简解析失败 ${_state.value.minimalFailed.size} 道")
-                    }.takeIf { it.isNotEmpty() }?.joinToString("；", postfix = "，缺失解析在对应题目中标注为“无”。")
+                        val failed = _state.value.maintenanceFailed
+                        if (failed > 0) {
+                            val label = if (_state.value.maintenanceLevel == AnalysisLevel.DEEP) {
+                                "深度解析"
+                            } else {
+                                "极简解析"
+                            }
+                            add("本次${label}失败 $failed 道")
+                        }
+                    }.takeIf { it.isNotEmpty() }
+                        ?.joinToString("；", postfix = "，缺失解析在对应题目中标注为“无”。")
                 )
                 context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
                     ?: error("无法写入 PDF")
@@ -312,12 +334,9 @@ class WrongBookPdfViewModel(
         return PdfExportNaming.fileName(name)
     }
 
-    private suspend fun resolveProvider() = providerDao.getPrimary()
-        ?: providerDao.observeAll().first().firstOrNull { it.enabled }
-        ?: error("尚未配置 AI 模型，请到设置页添加")
-
     private fun Question.toPdfQuestion(): PdfQuestion {
-        val opts = JsonCodec.decodeOptions(optionsJson).ifEmpty { JsonCodec.decodeOptions(sharedOptionsJson) }
+        val opts = JsonCodec.decodeOptions(optionsJson)
+            .ifEmpty { JsonCodec.decodeOptions(sharedOptionsJson) }
         return PdfQuestion(
             id = id,
             bankId = bankId,
@@ -330,32 +349,5 @@ class WrongBookPdfViewModel(
             deepSolved = deepSolved,
             minimalSolved = minimalSolved
         )
-    }
-
-    private fun buildPrompt(q: Question): String = buildString {
-        appendLine("题型：${q.type.name}")
-        q.stem.takeIf { it.isNotBlank() }?.let { appendLine("题干：$it") }
-        JsonCodec.decodeOptions(q.optionsJson).takeIf { it.isNotEmpty() }?.let { opts ->
-            appendLine("选项：" + opts.joinToString("；") { "${it.key}.${it.text}" })
-        }
-        q.answer?.takeIf { it.isNotBlank() }?.let { appendLine("题库参考答案：$it") }
-        q.analysis?.takeIf { it.isNotBlank() }?.let { appendLine("现有解析：${it.take(500)}") }
-    }
-
-    @Serializable
-    private data class DeepReply(val answer: String? = null, val analysis: String? = null)
-
-    private fun parseDeepSolve(raw: String): DeepReply {
-        val text = raw.trim().removePrefix("```markdown").removePrefix("```md").removePrefix("```").removeSuffix("```").trim()
-        if (text.isBlank()) return DeepReply()
-        val start = text.indexOfFirst { it == '{' || it == '[' }
-        val end = maxOf(text.lastIndexOf('}'), text.lastIndexOf(']'))
-        if (start >= 0 && end > start) {
-            runCatching { JsonCodec.json.decodeFromString<DeepReply>(text.substring(start, end + 1)) }
-                .getOrNull()?.let { if (!it.analysis.isNullOrBlank()) return it }
-        }
-        val lines = text.lines()
-        val answer = lines.firstOrNull()?.let { Regex("""答案\s*[:：]\s*(.+)""").find(it)?.groupValues?.get(1)?.trim()?.trim('*', '`') }
-        return DeepReply(answer, lines.drop(1).joinToString("\n").trim().ifBlank { text })
     }
 }

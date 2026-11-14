@@ -182,6 +182,19 @@ class WrongBookPdfExportTest {
     }
 
     @Test
+    fun `极简解析不会按固定字符数截断完整句子`() {
+        val sentence = "该题考查药物经肝脏首过代谢后进入体循环的有效药量下降这一核心机制"
+        val q = question(16, 1, "第一章", "长句", analysis = sentence)
+            .copy(minimalSolved = true)
+
+        val rendered = WrongBookExport(PdfExportSource.UNMASTERED, listOf(q)).questionBlocks(
+            PdfExportOptions(true, PdfAnswerMode.MINIMAL, PdfAnswerPlacement.AFTER_EACH)
+        ).single()
+
+        assertTrue(rendered.contains(sentence))
+    }
+
+    @Test
     fun `仅导出题目时不带答案和解析`() {
         val q = question(10, 1, "第一章", "只导题", answer = "A", analysis = "不应出现")
         val rendered = WrongBookExport(PdfExportSource.UNMASTERED, listOf(q)).questionBlocks(

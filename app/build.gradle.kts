@@ -8,6 +8,15 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+// VersionCode 跟随 Git 提交数单调递增；同一提交重复构建保持一致。
+// Git 不可用时回退到 1000，仍高于历史正式包 versionCode 15。
+val gitCommitCount = runCatching {
+    providers.exec {
+        commandLine("git", "rev-list", "--count", "HEAD")
+    }.standardOutput.asText.get().trim().toInt()
+}.getOrDefault(0)
+val generatedVersionCode = 1000 + gitCommitCount
+
 android {
     namespace = "com.examhelper.shua"
     compileSdk = 35
@@ -16,7 +25,7 @@ android {
         applicationId = "com.examhelper.shua"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
+        versionCode = generatedVersionCode
         versionName = "1.1.0"
     }
 

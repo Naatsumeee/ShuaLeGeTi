@@ -1070,7 +1070,9 @@ private fun AboutCard(
             title = { Text("检查到新版本") },
             text = {
                 Text(
-                    "检查到新版本 v${info.version}，是否下载更新？\n\n更新日志：\n" +
+                    "检查到新版本 v${info.version}" +
+                        info.versionCode?.let { "（versionCode $it）" }.orEmpty() +
+                        "，是否下载更新？\n\n更新日志：\n" +
                         info.notes.ifBlank { "暂无更新说明" }
                 )
             },
