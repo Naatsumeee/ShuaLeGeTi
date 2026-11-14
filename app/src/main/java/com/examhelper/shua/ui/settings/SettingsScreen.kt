@@ -83,6 +83,7 @@ import kotlinx.coroutines.flow.first
 private const val AUTHOR = "@Natsume"
 private const val CONTACT_EMAIL = "xu.tianhao@outlook.com"
 private const val PROJECT_URL = "https://github.com/Naatsumeee/ShuaLeGeTi"
+internal val ABOUT_ICON_RES = R.drawable.ic_launcher_foreground
 
 @Composable
 fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
@@ -997,12 +998,20 @@ private fun AboutCard(
     PaperCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp)) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Image(
-                    painter = painterResource(R.mipmap.ic_launcher),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(48.dp).clip(RoundedCornerShape(14.dp))
-                )
+                Box(
+                    Modifier
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color(0xFF1B6E53)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Image(
+                        painter = painterResource(ABOUT_ICON_RES),
+                        contentDescription = null,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text("刷了个题", style = serifTitle(18.sp, FontWeight.Medium))
