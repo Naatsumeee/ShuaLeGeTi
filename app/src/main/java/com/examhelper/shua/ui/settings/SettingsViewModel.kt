@@ -15,11 +15,13 @@ import com.examhelper.shua.data.settings.SettingsStore
 import com.examhelper.shua.data.update.UpdateChecker
 import com.examhelper.shua.data.update.UpdateInfo
 import com.examhelper.shua.ui.sound.Haptics
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class SettingsViewModel(
     application: Application
@@ -269,7 +271,7 @@ class SettingsViewModel(
         if (_update.value.checking) return
         _update.value = UpdateState(checking = true)
         viewModelScope.launch {
-            runCatching { UpdateChecker.latest() }.fold(
+            runCatching { withContext(Dispatchers.IO) { UpdateChecker.latest() } }.fold(
                 onSuccess = { info ->
                     _update.value = UpdateState(checking = false)
                     if (UpdateChecker.isNewer(com.examhelper.shua.BuildConfig.VERSION_NAME, info.version)) {

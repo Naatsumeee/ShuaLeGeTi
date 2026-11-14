@@ -174,6 +174,14 @@ class WrongBookPdfExportTest {
     }
 
     @Test
+    fun `LaTeX 分式和根式转成可打印文本`() {
+        val text = WrongBookExport.plainText("""计算 \frac{1}{2} 与 \sqrt{x}""")
+
+        assertTrue(text.contains("(1)/(2)"))
+        assertTrue(text.contains("√(x)"))
+    }
+
+    @Test
     fun `仅导出题目时不带答案和解析`() {
         val q = question(10, 1, "第一章", "只导题", answer = "A", analysis = "不应出现")
         val rendered = WrongBookExport(PdfExportSource.UNMASTERED, listOf(q)).questionBlocks(

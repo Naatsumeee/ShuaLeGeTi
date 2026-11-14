@@ -126,8 +126,8 @@ data class WrongBookExport(
         private val codeRe = Regex("""`([^`\n]+)`""")
         private val linkRe = Regex("""\[([^\]]+)]\([^)]*\)""")
         private val tagRe = Regex("""</?[A-Za-z][^>]*>""")
-        private val fracRe = Regex("""\\frac\{([^{}]+)}\{([^{}]+)}""")
-        private val sqrtRe = Regex("""\\sqrt\{([^{}]+)}""")
+        private val fracRe = Regex("""\\frac\{([^{}]+)\}\{([^{}]+)\}""")
+        private val sqrtRe = Regex("""\\sqrt\{([^{}]+)\}""")
 
         fun plainText(raw: String): String = raw
             .replace("\r\n", "\n")

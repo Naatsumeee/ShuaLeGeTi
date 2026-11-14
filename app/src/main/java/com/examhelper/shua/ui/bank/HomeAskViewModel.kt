@@ -5,7 +5,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.examhelper.shua.ShuaApp
 import com.examhelper.shua.data.llm.ChatMessage
-import com.examhelper.shua.data.llm.LlmClient
 import com.examhelper.shua.data.llm.Prompts
 import com.examhelper.shua.ui.sound.Haptics
 import com.examhelper.shua.ui.study.AskAiState
@@ -28,7 +27,7 @@ class HomeAskViewModel(application: Application) : AndroidViewModel(application)
 
     private val container = (application as ShuaApp).container
     private val providerDao = container.database.providerDao()
-    private val llmClient = LlmClient()
+    private val llmClient = container.llmClient
 
     private val _state = MutableStateFlow(AskAiState(placeholder = "问点什么…比如「药理学怎么背」"))
     val state: StateFlow<AskAiState> = _state
