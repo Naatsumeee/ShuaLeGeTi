@@ -117,6 +117,35 @@ class HeadingClassifierTest {
         )
     }
 
+    @Test
+    fun `概念通览型小标题不当章节名`() {
+        assertTrue(HeadingClassifier.isNonChapterHeading("五、临床医学专业学生学习流行病学的意义"))
+        assertTrue(HeadingClassifier.isNonChapterHeading("三、生态学研究的定义、目的与类型"))
+        assertTrue(HeadingClassifier.isNonChapterHeading("五、病例对照研究的优点与局限性"))
+        assertNull(HeadingClassifier.cleanChapter("三、生态学研究的定义、目的与类型"))
+    }
+
+    @Test
+    fun `章内小标题归到相邻真实章节`() {
+        assertEquals(
+            mapOf("五、病例对照研究的优点与局限性" to "第六章 病例对照研究"),
+            HeadingClassifier.fillMissingChapterNumbers(
+                listOf(
+                    "第五章 队列研究",
+                    "五、病例对照研究的优点与局限性",
+                    "第六章 病例对照研究",
+                    "第七章 实验流行病学"
+                )
+            )
+        )
+        assertEquals(
+            mapOf("四、疾病的分布" to "第二章 疾病的分布"),
+            HeadingClassifier.fillMissingChapterNumbers(
+                listOf("第二章 疾病的分布", "四、疾病的分布", "第三章 病因与因果推断")
+            )
+        )
+    }
+
     // ---------- 章名本体必须留住（用户报的「第X章 AAAA 变成只有 第X章」）----------
 
     @Test
@@ -182,6 +211,16 @@ class HeadingClassifierTest {
             HeadingClassifier.unifyChapterNames(
                 listOf("第十一章 线粒体病", "第六章 线粒体遗传")
             ).isEmpty()
+        )
+    }
+
+    @Test
+    fun `同章名被 OCR 读成不同章号时归到较早的章号`() {
+        assertEquals(
+            mapOf("第八章 实验流行病学" to "第七章 实验流行病学研究"),
+            HeadingClassifier.unifyChapterNames(
+                listOf("第七章 实验流行病学研究", "第八章 实验流行病学")
+            )
         )
     }
 

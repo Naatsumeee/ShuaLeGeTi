@@ -584,6 +584,16 @@ class LlmQuestionParser(
                     )
                 }
             }
+            val chapterMapping = HeadingClassifier.fillMissingChapterNumbers(
+                list.mapNotNull { it.chapter }
+            )
+            if (chapterMapping.isNotEmpty()) {
+                list.forEach { q -> q.chapter?.let { chapterMapping[it]?.let { q.chapter = it } } }
+            }
+            val unified = HeadingClassifier.unifyChapterNames(list.mapNotNull { it.chapter })
+            if (unified.isNotEmpty()) {
+                list.forEach { q -> q.chapter?.let { unified[it]?.let { q.chapter = it } } }
+            }
             applyAnswerTable(
                 list, rawText,
                 stemOf = { it.stem },
@@ -636,6 +646,26 @@ class LlmQuestionParser(
                         sharedOptions = if (prev.sharedOptions.isNotEmpty()) prev.sharedOptions else l.sharedOptions,
                         page = prev.page ?: l.page
                     )
+                }
+            }
+            val chapterMapping = HeadingClassifier.fillMissingChapterNumbers(
+                list.mapNotNull { it.chapter }
+            )
+            if (chapterMapping.isNotEmpty()) {
+                for (i in list.indices) {
+                    val q = list[i]
+                    q.chapter?.let { old ->
+                        chapterMapping[old]?.let { list[i] = q.copy(chapter = it) }
+                    }
+                }
+            }
+            val unified = HeadingClassifier.unifyChapterNames(list.mapNotNull { it.chapter })
+            if (unified.isNotEmpty()) {
+                for (i in list.indices) {
+                    val q = list[i]
+                    q.chapter?.let { old ->
+                        unified[old]?.let { list[i] = q.copy(chapter = it) }
+                    }
                 }
             }
             applyAnswerTable(

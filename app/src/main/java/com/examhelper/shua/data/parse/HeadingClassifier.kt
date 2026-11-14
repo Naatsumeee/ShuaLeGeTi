@@ -140,6 +140,23 @@ object HeadingClassifier {
             val cur = canonicalByNo[no]
             if (cur == null || body.length > chapterBodyOf(cur).length) canonicalByNo[no] = n
         }
+        // 同一章名被 OCR 读成不同章号（第七章 实验流行病学研究 / 第八章 实验流行病学）
+        // 时，选择更早章号并把另一条归过去。两章正文名相同几乎只可能是识别串号。
+        val numberCanonical = canonicalByNo.toMutableMap()
+        val numberEntries = canonicalByNo.entries.sortedBy { it.key }
+        for (i in numberEntries.indices) {
+            val base = numberEntries[i]
+            val baseBody = bodyKey(chapterBodyOf(base.value))
+            if (baseBody.length < 4) continue
+            for (j in i + 1 until numberEntries.size) {
+                val other = numberEntries[j]
+                val otherBody = bodyKey(chapterBodyOf(other.value))
+                if (otherBody.length < 4) continue
+                if (baseBody.contains(otherBody) || otherBody.contains(baseBody)) {
+                    numberCanonical[other.key] = base.value
+                }
+            }
+        }
         // ② 本体 → canonical（用于接住没有章号的写法）
         val byBody = HashMap<String, String>()
         for ((_, canon) in canonicalByNo) {
@@ -151,7 +168,7 @@ object HeadingClassifier {
         for (n in cleaned) {
             val no = chapterNumberOf(n)
             if (no != null) {
-                val canon = canonicalByNo[no] ?: continue
+                val canon = numberCanonical[no] ?: continue
                 if (canon != n) out[n] = canon
                 continue
             }
@@ -165,6 +182,70 @@ object HeadingClassifier {
             if (hit != null && hit != n) out[n] = hit
         }
         return out
+    }
+
+    /**
+     * 按出现顺序补齐缺失章号。只处理非“一、/（一）”式章内小节，
+     * 避免把“五、病例对照研究的优点”误补成新章。
+     */
+    fun fillMissingChapterNumbers(names: List<String>): Map<String, String> {
+        val rawOrder = names.map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+        val out = HashMap<String, String>()
+        val cleaned = rawOrder.map { cleanChapter(it) ?: it }
+        for ((i, title) in cleaned.withIndex()) {
+            if (!isOrdinalSubheading(title)) continue
+            val previous = (i - 1 downTo 0).firstOrNull { chapterNumberOf(cleaned[it]) != null }
+            val next = (i + 1 until cleaned.size).firstOrNull { chapterNumberOf(cleaned[it]) != null }
+            val body = bodyKey(stripOrdinal(title))
+            fun sameBody(index: Int?): Boolean {
+                if (index == null || body.length < 2) return false
+                val canonicalBody = bodyKey(chapterBodyOf(cleaned[index]))
+                return canonicalBody.length >= 2 &&
+                    (canonicalBody.contains(body) || body.contains(canonicalBody))
+            }
+            val targetIndex = when {
+                sameBody(next) && !sameBody(previous) -> next
+                previous != null -> previous
+                next != null -> next
+                else -> null
+            }
+            if (targetIndex != null) out[rawOrder[i]] = cleaned[targetIndex]
+        }
+
+        val order = cleaned.filterNot(::isOrdinalSubheading)
+            .filter { it.isNotBlank() }
+            .distinct()
+        if (order.size < 2 || order.none { chapterNumberOf(it) != null }) return out
+
+        var expected: Int? = null
+        for (name in order) {
+            val no = chapterNumberOf(name)
+            if (no != null) {
+                expected = no
+                continue
+            }
+            if (expected == null) continue
+            expected = expected!! + 1
+            val original = rawOrder.firstOrNull { cleanChapter(it) == name } ?: name
+            out[original] = "第${chineseNumber(expected!!)}章 $name"
+        }
+        return out
+    }
+
+    private fun isOrdinalSubheading(title: String): Boolean =
+        Regex("""^\s*(?:[（(][一二三四五六七八九十百\d]{1,3}[)）]|[一二三四五六七八九十百]{1,3}\s*[、.．]|\d{1,2}\s*[、.．)）])""")
+            .containsMatchIn(title)
+
+    private fun chineseNumber(n: Int): String {
+        val digits = "零一二三四五六七八九"
+        if (n < 10) return digits[n].toString()
+        if (n == 10) return "十"
+        if (n < 20) return "十" + digits[n - 10]
+        val tens = n / 10
+        val ones = n % 10
+        return digits[tens].toString() + "十" + if (ones == 0) "" else digits[ones].toString()
     }
 
     /** 比对用的章名键：去空白、标点、全角空格，统一小写 */
@@ -270,7 +351,21 @@ object HeadingClassifier {
         if (hasChapterNumber(title)) return false
         val s = stripOrdinal(title)
         return isTypeHeading(title) || isTypeHeading(s) ||
-            isSectionHeading(title) || isSectionHeading(s)
+            isSectionHeading(title) || isSectionHeading(s) ||
+            isConceptSubheading(title)
+    }
+
+    private val conceptHintRe = Regex(
+        """(意义|优点|局限|定义|目的|类型|原则|步骤|特点|影响因素|应用|控制|研究进展|常见问题)"""
+    )
+
+    private fun isConceptSubheading(title: String): Boolean {
+        val t = title.trim()
+        if (!Regex("""^\s*(?:[（(][一二三四五六七八九十百\d]{1,3}[)）]|[一二三四五六七八九十百]{1,3}\s*[、.．])""")
+                .containsMatchIn(t)
+        ) return false
+        val body = stripOrdinal(t)
+        return body.length > 14 || conceptHintRe.containsMatchIn(body)
     }
 
     /** 纯题型标题：是题型分组、且不带章号。保留旧名以兼容既有调用 */

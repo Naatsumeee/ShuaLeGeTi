@@ -44,6 +44,21 @@ class AnswerSheetTest {
     }
 
     @Test
+    fun `答案字母覆盖到 F 及以后`() {
+        val span = """
+            1.F
+            2.G
+            3.H
+        """.trimIndent()
+
+        val table = AnswerSheet.parse(span).toMap()
+
+        assertEquals("F", table[1])
+        assertEquals("G", table[2])
+        assertEquals("H", table[3])
+    }
+
+    @Test
     fun `答案被 OCR 挤到下一行也能拼上`() {
         // 实测：p26 里 18./26./28./29./32. 都是题号单独一行，答案在下一行
         val span = """
@@ -91,6 +106,20 @@ class AnswerSheetTest {
         assertEquals("D", t[3])
         assertEquals("E", t[31])
         assertEquals("C", t[32])
+    }
+
+    @Test
+    fun `一行多对里有一个题号乱码时仍保留其他答案`() {
+        val span = """
+            1.D�.C3.B4.C5.D
+        """.trimIndent()
+
+        val table = AnswerSheet.parse(span).toMap()
+
+        assertEquals("D", table[1])
+        assertEquals("B", table[3])
+        assertEquals("C", table[4])
+        assertEquals("D", table[5])
     }
 
     @Test
@@ -157,6 +186,21 @@ class AnswerSheetTest {
         assertTrue("题目区应保留两章内容", body.contains("第六章") && body.contains("第七章"))
         assertFalse("答案区不应包含题目", ans!!.contains("题目一"))
         assertEquals("B", AnswerSheet.parse(ans).toMap()[1])
+    }
+
+    @Test
+    fun `同一章有多个答案区起点时全部解析`() {
+        val span = """
+            参考答案
+            1.A
+            二、参考答案
+            2.B
+        """.trimIndent()
+
+        val rows = AnswerSheet.parseAllRegions(span).toMap()
+
+        assertEquals("A", rows[1])
+        assertEquals("B", rows[2])
     }
 
     @Test

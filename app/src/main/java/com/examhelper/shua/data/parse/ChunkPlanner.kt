@@ -204,15 +204,18 @@ object ChunkPlanner {
      */
     private fun sectionOf(lines: List<String>, from: Int = 0): String? {
         var i = from.coerceAtLeast(0)
+        var ordinalFallback: String? = null
         while (i >= 0) {
             if (isSectionStart(lines[i]) && !HeadingClassifier.isPureTypeHeading(lines[i])) {
-                return lines[i].trim()
+                val title = lines[i].trim()
+                if (HeadingClassifier.hasChapterNumber(title)) return title
+                if (ordinalFallback == null) ordinalFallback = title
             }
             // 超过 200 行还没找到就当没有（避免整篇回溯）
             if (from - i > 200) return null
             i--
         }
-        return null
+        return ordinalFallback
     }
 
     /** 去重键：去掉空白与标点后的小写题干（跨块重复的题只保留第一次出现的） */
@@ -284,6 +287,10 @@ object ChunkPlanner {
         val ks = sectionKey(sec)
         val kg = sectionKey(got)
         if (ks == kg) return sec
+        if (HeadingClassifier.hasChapterNumber(sec) && !HeadingClassifier.hasChapterNumber(got)) return sec
+        if (HeadingClassifier.hasChapterNumber(sec) && HeadingClassifier.hasChapterNumber(got) &&
+            HeadingClassifier.chapterNumberOf(sec) != HeadingClassifier.chapterNumberOf(got)
+        ) return got
         // 章节标题本体相同（`第三章 抗菌药物` vs `第3章 抗菌药物` vs `抗菌药物`）→ 用原文的完整写法
         val cs = sectionKey(chapterCore(sec))
         val cg = sectionKey(chapterCore(got))

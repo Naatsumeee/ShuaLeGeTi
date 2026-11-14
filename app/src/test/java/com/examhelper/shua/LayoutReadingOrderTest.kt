@@ -91,6 +91,29 @@ class LayoutReadingOrderTest {
     }
 
     @Test
+    fun chapterNameInHeaderIsPreservedBeforeBody() {
+        val layout = PageLayout(
+            regions = emptyList(),
+            columnCuts = emptyList(),
+            tableBoxes = emptyList(),
+            formulaBoxes = emptyList(),
+            noiseBoxes = listOf(Box.of(0, 0, 900, 90), Box.of(0, 1200, 900, 1285)),
+            analyzed = true
+        )
+        val blocks = listOf(
+            block("第三章 病因与病因推断", 550, 20, 860, 60),
+            block("1. 题干正文", 60, 300, 840, 340),
+            block("21", 440, 1220, 470, 1260)
+        )
+
+        val text = MlKitOcrEngine.rebuildReadingOrder(blocks, 900, layout)
+
+        assertTrue(text.startsWith("第三章 病因与病因推断"))
+        assertTrue(text.contains("1. 题干正文"))
+        assertFalse(text.contains("21"))
+    }
+
+    @Test
     fun singleColumnFallsBackToLineSorting() {
         // 没有栏缝 → 走行聚类，同一行并排的选项要按 left 排序（不能 B 在 A 前面）
         val layout = PageLayout(

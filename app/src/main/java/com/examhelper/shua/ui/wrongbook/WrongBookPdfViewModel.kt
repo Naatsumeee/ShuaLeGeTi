@@ -176,6 +176,15 @@ class WrongBookPdfViewModel(
 
     fun startMinimalSolve() = requestMaintenance(AnalysisLevel.MINIMAL)
 
+    fun cancelMaintenance() {
+        val bankId = _state.value.selectedBankId ?: return
+        PdfAnalysisWorker.cancel(getApplication(), source.name, bankId)
+        _state.value = _state.value.copy(
+            maintenanceRunning = false,
+            maintenanceMessage = "已停止当前生成任务"
+        )
+    }
+
     private fun requestMaintenance(level: AnalysisLevel) {
         if (_state.value.maintenanceRunning) return
         val selected = _state.value.selectedQuestions()
@@ -255,13 +264,15 @@ class WrongBookPdfViewModel(
                     val running = info.state == WorkInfo.State.ENQUEUED ||
                         info.state == WorkInfo.State.RUNNING ||
                         info.state == WorkInfo.State.BLOCKED
-                    val message = info.progress.getString(PdfAnalysisWorker.KEY_MESSAGE)
-                        ?: when (info.state) {
+                    val message = when (info.state) {
+                        WorkInfo.State.CANCELLED -> "已停止当前生成任务"
+                        WorkInfo.State.FAILED -> info.progress.getString(PdfAnalysisWorker.KEY_MESSAGE)
+                            ?: "题目解析维护失败，可重试"
+                        else -> info.progress.getString(PdfAnalysisWorker.KEY_MESSAGE)
+                    } ?: when (info.state) {
                             WorkInfo.State.ENQUEUED -> "等待后台开始…"
                             WorkInfo.State.RUNNING -> "后台维护中…"
                             WorkInfo.State.SUCCEEDED -> "题目解析维护完成"
-                            WorkInfo.State.FAILED -> "题目解析维护失败，可重试"
-                            WorkInfo.State.CANCELLED -> "题目解析维护已取消"
                             else -> null
                         }
                     _state.value = _state.value.copy(

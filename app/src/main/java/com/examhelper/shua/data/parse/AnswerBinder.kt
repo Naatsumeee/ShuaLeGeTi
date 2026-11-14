@@ -105,18 +105,19 @@ object AnswerBinder {
         //  ② 行内前缀表 —— `答案：1.B 2.C 3.A` 整行写在正文里，前面没有独立的
         //     「参考答案」行。早期只认 ①，这类表整块被当正文丢掉。
         // 没有答案的章（答案随题标注）整章跳过，AI 本身就能给出答案。
-        val rowsByChapter = LinkedHashMap<Int?, List<Pair<Int, String>>>()
-        for ((no, span) in splitByChapter(rawText)) {
+        val chapterNames = items.mapNotNull { it.chapter }.distinct()
+        val rowsByChapter = LinkedHashMap<String?, MutableList<Pair<Int, String>>>()
+        for ((key, span) in splitByChapters(rawText, chapterNames)) {
             val rows = mutableListOf<Pair<Int, String>>()
-            AnswerSheet.splitRegion(span).second?.let { rows += AnswerSheet.parse(it) }
+            rows += AnswerSheet.parseAllRegions(span)
             rows += parseInlineTable(span)
-            if (rows.isNotEmpty()) rowsByChapter[no] = rows
+            if (rows.isNotEmpty()) rowsByChapter.getOrPut(key) { mutableListOf() }.addAll(rows)
         }
         if (rowsByChapter.isEmpty()) return emptyMap()
 
         val out = HashMap<Int, String>()
-        for ((chNo, idxs) in groupByChapter(items)) {
-            val rows = rowsByChapter[chNo] ?: continue
+        for ((key, idxs) in groupByChapter(items)) {
+            val rows = rowsByChapter[key] ?: continue
             bindChapter(items, idxs, rows, out)
         }
         return out
@@ -147,10 +148,10 @@ object AnswerBinder {
     }
 
     /** 按章号把题目下标分组，保持原顺序 */
-    private fun groupByChapter(items: List<Item>): Map<Int?, List<Int>> {
-        val groups = LinkedHashMap<Int?, MutableList<Int>>()
+    private fun groupByChapter(items: List<Item>): Map<String?, List<Int>> {
+        val groups = LinkedHashMap<String?, MutableList<Int>>()
         for (i in items.indices) {
-            groups.getOrPut(chapterNumberOf(items[i].chapter)) { mutableListOf() } += i
+            groups.getOrPut(chapterKey(items[i].chapter)) { mutableListOf() } += i
         }
         return groups
     }
@@ -194,11 +195,10 @@ object AnswerBinder {
         // 只要有部分题拿到了题号，就不能再按序号猜 —— 剩下那几道在 objective 里的
         // 位置早已不等于它们真正的题号，`k + 1` 会整片错位（实测错填 8 条）。
         if (byNo.isEmpty() && objective.isNotEmpty()) {
-            val maxKey = letters.keys.maxOrNull() ?: 0
-            val noDup = letters.keys.size == letters.values.size
-            if (noDup && maxKey in 1..objective.size) {
+            val sequential = letters.filterKeys { it in 1..objective.size }
+            if (sequential.size >= objective.size * 0.8) {
                 objective.forEachIndexed { k, idx ->
-                    val ans = letters[k + 1] ?: return@forEachIndexed
+                    val ans = sequential[k + 1] ?: return@forEachIndexed
                     if (accepts(items[idx].optionKeys, ans)) out[idx] = ans
                 }
             }
@@ -266,17 +266,70 @@ object AnswerBinder {
         return parseChineseNumber(m.groupValues[1])
     }
 
-    private fun splitByChapter(rawText: String): List<Pair<Int?, String>> {
-        val marks = chapterSplitRe.findAll(rawText).toList()
-        if (marks.isEmpty()) return listOf(null to rawText)
-        val out = mutableListOf<Pair<Int?, String>>()
-        if (marks.first().range.first > 0) out += null to rawText.substring(0, marks.first().range.first)
-        for ((i, m) in marks.withIndex()) {
-            val end = if (i + 1 < marks.size) marks[i + 1].range.first else rawText.length
-            out += parseChineseNumber(m.groupValues[1]) to rawText.substring(m.range.first, end)
+    /**
+     * 按题目里出现的章节名切 OCR 原文。除了「第X章」也认无章号章节标题，
+     * 解决扫描件页眉丢章号时整章答案无法归组的问题。
+     */
+    private fun splitByChapters(rawText: String, chapterNames: List<String>): List<Pair<String?, String>> {
+        val defs = chapterNames.mapNotNull { raw ->
+            HeadingClassifier.cleanChapter(raw)?.let { clean ->
+                val no = chapterNumberOf(clean)
+                val key = if (no != null) "n:$no" else "b:${bodyKey(clean)}"
+                key to (no to bodyKey(clean))
+            }
+        }
+        if (defs.isEmpty()) return listOf(null to rawText)
+        val byNumber = defs.mapNotNull { (key, value) -> value.first?.let { it to key } }.toMap()
+        val byBody = defs.filter { it.second.second.length >= 2 }
+            .associate { it.second.second to it.first }
+
+        val lines = rawText.lines()
+        val markers = mutableListOf<Pair<Int, String>>()
+        var currentKey: String? = null
+        for ((index, line) in lines.withIndex()) {
+            val trimmed = line.trim()
+            var key: String? = null
+            val numbered = chapterSplitRe.find(trimmed)
+            if (numbered != null) {
+                key = parseChineseNumber(numbered.groupValues[1])?.let(byNumber::get)
+            }
+            if (key == null && trimmed.length in 4..40) {
+                val normalized = bodyKey(trimmed)
+                key = byBody[normalized]
+                    ?: byBody.entries.firstOrNull { (body, _) ->
+                        body.length >= 4 && normalized.length >= 4 &&
+                            (normalized.startsWith(body) || body.startsWith(normalized))
+                    }?.value
+            }
+            if (key != null && key != currentKey) {
+                markers += index to key
+                currentKey = key
+            }
+        }
+
+        if (markers.isEmpty()) return listOf(null to rawText)
+        val out = mutableListOf<Pair<String?, String>>()
+        if (markers.first().first > 0) {
+            out += null to lines.subList(0, markers.first().first).joinToString("\n")
+        }
+        for ((index, marker) in markers.withIndex()) {
+            val start = marker.first
+            val end = markers.getOrNull(index + 1)?.first ?: lines.size
+            out += marker.second to lines.subList(start, end).joinToString("\n")
         }
         return out
     }
+
+    private fun chapterKey(chapter: String?): String? {
+        val clean = HeadingClassifier.cleanChapter(chapter) ?: return null
+        val no = chapterNumberOf(clean)
+        return if (no != null) "n:$no" else "b:${bodyKey(clean)}"
+    }
+
+    private fun bodyKey(text: String): String =
+        HeadingClassifier.chapterBodyOf(text)
+            .filter { it.isLetterOrDigit() }
+            .lowercase()
 
     /** 中文/阿拉伯数字 → Int；单字「十」必须认，否则「第十章」取不到章号 */
     private fun parseChineseNumber(raw: String): Int? {

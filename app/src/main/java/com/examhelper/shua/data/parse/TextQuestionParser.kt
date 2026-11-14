@@ -761,32 +761,10 @@ object TextQuestionParser {
      * 第七章、第八章……（只在**明确缺失**的位置补，已有的序号一律不动）。
      */
     private fun fillMissingChapterNumbers(questions: List<ParsedQuestion>): List<ParsedQuestion> {
-        if (questions.isEmpty()) return questions
-        // 按出现顺序收集不重复的章节名
-        val order = LinkedHashSet<String>()
-        questions.forEach { q -> q.chapter?.takeIf { it.isNotBlank() }?.let { order += it } }
-        if (order.size < 2) return questions
-
-        val numbered = order.map { it to chapterNumber(it) }
-        val known = numbered.mapNotNull { it.second }
-        // 至少要有一个带章号的，否则无从推断
-        if (known.isEmpty()) return questions
-
-        val fixed = mutableListOf<String>()
-        var expected: Int? = null   // null = 还没遇到第一个带章号的章节，无从推断
-        for ((name, no) in numbered) {
-            if (no != null) {
-                expected = no
-                fixed += name
-            } else if (expected == null) {
-                // 第一个带章号的章节之前，无法推断，原样保留
-                fixed += name
-            } else {
-                expected += 1
-                fixed += "第${chineseNumber(expected!!)}章 $name"
-            }
-        }
-        val mapping = order.zip(fixed).toMap()
+        val mapping = HeadingClassifier.fillMissingChapterNumbers(
+            questions.mapNotNull { it.chapter }
+        )
+        if (mapping.isEmpty()) return questions
         questions.forEach { q ->
             q.chapter?.let { c -> mapping[c]?.let { q.chapter = it } }
         }

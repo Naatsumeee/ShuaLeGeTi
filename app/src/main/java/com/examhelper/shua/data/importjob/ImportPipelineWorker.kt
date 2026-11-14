@@ -456,6 +456,9 @@ class ImportPipelineWorker(
             // 跨块收口：同一道题被相邻分段重复解析的合并成一条；原文答案集中
             // 给在文末的，按题号回填到前面缺答案的题目上。
             var totalParsed = JsonCodec.readParsedLines(parsed).size
+            var coverage = com.examhelper.shua.data.parse.AnswerCoverage.audit(
+                JsonCodec.readParsedLines(parsed)
+            )
             if (okCount > 0) {
                 val before = JsonCodec.readParsedLines(parsed)
                 val after = LlmQuestionParser.finalizeLines(before, text)
@@ -465,6 +468,7 @@ class ImportPipelineWorker(
                     }
                     totalParsed = after.size
                 }
+                coverage = com.examhelper.shua.data.parse.AnswerCoverage.audit(after)
             }
             if (okCount == 0 && chunks.isNotEmpty()) {
                 return fail(jobId, "AI 解析全部失败：${provider.name} 连接异常或返回不可解析")
@@ -495,7 +499,11 @@ class ImportPipelineWorker(
                     cacheHitTokens = baseHit + u.normalizedCacheHit().toLong(),
                     cacheMissTokens = baseMiss + u.cacheMissTokens.toLong(),
                     outputTokens = baseOut + u.completionTokens.toLong(),
-                    message = "解析完成：$totalParsed 题" + if (failCount > 0) "（$failCount 段失败，可在预览后重新解析补齐）" else "" +
+                    message = "解析完成：$totalParsed 题 · 答案 ${coverage.answered}/${coverage.total}" +
+                        coverage.lowCoverageChapters.take(3).takeIf { it.isNotEmpty() }
+                            ?.joinToString(prefix = " · 整章低覆盖：", separator = "、") { it }
+                            .orEmpty() +
+                        if (failCount > 0) "（$failCount 段失败，可在预览后重新解析补齐）" else "" +
                         costYuan?.let { " · 参考成本 ${Cost.format(it)} 元" }.orEmpty()
                 )
             }

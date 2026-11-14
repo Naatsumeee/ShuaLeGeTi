@@ -22,6 +22,7 @@ import com.examhelper.shua.data.llm.ChatMessage
 import com.examhelper.shua.data.llm.Prompts
 import com.examhelper.shua.data.llm.ReasoningEffort
 import com.examhelper.shua.data.model.JsonCodec
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.Serializable
 
@@ -70,6 +71,10 @@ class PdfAnalysisWorker(
             )
             return name
         }
+
+        fun cancel(context: Context, source: String, bankId: Long) {
+            WorkManager.getInstance(context).cancelUniqueWork(uniqueName(source, bankId))
+        }
     }
 
     private val container by lazy { ShuaApp.instance.container }
@@ -85,7 +90,13 @@ class PdfAnalysisWorker(
         val plan = PdfAnalysisPlan.create(questions, level, skipExisting = !forceAll)
         if (plan.targets.isEmpty()) return Result.success()
 
-        runCatching { setForeground(foregroundInfo("准备维护题目解析…", 0, plan.targets.size)) }
+        val foregroundStarted = runCatching {
+            setForeground(foregroundInfo("准备维护题目解析…", 0, plan.targets.size))
+        }.isSuccess
+        if (!foregroundStarted) {
+            setProgress(failureProgress(level, 0, plan.targets.size, "后台保活启动失败"))
+            return Result.failure()
+        }
         val provider = runCatching {
             val all = container.database.providerDao().observeAll().first().filter { it.enabled }
             all.firstOrNull { it.isPrimary } ?: all.first()
@@ -99,6 +110,17 @@ class PdfAnalysisWorker(
 
         for (question in plan.targets) {
             if (isStopped) return Result.failure()
+            val startedMessage = "${levelLabel(level)}：正在生成 ${done + 1}/${plan.targets.size}"
+            setProgress(
+                workDataOf(
+                    KEY_LEVEL to level.name,
+                    KEY_TOTAL to plan.targets.size,
+                    KEY_DONE to done,
+                    KEY_FAILED to failed,
+                    KEY_MESSAGE to startedMessage
+                )
+            )
+            runCatching { setForeground(foregroundInfo(startedMessage, done, plan.targets.size)) }
             runCatching {
                 val result = container.llmClient.chatWithMessages(
                     provider = provider,
@@ -127,7 +149,10 @@ class PdfAnalysisWorker(
                 } else {
                     container.studyRepo.applyMinimalSolve(question, analysis)
                 }
-            }.onFailure { failed++ }
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
+                failed++
+            }
 
             done++
             val message = "${levelLabel(level)}：$done/${plan.targets.size}，失败 $failed"

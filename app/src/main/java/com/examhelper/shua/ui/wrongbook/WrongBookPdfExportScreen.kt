@@ -404,6 +404,20 @@ private fun MaintenanceCard(
                 enter = expandVertically() + fadeIn(),
                 exit = shrinkVertically() + fadeOut()
             ) {
+                OutlinedButton(
+                    onClick = vm::cancelMaintenance,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 42.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = shuaColors.sage)
+                ) {
+                    Text("停止当前生成任务")
+                }
+            }
+            AnimatedVisibility(
+                visible = state.maintenanceRunning,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
+            ) {
                 LinearProgressIndicator(
                     modifier = Modifier.fillMaxWidth().height(3.dp),
                     color = shuaColors.terracotta,

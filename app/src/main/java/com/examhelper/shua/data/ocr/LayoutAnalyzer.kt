@@ -219,6 +219,14 @@ object LayoutAnalyzer {
             area > 0 && inter.toFloat() / area >= 0.5f
         }
 
+    /**
+     * 章节名常只印在页眉，不能和书名、页码一起当噪声丢掉。
+     * 只保留明确带「第X章/节/篇/卷/部分」的页眉。
+     */
+    fun isChapterHeader(text: String): Boolean =
+        Regex("""^\s*第\s*[一二三四五六七八九十百零\d]{1,4}\s*[章节篇卷]""")
+            .containsMatchIn(text.trim())
+
     /** 块是否落在某个表格区域内（按中心点判定） */
     fun inTable(box: Box, layout: PageLayout): Boolean =
         layout.tableBoxes.any { t -> t.contains(box.centerX, box.centerY) }

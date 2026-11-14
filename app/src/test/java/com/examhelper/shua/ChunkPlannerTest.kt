@@ -184,6 +184,116 @@ class ChunkPlannerTest {
     }
 
     @Test
+    fun `章内序号小节不会顶掉真实章节上下文`() {
+        val text = buildString {
+            appendLine("第三章 病因与因果推断")
+            repeat(12) { appendLine("${it + 1}. 关于病因推断的题目内容写长一些以触发分块。") }
+            appendLine("五、病例对照研究的优点与局限性")
+            repeat(12) { appendLine("${it + 20}. 关于病例对照研究的题目内容写长一些以触发分块。") }
+        }
+
+        val chunks = ChunkPlanner.plan(text, 300, overlapLines = 2)
+
+        assertTrue(chunks.size > 1)
+        assertTrue(
+            chunks.filter { it.text.contains("病例对照研究的题目") }
+                .all { it.section == "第三章 病因与因果推断" }
+        )
+    }
+
+    @Test
+    fun `无章号章节夹在已知章号之间时自动补齐`() {
+        val lines = listOf(
+            ParsedLine(0, 0, type = QuestionType.SINGLE.name, chapter = "第二章 疾病的分布", stem = "题一"),
+            ParsedLine(1, 0, type = QuestionType.SINGLE.name, chapter = "病因与因果推断", stem = "题二"),
+            ParsedLine(2, 0, type = QuestionType.SINGLE.name, chapter = "描述性研究", stem = "题三"),
+            ParsedLine(3, 0, type = QuestionType.SINGLE.name, chapter = "第五章 队列研究", stem = "题四")
+        )
+
+        val out = LlmQuestionParser.finalizeLines(lines, "无答案文本")
+
+        assertEquals("第三章 病因与因果推断", out[1].chapter)
+        assertEquals("第四章 描述性研究", out[2].chapter)
+    }
+
+    @Test
+    fun `无章号章节仍能按章节名找回章末答案`() {
+        fun objective(no: Int, chapter: String) = ParsedLine(
+            chunkIndex = 0,
+            indexInChunk = no,
+            type = QuestionType.SINGLE.name,
+            chapter = chapter,
+            stem = "第 $no 题题干",
+            options = listOf(
+                com.examhelper.shua.data.model.QuestionOption("A", "甲"),
+                com.examhelper.shua.data.model.QuestionOption("B", "乙"),
+                com.examhelper.shua.data.model.QuestionOption("C", "丙"),
+                com.examhelper.shua.data.model.QuestionOption("D", "丁")
+            )
+        )
+        val lines = listOf(
+            objective(1, "第二章 疾病的分布"),
+            objective(2, "病因与因果推断"),
+            objective(3, "描述性研究"),
+            objective(4, "第五章 队列研究")
+        )
+        val raw = """
+            第二章 疾病的分布
+            参考答案
+            1.A
+            病因与因果推断
+            参考答案
+            1.B
+            描述性研究
+            参考答案
+            1.C
+            第五章 队列研究
+            参考答案
+            1.D
+        """.trimIndent()
+
+        val out = LlmQuestionParser.finalizeLines(lines, raw)
+
+        assertEquals(
+            "chapters=${out.map { it.chapter }} answers=${out.map { it.answer }}",
+            listOf("A", "B", "C", "D"),
+            out.map { it.answer }
+        )
+    }
+
+    @Test
+    fun `答案表多一个越界题号时仍按顺序回填`() {
+        fun objective(no: Int) = ParsedLine(
+            chunkIndex = 0,
+            indexInChunk = no,
+            chapter = "第一章 绪论",
+            type = QuestionType.SINGLE.name,
+            stem = "第 $no 题题干",
+            options = listOf(
+                com.examhelper.shua.data.model.QuestionOption("A", "甲"),
+                com.examhelper.shua.data.model.QuestionOption("B", "乙"),
+                com.examhelper.shua.data.model.QuestionOption("C", "丙"),
+                com.examhelper.shua.data.model.QuestionOption("D", "丁")
+            )
+        )
+        val raw = """
+            第一章 绪论
+            参考答案
+            1.A
+            2.B
+            3.C
+            4.D
+        """.trimIndent()
+
+        val out = LlmQuestionParser.finalizeLines(
+            listOf(objective(1), objective(2), objective(3)),
+            raw
+        )
+
+        assertEquals(listOf("A", "B", "C"), out.map { it.answer })
+    }
+
+    @Test
     fun `题干被截短的重复题合并后保留完整版`() {
         val full = ParsedLine(
             chunkIndex = 1, indexInChunk = 0, type = QuestionType.SINGLE.name,
@@ -272,6 +382,11 @@ class ChunkPlannerTest {
         assertEquals("第四章 心血管", ChunkPlanner.resolveChapter(null, "第四章 心血管"))
         // 模型没给 → 用原文
         assertEquals("第二章 药效学", ChunkPlanner.resolveChapter("第二章 药效学", null))
+        // 原文已有完整章号，模型把章内“五、……”小节当章节名时不能覆盖
+        assertEquals(
+            "第三章 病因与因果推断",
+            ChunkPlanner.resolveChapter("第三章 病因与因果推断", "五、病例对照研究的优点与局限性")
+        )
     }
 
     @Test

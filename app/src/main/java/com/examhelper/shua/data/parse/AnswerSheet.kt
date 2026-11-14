@@ -51,7 +51,7 @@ object AnswerSheet {
      * 一起读出来的行，严格从行首匹配会整条丢掉。
      */
     private val linePairRe = Regex(
-        """^\s*[^\p{L}\p{N}]{0,2}\s*(\d{1,4})\s*[.、．:：)）]\s*([A-EGH]{1,8}|对|错|正确|错误)\s*$"""
+        """^\s*[^\p{L}\p{N}]{0,2}\s*(\d{1,4})\s*[.、．:：)）]\s*([A-H]{1,8}|对|错|正确|错误)\s*$"""
     )
 
     /**
@@ -65,7 +65,7 @@ object AnswerSheet {
 
     /** 一行挤了多对：`1.E"2.B3.D` / `6.A7.B` */
     private val inlinePairRe = Regex(
-        """(\d{1,4})\s*[.、．:：)）]\s*([A-EGH]{1,8}|对|错|正确|错误)"""
+        """(\d{1,4})\s*[.、．:：)）]\s*([A-H]{1,8}|对|错|正确|错误)"""
     )
 
     /**
@@ -97,7 +97,7 @@ object AnswerSheet {
     private val subjectiveRe = Regex("""^\s*(\d{1,4})\s*[.、．:：)）]\s*(\S.{2,})$""")
 
     /** 单个答案字符（用于跨行拼接） */
-    private val loneAnswerRe = Regex("""^\s*([A-EGH]{1,8}|对|错|正确|错误)\s*$""")
+    private val loneAnswerRe = Regex("""^\s*([A-H]{1,8}|对|错|正确|错误)\s*$""")
 
     /** 该行是否是答案区起点 */
     fun isRegionStart(line: String): Boolean = regionStartRe.matches(line.trim())
@@ -113,6 +113,19 @@ object AnswerSheet {
         val idx = lines.indexOfLast { isRegionStart(it) }
         if (idx < 0) return text to null
         return lines.take(idx).joinToString("\n") to lines.drop(idx + 1).joinToString("\n")
+    }
+
+    /** 解析文本里所有答案区，而不是只取最后一个起点。 */
+    fun parseAllRegions(text: String): List<Pair<Int, String>> {
+        val lines = text.lines()
+        val starts = lines.indices.filter { isRegionStart(lines[it]) }
+        if (starts.isEmpty()) return emptyList()
+        val out = mutableListOf<Pair<Int, String>>()
+        starts.forEachIndexed { index, start ->
+            val end = starts.getOrNull(index + 1) ?: lines.size
+            out += parse(lines.subList(start + 1, end).joinToString("\n"))
+        }
+        return out
     }
 
     /**
@@ -180,7 +193,9 @@ object AnswerSheet {
             val pairs = inlinePairRe.findAll(line).toList()
             if (pairs.size >= 2) {
                 val residue = fillerRe.replace(inlinePairRe.replace(line, ""), "")
-                if (residue.isEmpty()) {
+                // 答案区里 occasionally 有一个题号被 OCR 成乱码；只要已识别出至少 3 对，
+                // 且残留很短，就不能因为这一个坏字符丢掉整行。
+                if (residue.isEmpty() || (pairs.size >= 3 && residue.length <= 6)) {
                     pairs.forEach { p ->
                         val no = p.groupValues[1].toIntOrNull()
                         if (no != null) add(no, p.groupValues[2])

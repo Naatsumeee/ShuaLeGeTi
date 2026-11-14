@@ -79,11 +79,21 @@ class MlKitOcrEngine : OcrProvider {
         ): String {
             if (blocks.isEmpty()) return ""
 
-            // 丢弃页眉页脚：扫描试卷的页眉（书名/章节名）与页码如果混进来，
-            // 会被当成题干或上一题的续行，污染题库。
+            // 页眉里的「第X章」是整章唯一的章号来源；书名和页码仍然丢弃。
+            val chapterHeaders = if (layout.noiseBoxes.isEmpty()) emptyList()
+            else blocks.filter { b ->
+                b.box != null &&
+                    LayoutAnalyzer.isNoise(b.box!!, layout) &&
+                    LayoutAnalyzer.isChapterHeader(b.text)
+            }.sortedWith(compareBy({ it.box!!.top }, { it.box!!.left }))
+                .map { it.text.trim() }
+                .distinct()
+            val headerSet = chapterHeaders.toHashSet()
             val kept = if (layout.noiseBoxes.isEmpty()) blocks
-            else blocks.filter { b -> b.box == null || !LayoutAnalyzer.isNoise(b.box!!, layout) }
-            if (kept.isEmpty()) return ""
+            else blocks.filter { b ->
+                b.box == null || (!LayoutAnalyzer.isNoise(b.box!!, layout) && b.text.trim() !in headerSet)
+            }
+            if (kept.isEmpty()) return chapterHeaders.joinToString("\n")
 
             if (pageWidth <= 0) return kept.joinToString("\n") { it.text }
 
@@ -94,7 +104,7 @@ class MlKitOcrEngine : OcrProvider {
             // 结果整页选项被劈成两半、后半页的选项全被甩到文末——v1.0.9 的乱码事故。
             // 单栏时 orderedByLayout 的 byCol 只有一个桶，等价于「全部按行排序」，正是要的结果。
             if (layout.analyzed) {
-                return orderedByLayout(kept, layout)
+                return prependChapterHeaders(chapterHeaders, orderedByLayout(kept, layout))
             }
 
             // 没有版面模型时（ML Kit 引擎）不能退回「块在页宽哪一侧」的老启发式——
@@ -103,10 +113,16 @@ class MlKitOcrEngine : OcrProvider {
             // 这里直接用它算栏缝；找不到缝就按行排，正好是单栏该有的结果。
             val gutter = LayoutAnalyzer.detectGutters(kept.mapNotNull { it.box }, pageWidth)
             if (gutter.isNotEmpty()) {
-                return orderedByLayout(kept, layout.copy(columnCuts = gutter))
+                return prependChapterHeaders(chapterHeaders, orderedByLayout(kept, layout.copy(columnCuts = gutter)))
             }
-            return sortByLines(kept).joinToString("\n") { it.text }
+            return prependChapterHeaders(
+                chapterHeaders,
+                sortByLines(kept).joinToString("\n") { it.text }
+            )
         }
+
+        private fun prependChapterHeaders(headers: List<String>, body: String): String =
+            (headers + body.takeIf { it.isNotBlank() }).filterNotNull().joinToString("\n")
 
         /**
          * 按版面分析结果排列：先跨栏块，再从左到右逐栏输出，栏内按行。
