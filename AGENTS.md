@@ -1,6 +1,6 @@
 ﻿# AGENTS.md — 刷了个题 (ShuaGeLeTi) 项目记忆
 
-> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-14（**v1.1.0 已发布**；`main` 已有未发版导入/题库组/PDF/动效批次，当前测试批次 `294db34`，等待用户测试）。
+> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-14（**v1.1.0 已发布**；`main` 已有未发版导入/题库组/PDF/动效批次，当前代码提交 `fe5331b`，等待用户测试）。
 >
 > **文档分工**（别把三份混在一起）：
 > - `AGENTS.md`（本文件，**入库**）—— 项目的长期公共记忆：架构、决策、踩过的坑、待办。所有 Agent 都该读。
@@ -225,7 +225,7 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 
 ## 未发版待测批次（2026-11-14，DB v15）
 
-> 当前批次提交 `294db34`，**没有发新 Release**。v1.1.0 线上 Release 已补 `versionCode: 15`；用户要求先测试源码/APK，确认无误后再发版。
+> 当前代码提交 `fe5331b`，**没有发新 Release**。v1.1.0 线上 Release 已补 `versionCode: 15`；用户要求先测试源码/APK，确认无误后再发版。
 
 - **文档导入**：新增纯 JVM `DocxTextExtractor` + `SimpleWordXmlParser`，不再依赖 Android `ContentResolver` 才能读 docx；支持命名空间前缀、表格段落、`tab/br`、XML 实体和解压路径大小写。真实 `docx-sample.docx` 有回归测试。
 - **md/txt 分流**：文件选择器改为 `*/*`，由 `IngestFormatResolver` 按扩展名 → MIME → 文件头/文本启发式判定；无扩展名、通用 MIME、GBK/UTF-16/UTF-8 BOM 都能进正确解析链，不再误送图片 OCR。
