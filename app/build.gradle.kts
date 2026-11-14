@@ -26,7 +26,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = generatedVersionCode
-        versionName = "1.1.0"
+        versionName = "1.2.0"
     }
 
     // 正式签名：从仓库根目录的 keystore.properties 读取（该文件与 release.jks 都在 .gitignore 里）。

@@ -4,7 +4,7 @@
 >
 > 先看 **[快速上手.md](快速上手.md)** —— 从申请 DeepSeek API Key、导入题库，到刷题、错题重刷、换机迁移，一份文档走完全流程，含截图级的界面路径说明与常见问题。
 >
-> 只想下载安装：直接去 [Releases](https://github.com/Naatsumeee/ShuaLeGeTi/releases) 拿 `Shualegeti-arm64-v8a-1.1.0.apk`。
+> 只想下载安装：直接去 [Releases](https://github.com/Naatsumeee/ShuaLeGeTi/releases) 拿 `Shualegeti-arm64-v8a-1.2.0.apk`。
 
 [![Release](https://img.shields.io/github/v/release/Naatsumeee/ShuaLeGeTi)](https://github.com/Naatsumeee/ShuaLeGeTi/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen.svg)](LICENSE)
@@ -65,8 +65,9 @@
 
 ### 数据与隐私
 - 题库 / 进度 / 错题 / 收藏全部存本地 Room 数据库；OCR 全程离线；API Key 仅存本机
+- 学习数据可导出为 `.shua` 标准 ZIP：整合题库、题库组、合并关系与学习记录，`manifest.json` 带应用/数据库版本、时间戳和题库 SHA256
 - 标准题库 JSON 导出（可勾选是否包含 AI 生成内容、附章节分类汇总、缩进美化），导出→导入完整往返不丢字段
-- 数据库平滑迁移（**v1 → v12**），升级不丢数据；章节名的历史脏数据在升级时**就地清洗**，不用重导题库
+- 数据库平滑迁移（**v1 → v15**），升级不丢数据；章节名的历史脏数据在升级时**就地清洗**，不用重导题库
 
 ## 📥 下载安装
 
@@ -76,7 +77,7 @@
 |---|---|---|
 | `Shualegeti-arm64-v8a-<版本>.apk` | arm64-v8a | 绝大多数主流手机（**当前只发这一种**） |
 
-- 命名规则：`Shualegeti-<架构>-<版本号>.apk`，例如 `Shualegeti-arm64-v8a-1.1.0.apk`
+- 命名规则：`Shualegeti-<架构>-<版本号>.apk`，例如 `Shualegeti-arm64-v8a-1.2.0.apk`
 - 系统：Android 8.0（API 26）及以上；原生库全部按 **16KB 页对齐**构建，兼容新设备
 - AI 功能需在「设置」配置任意 OpenAI 兼容模型；不配置也可正常离线刷题
 - 从 **v1.1.0 起使用正式签名**。此前所有版本都是调试签名，两者证书不同，

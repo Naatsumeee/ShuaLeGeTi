@@ -20,9 +20,34 @@ data class NoteItem(val kind: Kind, val text: String) {
 
 val RELEASE_NOTES: List<ReleaseNote> = listOf(
     ReleaseNote(
+        version = "1.2.0",
+        date = "2026-11-14",
+        current = true,
+        items = listOf(
+            NoteItem(NoteItem.Kind.NEW, "新增题库组、题库合并与撤销合并，支持自定义名称、备注和装饰色"),
+            NoteItem(NoteItem.Kind.NEW, "新增错题 PDF 导出，支持题库/章节、题后或文末解析、深度/极简/仅答案及无答案模式"),
+            NoteItem(NoteItem.Kind.NEW, "学习数据新增 .shua 标准导出格式，整合题库、题库组、合并关系和学习记录"),
+            NoteItem(NoteItem.Kind.NEW, "导出数据中 manifest.json 新增应用版本、versionCode、数据库版本、导出时间和题库 SHA256"),
+            NoteItem(NoteItem.Kind.NEW, "新增 AI 用量统一统计，以及基于 GitHub Release 的检查更新功能"),
+            NoteItem(NoteItem.Kind.NEW, "新增首页题库编辑模式和拖拽排序，题库管理更简便"),
+            NoteItem(NoteItem.Kind.IMPROVE, "优化首页编辑模式、拖拽排序、批量操作栏、问 AI 抽屉、Tab 切换和主要按钮的弹簧动效"),
+            NoteItem(NoteItem.Kind.IMPROVE, "优化极简解析长度限制，取消固定字符截断，保证输出句子完整"),
+            NoteItem(NoteItem.Kind.IMPROVE, "优化 docx、Markdown、纯文本和长文档导入，增加安全拆分、重叠识别及超时降载"),
+            NoteItem(NoteItem.Kind.IMPROVE, "优化扫描件章节识别：保留页眉章号，过滤概念小标题，自动补齐、归并和统一章节名称"),
+            NoteItem(NoteItem.Kind.IMPROVE, "优化章末答案回收，支持多个答案区、题号乱码和整章低覆盖检查；真实扫描 PDF 答案回归覆盖显著增高"),
+            NoteItem(NoteItem.Kind.IMPROVE, ".shua 导出保留题库组指针、合并状态、深度解析和极简解析状态，避免同名题库错误归属"),
+            NoteItem(NoteItem.Kind.IMPROVE, "震动强度、字体大小、问 AI 开关和编辑模式反馈改为更及时、更跟手的交互"),
+            NoteItem(NoteItem.Kind.FIX, "修复维护任务切后台后进度卡住、取消异常被吞掉、无法真正停止的问题"),
+            NoteItem(NoteItem.Kind.FIX, "修复问 AI 关闭时按钮颜色和震动反馈延迟恢复的问题"),
+            NoteItem(NoteItem.Kind.FIX, "修复编辑模式菜单与拖拽横条上下抖动、遮罩区分不明显的问题"),
+            NoteItem(NoteItem.Kind.FIX, "修复题库合并后错题、收藏、斩题及作答记录归属错误的问题"),
+            NoteItem(NoteItem.Kind.FIX, "修复旧版纯学习记录 JSON 被误当题库导入，以及导出缺少版本和完整性校验的问题"),
+        )
+    ),
+    ReleaseNote(
         version = "1.1.0",
         date = "2026-11-11",
-        current = true,
+        current = false,
         items = listOf(
             NoteItem(NoteItem.Kind.FIX, "修复首页上下滑动题库列表时会误进入题库：现在划动只滚动列表，轻点才进入"),
             NoteItem(NoteItem.Kind.NEW, "判断题成了独立题型：原文没写「A 正确 / B 错误」也会自动补齐两项，答案写成「对/错/√/×/T/F」都能识别，不会再出现「没有可点的选项、答不了」"),

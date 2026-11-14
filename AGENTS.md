@@ -1,6 +1,6 @@
 ﻿# AGENTS.md — 刷了个题 (ShuaGeLeTi) 项目记忆
 
-> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-14（**v1.1.0 已发布**；`main` 已有未发版导入/题库组/PDF/解析维护批次，等待用户测试）。
+> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-14（**v1.2.0 发布批次**：导入/题库组/PDF/解析维护/动效与数据管理升级）。
 >
 > **文档分工**（别把三份混在一起）：
 > - `AGENTS.md`（本文件，**入库**）—— 项目的长期公共记忆：架构、决策、踩过的坑、待办。所有 Agent 都该读。
@@ -214,6 +214,7 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 → **v1.0.11**（章节与答案识别：`chapterHeadingRegex` 保住「第X章」+ `pendingChapterPrefix` 拼接拆行章名 + `fillMissingChapterNumbers` 补齐序号；`sectionRegex` 命中题型标签时只在无章标题文件里当分组；答案表新增「每行一对」与「一行多对」两种裸格式并按章分表；成本修复 providerModel 未回写。首页标题栏加「导入」「问 AI」、空态居中大按钮、长按菜单（置顶/改名/归档/删除）+ 归档折叠区；AI 解析流式预览；默认引擎改 RapidOCR；DB v8 加 `import_jobs.streamTail` / `banks.pinned` / `banks.archived`）。
 → **v1.0.12**（答案区重做：新增 `data/parse/AnswerSheet.kt` 把「三、参考答案」整块从题目流里剥离并按章回填，支持整行一对/拆两行/一行多对/整段正文四种排版；`ParsedQuestion.sourceNumber` 记住题号；`parseChineseNumber` 认单字「十」；同章重复标题不再拼成「第十章 第十章」；「学习目标」小节跳过；名词解释按内容匹配、B1 型题取 `sharedOptions`、选项丢失时按题号兜底但排除问句。真实 47 页扫描件答案覆盖率 0% → 95%）。
 → **v1.1.0**（判断题独立题型 + 选项自动补齐、单题详情页、错题本重点分组与每题菜单、思考强度四档、近 7/30 天用量情况；章节名保住本体并归一、AI 答案回填按题号精确绑定（覆盖率 33%→83%）、PDF 导入提速（整本一次解析 + 渲染器复用 + OCR 逐页落盘）、解析默认关思考（否则输出预算被烧光）、提示词压缩 28%；**改用正式签名**、Release APK 统一命名 `Shualegeti-<abi>-<version>.apk`、DB v12）。
+→ **v1.2.0**（题库组/合并与撤销、大型扫描件章节/答案恢复、错题 PDF 与后台解析维护、`.shua` 完整数据导出、AI 用量账本、自动 versionCode、检查更新，以及编辑模式/问 AI/Tab/按钮动效优化；DB v15）。
 
 ## 首页题库列表（`ui/bank/BankListScreen.kt` + `BankViewModels.kt`，v1.0.11）
 
@@ -223,9 +224,9 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - **归档**：`banks.archived = true` 的题库不进主列表，只在最下方一行小字「显示已归档题库（N）」/「收起已归档题库」居中显示，点开才渲染。`BankDao.observeAll()` 排序是 `ORDER BY pinned DESC, sortOrder ASC, updatedAt DESC`；整卡长按拖拽会批量写入 `sortOrder`。
 - 改名的 `RenameBankDialog` 用 `OutlinedTextField` + 空值禁用「保存」；`BankListViewModel.renameBank` 会 `trim` 后空则忽略。
 
-## 未发版待测批次（2026-11-14，DB v15）
+## v1.2.0 发布批次（2026-11-14，DB v15）
 
-> 当前批次**没有发新 Release**。v1.1.0 线上 Release 已补 `versionCode: 15`；用户要求先测试源码/APK，确认无误后再发版。
+> 本批作为 v1.2.0 发布；线上 Release 说明首行写构建时的实际 `versionCode:N`。
 
 - **文档导入**：新增纯 JVM `DocxTextExtractor` + `SimpleWordXmlParser`，不再依赖 Android `ContentResolver` 才能读 docx；支持命名空间前缀、表格段落、`tab/br`、XML 实体和解压路径大小写。真实 `docx-sample.docx` 有回归测试。
 - **md/txt 分流**：文件选择器改为 `*/*`，由 `IngestFormatResolver` 按扩展名 → MIME → 文件头/文本启发式判定；无扩展名、通用 MIME、GBK/UTF-16/UTF-8 BOM 都能进正确解析链，不再误送图片 OCR。
