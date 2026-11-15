@@ -1065,27 +1065,47 @@ private fun AboutCard(
     }
 
     updateInfo?.let { info ->
-        AlertDialog(
-            onDismissRequest = onDismissUpdate,
-            title = { Text("检查到新版本") },
-            text = {
-                Text(
-                    "检查到新版本 v${info.version}" +
-                        info.versionCode?.let { "（versionCode $it）" }.orEmpty() +
-                        "，是否下载更新？\n\n更新日志：\n" +
-                        info.notes.ifBlank { "暂无更新说明" }
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    onOpen(info.downloadUrl.ifBlank { info.releaseUrl })
-                    onDismissUpdate()
-                }) { Text("下载更新") }
-            },
-            dismissButton = { TextButton(onClick = onDismissUpdate) { Text("稍后") } }
+        UpdateAvailableDialog(
+            info = info,
+            onDismiss = onDismissUpdate,
+            onUpdate = {
+                onOpen(info.downloadUrl.ifBlank { info.releaseUrl })
+                onDismissUpdate()
+            }
         )
     }
 }
+
+@Composable
+fun UpdateAvailableDialog(
+    info: com.examhelper.shua.data.update.UpdateInfo,
+    onDismiss: () -> Unit,
+    onUpdate: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("检查到新版本") },
+        text = {
+            Text(
+                "发现新版本 v${info.version}" +
+                    info.versionCode?.let { "（versionCode $it）" }.orEmpty() +
+                    "，是否前往更新？\n\n更新内容：\n" +
+                    briefUpdateNotes(info.notes)
+            )
+        },
+        confirmButton = { TextButton(onClick = onUpdate) { Text("前往更新") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("暂不更新") } }
+    )
+}
+
+private fun briefUpdateNotes(notes: String): String =
+    notes.lineSequence()
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+        .take(6)
+        .joinToString("\n")
+        .take(600)
+        .ifBlank { "暂无更新说明" }
 
 /** 更新日志弹窗：按版本倒序，重点条目用彩色小标签区分新增 / 优化 / 修复 */
 @Composable

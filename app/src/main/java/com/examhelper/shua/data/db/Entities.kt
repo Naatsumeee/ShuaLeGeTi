@@ -19,8 +19,10 @@ object QuestionSubtype {
     const val A1 = "A1"  // 单句型单选
     const val A2 = "A2"  // 病例摘要型单选
     const val A3 = "A3"  // 病例组型（共用题干）
-    const val B = "B"    // 配伍题（共用选项）
-    val ALL = listOf(A1, A2, A3, B)
+    const val B1 = "B1"  // 标准配伍题（共用选项，每题单选）
+    const val B2 = "B2"  // B2 配伍题（按题干要求单选或多选）
+    const val B = "B"    // 旧版未细分的配伍题
+    val ALL = listOf(A1, A2, A3, B1, B2, B)
 }
 
 /** 学习模式 */
@@ -223,6 +225,8 @@ data class ImportJob(
     @PrimaryKey val id: String,
     val bankName: String,
     val sourceName: String,
+    /** 非空表示本次导入完成后追加到已有题库，而不是新建题库。 */
+    val targetBankId: Long? = null,
     /** INGEST / PARSE / DONE / FAILED / CANCELED */
     val stage: String = "INGEST",
     val totalUnits: Int = 0,

@@ -8,8 +8,16 @@ import com.examhelper.shua.data.llm.Prompts
 import com.examhelper.shua.data.parse.LlmQuestionParser
 import com.examhelper.shua.data.model.DissentEntry
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.Json
 import kotlin.math.roundToInt
 
@@ -88,7 +96,8 @@ class AnswerGenerator(
     @Serializable
     data class AnswerDto(
         val i: Int = 0,
-        val answer: String? = null,
+        /** 兼容模型把多空/多选答案输出为数组；不能因一题类型不符拖垮整批。 */
+        val answer: JsonElement? = null,
         val analysis: String? = null,
         val confidence: Int? = null
     )
@@ -130,7 +139,7 @@ class AnswerGenerator(
                 val d = byIndex[idx + 1] ?: return@map null
                 SingleVerdict(
                     providerName = provider.name,
-                    answer = d.answer?.trim()?.takeIf { it.isNotBlank() },
+                    answer = answerText(d.answer, questions[idx]),
                     analysis = d.analysis?.trim()?.takeIf { it.isNotBlank() },
                     selfConfidence = d.confidence?.coerceIn(0, 100)
                 )
@@ -147,52 +156,56 @@ class AnswerGenerator(
         primary: LlmProvider,
         others: List<LlmProvider>
     ): Pair<List<AggregatedVerdict>, com.examhelper.shua.data.llm.ChatUsage> {
-        val primaryOutcome = askBatch(primary, questions)
-        val primaryVerdicts = primaryOutcome.verdicts
-        val totalUsage = UsageAcc.of(primaryOutcome.usage)
-        if (others.isEmpty()) {
-            return questions.indices.map { i ->
-                AggregatedVerdict(
-                    answer = primaryVerdicts[i]?.answer,
-                    analysis = primaryVerdicts[i]?.analysis,
-                    confidence = primaryVerdicts[i]?.selfConfidence,
-                    agreement = null,
-                    dissents = emptyList()
-                )
-            } to totalUsage.toUsage()
-        }
-        val otherOutcomes: List<BatchOutcome> = kotlinx.coroutines.coroutineScope {
-            others.map { p ->
-                async { askBatch(p, questions) }
-            }.map { it.await() }
-        }
-        otherOutcomes.forEach { o ->
-            totalUsage.add(o.usage)
-        }
-        val aggregated = questions.indices.map { i ->
-            val pv = primaryVerdicts[i]
-            val ovs = otherOutcomes.mapNotNull { it.verdicts.getOrNull(i) }
-            val agreeCount = ovs.count { answersMatch(pv?.answer, it.answer) }
-            val totalParts = ovs.size + 1
-            val agreeRatio = if (ovs.isEmpty()) 1.0 else agreeCount.toDouble() / ovs.size
-            val confidence = (
-                (pv?.selfConfidence ?: 75) * 0.6 + agreeRatio * 100.0 * 0.4
-                ).roundToInt().coerceIn(0, 100)
-            AggregatedVerdict(
-                answer = pv?.answer,
-                analysis = pv?.analysis,
-                confidence = confidence,
-                agreement = "${agreeCount + 1}/$totalParts 部一致",
-                dissents = ovs.filter { !answersMatch(pv?.answer, it.answer) }.map {
-                    DissentEntry(it.providerName, it.answer ?: "未给出", it.analysis, it.selfConfidence)
+        return coroutineScope {
+            val primaryDeferred = async {
+                withTimeout(PRIMARY_TIMEOUT_MS) { askBatch(primary, questions) }
+            }
+            val otherDeferred = others.map { provider ->
+                async {
+                    withTimeoutOrNull(SECONDARY_TIMEOUT_MS) {
+                        try {
+                            askBatch(provider, questions)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
                 }
-            )
+            }
+            val primaryOutcome = primaryDeferred.await()
+            val primaryVerdicts = primaryOutcome.verdicts
+            val totalUsage = UsageAcc.of(primaryOutcome.usage)
+            val otherOutcomes = otherDeferred.awaitAll().filterNotNull()
+            otherOutcomes.forEach { totalUsage.add(it.usage) }
+
+            val aggregated = questions.indices.map { i ->
+                val pv = primaryVerdicts[i]
+                val ovs = otherOutcomes.mapNotNull { it.verdicts.getOrNull(i) }
+                val agreeCount = ovs.count { answersMatch(pv?.answer, it.answer) }
+                val totalParts = ovs.size + 1
+                val agreeRatio = if (ovs.isEmpty()) 1.0 else agreeCount.toDouble() / ovs.size
+                val confidence = (
+                    (pv?.selfConfidence ?: 75) * 0.6 + agreeRatio * 100.0 * 0.4
+                    ).roundToInt().coerceIn(0, 100)
+                AggregatedVerdict(
+                    answer = pv?.answer,
+                    analysis = pv?.analysis,
+                    confidence = confidence,
+                    agreement = if (others.isEmpty()) null else "${agreeCount + 1}/$totalParts 部一致",
+                    dissents = ovs.filter { !answersMatch(pv?.answer, it.answer) }.map {
+                        DissentEntry(it.providerName, it.answer ?: "未给出", it.analysis, it.selfConfidence)
+                    }
+                )
+            }
+            aggregated to totalUsage.toUsage()
         }
-        return aggregated to totalUsage.toUsage()
     }
 
     companion object {
         const val BATCH_SIZE = 12
+        const val PRIMARY_TIMEOUT_MS = 150_000L
+        const val SECONDARY_TIMEOUT_MS = 90_000L
 
         /** 紧凑序列化：同章只报一次、共用题干/选项组内去重，压缩输入 token */
         fun buildBatchPrompt(questions: List<Question>): String = buildString {
@@ -216,7 +229,12 @@ class AnswerGenerator(
                     }
                     lastSharedKey = sharedKey
                 }
-                append("${idx + 1}.(${typeCn(q.type)})${q.stem}")
+                val subtypeLabel = q.subtype?.takeIf { it.isNotBlank() }?.let { "${it}型题" }
+                append(
+                    "${idx + 1}.(${typeCn(q.type)}" +
+                        (subtypeLabel?.let { "·$it" } ?: "") +
+                        ")${q.stem}"
+                )
                 val opts = com.examhelper.shua.data.model.JsonCodec.decodeOptions(q.optionsJson)
                 if (opts.isNotEmpty()) {
                     append(" " + opts.joinToString(" ") { "${it.key}.${it.text}" })
@@ -232,6 +250,35 @@ class AnswerGenerator(
             QuestionType.FILL -> "填空题"
             QuestionType.SHORT_ANSWER -> "简答题"
             QuestionType.TERM -> "名词解释题"
+        }
+
+        /** 模型可能把多空填空答案输出成数组；统一转成竖线分隔文本。 */
+        fun answerText(value: JsonElement?, question: Question? = null): String? = when (value) {
+            null -> null
+            is JsonPrimitive -> value.content.trim().takeIf { it.isNotBlank() }
+            is JsonArray -> value.mapNotNull { item ->
+                when (item) {
+                    is JsonPrimitive -> item.content.trim().takeIf { it.isNotBlank() }
+                    is JsonObject -> item["answer"]?.let { answerText(it, question) }
+                    else -> null
+                }
+            }.let { parts ->
+                val objective = question?.type == QuestionType.SINGLE ||
+                    question?.type == QuestionType.MULTIPLE ||
+                    question?.type == QuestionType.JUDGE
+                if (objective) {
+                    parts.joinToString("")
+                        .filter { it.uppercaseChar() in 'A'..'Z' }
+                        .uppercase()
+                        .toSet()
+                        .sorted()
+                        .joinToString("")
+                        .takeIf { it.isNotBlank() }
+                } else {
+                    parts.joinToString("|").takeIf { it.isNotBlank() }
+                }
+            }
+            is JsonObject -> answerText(value["answer"], question)
         }
 
         fun answersMatch(a: String?, b: String?): Boolean {

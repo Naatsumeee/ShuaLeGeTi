@@ -467,11 +467,20 @@ class StudyRepository(
                 if (expected != null && actual != null) return expected == actual
             }
 
-            val options = JsonCodec.decodeOptions(question.optionsJson)
+            val options = com.examhelper.shua.data.model.QuestionChoices.forQuestion(question)
 
             val expected = resolveToLetters(expectedRaw, options) ?: expectedRaw.uppercase()
             val actual = resolveToLetters(userAnswer.trim(), options) ?: userAnswer.trim().uppercase()
             if (expected == actual) return true
+            if (
+                question.type == com.examhelper.shua.data.db.QuestionType.SINGLE ||
+                question.type == com.examhelper.shua.data.db.QuestionType.MULTIPLE ||
+                question.type == com.examhelper.shua.data.db.QuestionType.JUDGE
+            ) {
+                val expectedSet = expected.filter { it in 'A'..'Z' }.toSet()
+                val actualSet = actual.filter { it in 'A'..'Z' }.toSet()
+                if (expectedSet.isNotEmpty() && expectedSet == actualSet) return true
+            }
 
             val isLetterAnswer = expected.length in 1..5 && expected.all { it in 'A'..'E' }
             val isLetterActual = actual.length in 1..5 && actual.all { it in 'A'..'E' }
@@ -489,8 +498,15 @@ class StudyRepository(
         /** "B"、"b"、"B. 内容"、"内容恰好等于某选项" → 选项字母；解析不了返回 null */
         private fun resolveToLetters(raw: String, options: List<com.examhelper.shua.data.model.QuestionOption>): String? {
             val trimmed = raw.trim()
-            if (trimmed.length in 1..5 && trimmed.all { it.uppercaseChar() in 'A'..'E' }) {
-                return trimmed.uppercase()
+            // "A,C" / "A、C" / "A C" 这类多选答案也很常见。
+            if (
+                trimmed.any { it.uppercaseChar() in 'A'..'E' } &&
+                trimmed.none { it.isLetter() && it.uppercaseChar() !in 'A'..'E' }
+            ) {
+                val letters = trimmed.mapNotNull {
+                    it.uppercaseChar().takeIf { c -> c in 'A'..'E' }
+                }.distinct().sorted().joinToString("")
+                if (letters.length in 1..5) return letters
             }
             val m = Regex("""^\(?([A-Ea-e]{1,5})\)?\s*[、.．,，:：)\s]?(.*)$""").find(trimmed)
             if (m != null && m.groupValues[1].length in 1..5) {

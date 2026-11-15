@@ -112,6 +112,7 @@ fun BankListScreen(
     onOpenBank: (Long) -> Unit,
     onImportText: () -> Unit,
     onImportFile: (String?) -> Unit,
+    onContinueAdd: (Long) -> Unit,
     onSearch: () -> Unit,
     contentPadding: PaddingValues = PaddingValues(0.dp)
 ) {
@@ -413,6 +414,7 @@ fun BankListScreen(
                                     }
                                 },
                                 onRename = { renaming = bank },
+                                onContinueAdd = { onContinueAdd(bank.id) },
                                 onPin = { vm.setPinned(bank.id, !bank.pinned) },
                                 onArchive = { vm.setArchived(bank.id, true) },
                                 onDelete = { deleting = bank },
@@ -520,6 +522,7 @@ fun BankListScreen(
                                     bank = bank,
                                     onClick = { onOpenBank(bank.id) },
                                     onRename = { renaming = bank },
+                                    onContinueAdd = { onContinueAdd(bank.id) },
                                     onPin = { vm.setPinned(bank.id, !bank.pinned) },
                                     onArchive = { vm.setArchived(bank.id, false) },
                                     onDelete = { deleting = bank }
@@ -726,6 +729,7 @@ private fun BankCard(
     bank: QuestionBank,
     onClick: () -> Unit,
     onRename: () -> Unit,
+    onContinueAdd: () -> Unit,
     onPin: () -> Unit,
     onArchive: () -> Unit,
     onDelete: () -> Unit,
@@ -854,6 +858,13 @@ private fun BankCard(
                         leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
                         onClick = { menuOpen = false; onRename() }
                     )
+                            if (!bank.isGroup) {
+                        DropdownMenuItem(
+                            text = { Text("继续添加题目") },
+                            leadingIcon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                            onClick = { menuOpen = false; onContinueAdd() }
+                        )
+                    }
                             if (bank.mergedFromJson != null) {
                         DropdownMenuItem(
                             text = { Text("撤销合并") },

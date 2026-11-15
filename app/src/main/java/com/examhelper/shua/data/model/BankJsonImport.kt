@@ -148,10 +148,22 @@ object BankJsonImport {
     private fun parseAnswer(el: JsonElement?): String? = when (el) {
         null -> null
         is JsonPrimitive -> el.content.trim().takeIf { it.isNotEmpty() }
-        is JsonArray -> el.mapNotNull { it.asTextOrNull()?.trim() }
-            .filter { it.isNotEmpty() }
-            .joinToString("")
-            .takeIf { it.isNotEmpty() }
+        is JsonArray -> {
+            val parts = el.mapNotNull { it.asTextOrNull()?.trim() }.filter { it.isNotEmpty() }
+            if (parts.size > 1) {
+                val letters = parts.map { part ->
+                    Regex("""^\(?([A-Ea-e])\)?(?:[.、．)）:：\s]|$)""")
+                        .find(part)?.groupValues?.get(1)?.uppercase()
+                }
+                if (letters.all { it != null }) {
+                    letters.filterNotNull().distinct().joinToString("").takeIf { it.isNotEmpty() }
+                } else {
+                    parts.joinToString("|").takeIf { it.isNotEmpty() }
+                }
+            } else {
+                parts.firstOrNull()
+            }
+        }
         is JsonObject -> el["answer"].asTextOrNull()?.trim()?.takeIf { it.isNotEmpty() }
         else -> null
     }
@@ -169,25 +181,32 @@ object BankJsonImport {
         val options = parseOptions(
             obj["options"] ?: obj["option"] ?: obj["choices"] ?: obj["选项"]
         )
+        val sharedOptions = parseOptions(obj["sharedOptions"] ?: obj["共用选项"])
         val answer = parseAnswer(
             obj["answer"] ?: obj["answers"] ?: obj["correct"] ?: obj["key"] ?: obj["答案"]
         )
         val typeRaw = obj["type"].asTextOrNull()
             ?: obj["questionType"].asTextOrNull()
             ?: obj["题型"].asTextOrNull()
+        val subtypeRaw = obj["subtype"].asTextOrNull()
+            ?: obj["subType"].asTextOrNull()
+            ?: typeRaw
+        val subtype = Regex("""(?i)(A[123]|B[12]|B)""")
+            .find(subtypeRaw.orEmpty())
+            ?.groupValues?.get(1)?.uppercase()
 
         return ShuaQuestionJson(
             chapter = obj["chapter"].asTextOrNull()
                 ?: obj["section"].asTextOrNull()
                 ?: obj["章节"].asTextOrNull(),
-            type = normalizeType(typeRaw, options, answer),
-            subtype = obj["subtype"].asTextOrNull() ?: obj["subType"].asTextOrNull(),
+            type = normalizeType(typeRaw, options.ifEmpty { sharedOptions }, answer),
+            subtype = subtype,
             stem = stem.trim(),
             sharedStem = obj["sharedStem"].asTextOrNull()
                 ?: obj["shared_stem"].asTextOrNull()
                 ?: obj["material"].asTextOrNull()
                 ?: obj["共用题干"].asTextOrNull(),
-            sharedOptions = parseOptions(obj["sharedOptions"] ?: obj["共用选项"]),
+            sharedOptions = sharedOptions,
             options = options,
             answer = answer,
             analysis = obj["analysis"].asTextOrNull()

@@ -435,6 +435,7 @@ object TextQuestionParser {
         var current: ParsedQuestion? = null
         var currentSection: String? = null
         var currentSectionType: QuestionType? = null
+        var currentSectionSubtype: String? = null
         // Markdown 标题层级栈：level → 标题。做题时的「章节」取当前标题链，
         // 这样 `# 第一章` 下的 `## 单选` 里的题会记成「第一章 · 单选」，
         // 既不会丢掉上层信息，也不会把整份文档的题都塞进同一个叫「单选」的章里。
@@ -500,6 +501,7 @@ object TextQuestionParser {
                 // 也不能把「## 单项选择题」当成章节名落库。
                 currentSection = chain.lastOrNull { !HeadingClassifier.isPureTypeHeading(it) }
                     ?.let { HeadingClassifier.cleanChapter(it) }
+                currentSectionSubtype = subtypeFromHeading(chain.lastOrNull().orEmpty())
                 appendingTo = 0
                 continue
             }
@@ -511,6 +513,7 @@ object TextQuestionParser {
                 flush()
                 headingStack.clear()
                 currentSectionType = null
+                currentSectionSubtype = null
                 skipObjectiveSection = false
                 val no = chm.groupValues[1]
                 val unit = chm.groupValues[2]
@@ -596,6 +599,7 @@ object TextQuestionParser {
                     label.contains("单选") -> QuestionType.SINGLE
                     else -> null
                 }
+                currentSectionSubtype = subtypeFromHeading(line)
                 val typeHeading = HeadingClassifier.isPureTypeHeading(label) ||
                     HeadingClassifier.isPureTypeHeading(line)
                 if (!typeHeading && (currentSection.isNullOrBlank() || !hasChapterHeading)) {
@@ -645,7 +649,11 @@ object TextQuestionParser {
                     no == null -> true
                     else -> no in sharedNoFrom!!..sharedNoTo!!
                 }
-                current = ParsedQuestion(chapter = currentSection, type = currentSectionType ?: QuestionType.SINGLE).apply {
+                current = ParsedQuestion(
+                    chapter = currentSection,
+                    type = currentSectionType ?: QuestionType.SINGLE,
+                    subtype = currentSectionSubtype
+                ).apply {
                     sectionType = currentSectionType
                     stem = qm.groupValues[2].trim()
                     // 记下原题号：stem 里的题号已被剥掉，但章末答案表按题号索引
@@ -882,12 +890,21 @@ object TextQuestionParser {
         }
 
         // 医学题型子类型
-        q.subtype = when {
+        q.subtype = q.subtype?.takeIf { it.isNotBlank() } ?: when {
             q.sharedStem != null -> "A3"
             q.sharedOptions.isNotEmpty() -> "B"
             q.type == QuestionType.SINGLE -> if (caseStartRegex.containsMatchIn(q.stem.take(20))) "A2" else "A1"
             else -> null
         }
+    }
+
+    private fun subtypeFromHeading(text: String): String? = when {
+        Regex("""(?i)\bB1\s*型?题?""").containsMatchIn(text) -> "B1"
+        Regex("""(?i)\bB2\s*型?题?""").containsMatchIn(text) -> "B2"
+        text.contains("A3型") -> "A3"
+        text.contains("A2型") -> "A2"
+        text.contains("A1型") -> "A1"
+        else -> null
     }
 
     /**

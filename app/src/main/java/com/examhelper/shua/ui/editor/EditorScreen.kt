@@ -405,7 +405,10 @@ private fun QuestionEditDialog(
                 }
                 Text("子类型", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
                 FlowRowCompat {
-                    listOf("" to "无", "A1" to "A1", "A2" to "A2", "A3" to "A3", "B" to "B").forEach { (s, label) ->
+                    listOf(
+                        "" to "无", "A1" to "A1", "A2" to "A2", "A3" to "A3",
+                        "B1" to "B1", "B2" to "B2", "B" to "旧B"
+                    ).forEach { (s, label) ->
                         ModeSwitch(label, subtype == s) { subtype = s }
                     }
                 }

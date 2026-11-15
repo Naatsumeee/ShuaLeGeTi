@@ -34,6 +34,8 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
         val job: ImportJob? = null,
         val preview: List<ParsedLine> = emptyList(),
         val bankName: String = "",
+        val targetBankId: Long? = null,
+        val targetBankName: String = "",
         val sourceName: String = "",
         val pendingUri: Uri? = null,
         val error: String? = null,
@@ -96,6 +98,8 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                 job = job,
                 preview = preview,
                 bankName = job.bankName,
+                targetBankId = job.targetBankId,
+                targetBankName = job.targetBankId?.let { bankRepo.getBank(it)?.name }.orEmpty(),
                 sourceName = job.sourceName,
                 providerModel = resolveProviderModel()
             )
@@ -114,8 +118,22 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
             stage = Stage.CHOOSING_PARSE,
             pendingUri = uri,
             sourceName = name,
-            bankName = _state.value.bankName.ifBlank { name.substringBeforeLast('.') }
+            bankName = _state.value.bankName.ifBlank {
+                _state.value.targetBankName.ifBlank { name.substringBeforeLast('.') }
+            }
         )
+    }
+
+    /** 从首页「继续添加题目」进入时，记住追加目标。 */
+    fun prepareTarget(bankId: Long) {
+        viewModelScope.launch {
+            val bank = bankRepo.getBank(bankId) ?: return@launch
+            _state.value = _state.value.copy(
+                targetBankId = bankId,
+                targetBankName = bank.name,
+                bankName = bank.name
+            )
+        }
     }
 
     fun updateBankName(v: String) {
@@ -128,7 +146,14 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun cancelChoosing() {
-        _state.value = UiState(providersReady = _state.value.providersReady, concurrency = _state.value.concurrency)
+        _state.value = UiState(
+            providersReady = _state.value.providersReady,
+            concurrency = _state.value.concurrency,
+            ocrEngine = _state.value.ocrEngine,
+            targetBankId = _state.value.targetBankId,
+            targetBankName = _state.value.targetBankName,
+            bankName = _state.value.targetBankName
+        )
     }
 
     /** 启动后台流水线 */
@@ -141,7 +166,8 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
             jobDao.upsert(
                 ImportJob(
                     id = jobId, bankName = s.bankName.ifBlank { "导入题库" },
-                    sourceName = s.sourceName, stage = "INGEST"
+                    sourceName = s.sourceName, targetBankId = s.targetBankId,
+                    stage = "INGEST"
                 )
             )
             val provider = withContext(Dispatchers.IO) {
@@ -279,7 +305,12 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                     pq.sharedOptions.addAll(sopts)
                     pq
                 }
-                bankRepo.createBank(s.bankName.ifBlank { job.bankName }, job.sourceName.ifBlank { null }, parsed)
+                val targetId = s.targetBankId ?: job.targetBankId
+                if (targetId != null) {
+                    bankRepo.appendQuestions(targetId, parsed)
+                } else {
+                    bankRepo.createBank(s.bankName.ifBlank { job.bankName }, job.sourceName.ifBlank { null }, parsed)
+                }
             }.onSuccess {
                 // 清理任务与中间产物（DB 里记录的旧路径可能是老版本的 cacheDir 根目录文件名，一并删掉）
                 job.rawTextPath?.let { File(it).delete() }
@@ -315,8 +346,14 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }.fold(
                 onSuccess = { file ->
-                    bankRepo.importBankFile(file)
-                    _state.value = _state.value.copy(error = "已导入《${file.name}》${file.questions.size} 题")
+                    val targetId = _state.value.targetBankId
+                    if (targetId != null) {
+                        bankRepo.appendBankFile(targetId, file)
+                        _state.value = _state.value.copy(error = "已追加 ${file.questions.size} 题")
+                    } else {
+                        bankRepo.importBankFile(file)
+                        _state.value = _state.value.copy(error = "已导入《${file.name}》${file.questions.size} 题")
+                    }
                 },
                 onFailure = {
                     _state.value = _state.value.copy(error = "题库文件解析失败：${it.message}")

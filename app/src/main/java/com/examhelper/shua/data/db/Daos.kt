@@ -104,6 +104,9 @@ interface QuestionDao {
     @Query("SELECT COUNT(*) FROM questions WHERE bankId = :bankId")
     suspend fun countByBank(bankId: Long): Int
 
+    @Query("SELECT COALESCE(MAX(orderInBank), -1) + 1 FROM questions WHERE bankId = :bankId")
+    suspend fun nextOrder(bankId: Long): Int
+
     @Query("SELECT bankId, COUNT(*) AS cnt FROM questions GROUP BY bankId")
     fun observeCountsByBank(): Flow<List<QuestionCountRow>>
 

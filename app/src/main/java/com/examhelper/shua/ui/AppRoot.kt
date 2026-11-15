@@ -51,7 +51,7 @@ import com.examhelper.shua.ui.exam.ExamReportScreen
 import com.examhelper.shua.ui.exam.ExamScreen
 import com.examhelper.shua.ui.generate.GenerateScreen
 import com.examhelper.shua.ui.import_.ImportScreen
-import com.examhelper.shua.ui.maintenance.MaintenancePickerScreen
+import com.examhelper.shua.ui.maintenance.MaintenanceSetupScreen
 import com.examhelper.shua.ui.question.SingleQuestionScreen
 import com.examhelper.shua.ui.search.SearchScreen
 import com.examhelper.shua.ui.settings.SettingsScreen
@@ -69,7 +69,7 @@ object Routes {
     const val STATS = "stats"
     const val SETTINGS = "settings"
     const val IMPORT_TEXT = "import_text"
-    const val IMPORT_FILE = "import_file?jobId={jobId}"
+    const val IMPORT_FILE = "import_file?jobId={jobId}&targetBankId={targetBankId}"
     const val GENERATE = "generate/{bankId}"
     const val SEARCH = "search"
     const val BANK_DETAIL = "bank/{bankId}?allGroup={allGroup}"
@@ -88,8 +88,15 @@ object Routes {
     const val MAINTENANCE = "maintenance/{kind}?ids={ids}"
     const val PDF_EXPORT = "pdf_export/{source}"
 
-    fun importFile(jobId: String? = null) = "import_file" + (jobId?.let { "?jobId=$it" } ?: "")
+    fun importFile(jobId: String? = null, targetBankId: Long? = null): String {
+        val query = buildList {
+            jobId?.let { add("jobId=$it") }
+            targetBankId?.let { add("targetBankId=$it") }
+        }
+        return "import_file" + query.takeIf { it.isNotEmpty() }?.joinToString("&", prefix = "?").orEmpty()
+    }
     fun bankDetail(bankId: Long, allGroup: Boolean = false) = "bank/$bankId" + (if (allGroup) "?allGroup=true" else "")
+    fun generate(bankId: Long) = "generate/$bankId"
     fun maintenance(kind: String, ids: List<Long>) = "maintenance/$kind?ids=${ids.joinToString(",")}"
     fun pdfExport(source: com.examhelper.shua.data.model.PdfExportSource) = "pdf_export/${source.name}"
     fun editor(bankId: Long, queueIds: List<Long> = emptyList(), queueIndex: Int = -1) = "editor/$bankId" + (if (queueIds.isEmpty()) "" else "?queueIds=${queueIds.joinToString(",")}&queueIndex=$queueIndex")
@@ -267,6 +274,7 @@ fun AppRoot(fontScale: Float = 1f) {
                             onOpenBank = { navController.navigate(Routes.bankDetail(it)) },
                             onImportText = { navController.navigate(Routes.IMPORT_TEXT) },
                             onImportFile = { jobId -> navController.navigate(Routes.importFile(jobId)) },
+                            onContinueAdd = { bankId -> navController.navigate(Routes.importFile(targetBankId = bankId)) },
                             onSearch = { navController.navigate(Routes.SEARCH) }
                         )
                     }
@@ -291,7 +299,12 @@ fun AppRoot(fontScale: Float = 1f) {
                     }
                     composable(Routes.IMPORT_FILE) { entry ->
                         val jobId = entry.arguments?.getString("jobId")
-                        ImportScreen(jobId = jobId, onDone = { navController.popBackStack() })
+                        val targetBankId = entry.arguments?.getString("targetBankId")?.toLongOrNull()
+                        ImportScreen(
+                            jobId = jobId,
+                            targetBankId = targetBankId,
+                            onDone = { navController.popBackStack() }
+                        )
                     }
                     composable(Routes.GENERATE) { entry ->
                         val bankId = entry.arguments?.getString("bankId")?.toLongOrNull() ?: return@composable
@@ -304,8 +317,14 @@ fun AppRoot(fontScale: Float = 1f) {
                             allGroup = entry.arguments?.getString("allGroup") == "true",
                             onBack = { navController.popBackStack() },
                             onStartStudy = { mode, allGroupMode -> navController.navigate(Routes.studySetup(bankId, mode, allGroupMode)) },
-                            onGenerate = { ids -> navController.navigate(Routes.maintenance("generate", ids)) },
-                            onEdit = { ids -> navController.navigate(Routes.maintenance("edit", ids)) },
+                            onGenerate = { ids ->
+                                if (ids.size == 1) navController.navigate(Routes.generate(ids.first()))
+                                else navController.navigate(Routes.maintenance("generate", ids))
+                            },
+                            onEdit = { ids ->
+                                if (ids.size == 1) navController.navigate(Routes.editor(ids.first()))
+                                else navController.navigate(Routes.maintenance("edit", ids))
+                            },
                             onOpenGroupChild = { childId -> navController.navigate(Routes.bankDetail(childId)) },
                             onOpenGroupAll = { navController.navigate(Routes.bankDetail(bankId, true)) }
                         )
@@ -343,34 +362,20 @@ fun AppRoot(fontScale: Float = 1f) {
                     composable(Routes.MAINTENANCE) { entry ->
                         val kind = entry.arguments?.getString("kind") ?: "generate"
                         val ids = entry.arguments?.getString("ids").orEmpty().split(',').mapNotNull { it.toLongOrNull() }
-                        MaintenancePickerScreen(
+                        MaintenanceSetupScreen(
                             kind = kind,
                             bankIds = ids,
                             onBack = { navController.popBackStack() },
                             onStartOne = { id ->
                                 if (kind == "generate") {
-                                    com.examhelper.shua.data.generate.GenerateWorker.enqueue(
-                                        context = com.examhelper.shua.ShuaApp.instance,
-                                        bankId = id,
-                                        forceAll = false,
-                                        concurrency = 3,
-                                        scope = com.examhelper.shua.data.generate.GenerateScope.MISSING
-                                    )
-                                    navController.navigate("generate/$id")
+                                    navController.navigate(Routes.generate(id))
                                 } else {
                                     navController.navigate(Routes.editor(id))
                                 }
                             },
                             onStartSequence = { sequence ->
-                                if (sequence.isNotEmpty()) {
-                                    if (kind == "generate") {
-                                        com.examhelper.shua.data.generate.GenerateWorker.enqueueSequential(
-                                            com.examhelper.shua.ShuaApp.instance,
-                                            sequence
-                                        )
-                                    } else {
-                                        navController.navigate(Routes.editor(sequence.first(), sequence, 0))
-                                    }
+                                if (sequence.isNotEmpty() && kind != "generate") {
+                                    navController.navigate(Routes.editor(sequence.first(), sequence, 0))
                                 }
                             }
                         )

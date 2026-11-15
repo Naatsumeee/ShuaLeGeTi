@@ -98,6 +98,7 @@ import com.examhelper.shua.data.db.Question
 import com.examhelper.shua.data.db.QuestionType
 import com.examhelper.shua.data.db.StudyMode
 import com.examhelper.shua.data.model.JsonCodec
+import com.examhelper.shua.data.model.QuestionChoices
 import com.examhelper.shua.ui.bank.typeLabel
 import com.examhelper.shua.ui.theme.ChipTone
 import com.examhelper.shua.ui.theme.SquishyButtonSurface
@@ -760,10 +761,8 @@ private fun QuestionBody(
     // 判断题即使库里没存选项，也要强行造出「正确 / 错误」两行 ——
     // 否则整个选项区是空的，用户根本点不了。这里读库时统一兜底，
     // 老题库（修复前导入的）同样受益，不需要重导。
-    val rawOptions = JsonCodec.decodeOptions(q.optionsJson)
-    val options = if (q.type == QuestionType.JUDGE) {
-        com.examhelper.shua.data.model.JudgeOptions.normalize(q.type, rawOptions, q.answer).first
-    } else rawOptions
+    val options = QuestionChoices.forQuestion(q)
+    val usesSharedChoices = QuestionChoices.usesShared(q)
     val extra = shuaColors
 
     // A3 共用题干（限高，避免长病例把选项顶出屏）
@@ -824,10 +823,20 @@ private fun QuestionBody(
     }
 
     // B 型共用选项
-    q.sharedOptionsJson?.let { com.examhelper.shua.ui.exam.SharedOptionsCard(it) }
+    if (q.sharedOptionsJson != null && !usesSharedChoices) {
+        com.examhelper.shua.ui.exam.SharedOptionsCard(q.sharedOptionsJson)
+    }
 
     when (q.type) {
         QuestionType.SINGLE, QuestionType.MULTIPLE, QuestionType.JUDGE -> {
+            if (usesSharedChoices) {
+                Text(
+                    "共用备选答案 · ${q.subtype ?: "B"}型题",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = extra.amber,
+                    modifier = Modifier.padding(horizontal = 2.dp)
+                )
+            }
             options.forEach { opt ->
                 val selected = opt.key in state.selected
                 val isAnswer = state.revealed && !q.answer.isNullOrBlank() &&
@@ -1552,7 +1561,7 @@ private fun answerContentPreview(q: Question): String? {
     val ans = q.answer ?: return null
     val letters = ans.filter { it in 'A'..'E' }
     if (letters.isEmpty()) return null
-    val options = JsonCodec.decodeOptions(q.optionsJson)
+    val options = QuestionChoices.forQuestion(q)
     return options.filter { it.key.isNotEmpty() && letters.contains(it.key[0]) }
         // 不按字符硬切：LaTeX 命令被截断后会渲染成源码。完整传入，由 maxLines + Ellipsis 在排版层省略
         .joinToString("、") { it.text }

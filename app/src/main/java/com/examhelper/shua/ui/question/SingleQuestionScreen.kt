@@ -50,6 +50,7 @@ import com.examhelper.shua.data.db.Question
 import com.examhelper.shua.data.db.QuestionType
 import com.examhelper.shua.data.model.JudgeOptions
 import com.examhelper.shua.data.model.JsonCodec
+import com.examhelper.shua.data.model.QuestionChoices
 import com.examhelper.shua.data.model.QuestionOption
 import com.examhelper.shua.ui.bank.typeLabel
 import com.examhelper.shua.ui.theme.ChipTone
@@ -149,8 +150,9 @@ fun SingleQuestionScreen(
         // · 多选题答案是 "ABD"，单个选项 key 是 "A"，永不相等 → 一个都不标绿；
         // · 判断题答案可能是「对」「√」，而 key 是 A/B → 同样对不上。
         // 这里统一走 JudgeOptions（判断题 → A/B）与集合包含判断。
-        val answerLetters: Set<String> = resolveLetters(q, options, q.answer)
-        val userLetters: Set<String> = resolveLetters(q, options, state.userAnswer)
+        val answerOptions = QuestionChoices.forQuestion(q)
+        val answerLetters: Set<String> = resolveLetters(q, answerOptions, q.answer)
+        val userLetters: Set<String> = resolveLetters(q, answerOptions, state.userAnswer)
         // 顶部/答案区展示的文案（判断题显示「正确/错误」）
         val answerLetter = JudgeOptions.answerText(q.type, answerLetters.sorted().joinToString(""))
         val userLetter = JudgeOptions.answerText(q.type, userLetters.sorted().joinToString(""))
@@ -208,7 +210,13 @@ fun SingleQuestionScreen(
                                 color = MaterialTheme.colorScheme.outline
                             )
                             shared.forEach { opt ->
-                                OptionLine(key = opt.key, text = opt.text, state = OptionState.Plain)
+                                val k = opt.key.trim().uppercase()
+                                val st = when {
+                                    k.isNotEmpty() && k in answerLetters -> OptionState.Correct
+                                    k.isNotEmpty() && k in userLetters -> OptionState.Wrong
+                                    else -> OptionState.Plain
+                                }
+                                OptionLine(key = opt.key, text = opt.text, state = st)
                             }
                         }
                         options.forEach { opt ->

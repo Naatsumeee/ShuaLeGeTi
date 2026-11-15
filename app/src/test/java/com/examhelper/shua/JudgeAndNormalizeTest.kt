@@ -133,4 +133,39 @@ class JudgeAndNormalizeTest {
         assertTrue(StudyRepository.judgeAnswer(q, "DAB"))
         assertFalse(StudyRepository.judgeAnswer(q, "AB"))
     }
+
+    @Test
+    fun `multiple answer accepts common separators`() {
+        val q = question(
+            type = QuestionType.MULTIPLE,
+            answer = "A,C",
+            options = listOf(
+                QuestionOption("A", "甲"), QuestionOption("B", "乙"),
+                QuestionOption("C", "丙"), QuestionOption("D", "丁")
+            )
+        )
+        assertTrue(StudyRepository.judgeAnswer(q, "CA"))
+        assertFalse(StudyRepository.judgeAnswer(q, "A"))
+    }
+
+    @Test
+    fun `shared options participate in judging`() {
+        val q = Question(
+            bankId = 1,
+            orderInBank = 0,
+            type = QuestionType.SINGLE,
+            subtype = "B1",
+            stem = "以下属于有利原则的是",
+            sharedOptionsJson = JsonCodec.encodeOptions(
+                listOf(
+                    QuestionOption("A", "自主原则"),
+                    QuestionOption("B", "不伤害原则"),
+                    QuestionOption("C", "有利原则")
+                )
+            ),
+            answer = "有利原则"
+        )
+        assertTrue(StudyRepository.judgeAnswer(q, "C"))
+        assertFalse(StudyRepository.judgeAnswer(q, "A"))
+    }
 }

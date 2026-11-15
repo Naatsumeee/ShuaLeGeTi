@@ -226,6 +226,18 @@ class GenerateViewModel(
 
     fun cancel() {
         GenerateWorker.cancel(ShuaApp.instance, bankId)
+        viewModelScope.launch {
+            val job = jobDao.get(bankId) ?: return@launch
+            if (job.stage == "RUNNING") {
+                jobDao.upsert(
+                    job.copy(
+                        stage = "CANCELED",
+                        message = "正在停止…已生成 ${job.ok} 题保留",
+                        updatedAt = System.currentTimeMillis()
+                    )
+                )
+            }
+        }
     }
 
     /**

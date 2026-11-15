@@ -81,6 +81,27 @@ class TextQuestionParserTest {
     }
 
     @Test
+    fun b1AndB2HeadingsArePreserved() {
+        val text = """
+            一、B1型题
+            （1～2题共用备选答案）
+            A、甲
+            B、乙
+            1、第一问
+            2、第二问
+            二、B2型题
+            （3～4题共用备选答案）
+            A、丙
+            B、丁
+            3、第三问
+            4、第四问
+        """.trimIndent()
+        val questions = TextQuestionParser.parse(text)
+        assertEquals(listOf("B1", "B1", "B2", "B2"), questions.map { it.subtype })
+        assertEquals(4, questions.size)
+    }
+
+    @Test
     fun decimalNumbersNotQuestions() {
         val text = "给药剂量为1.5毫升，每日2次。"
         assertEquals(0, TextQuestionParser.parse(text).size)

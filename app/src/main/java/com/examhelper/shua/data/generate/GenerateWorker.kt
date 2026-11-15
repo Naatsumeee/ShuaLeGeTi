@@ -15,12 +15,14 @@ import androidx.work.workDataOf
 import com.examhelper.shua.R
 import com.examhelper.shua.ShuaApp
 import com.examhelper.shua.data.db.GenerateJob
+import com.examhelper.shua.data.db.Question
 import com.examhelper.shua.data.llm.BalanceLedger
 import com.examhelper.shua.data.model.JsonCodec
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
@@ -101,19 +103,30 @@ class GenerateWorker(
             context: Context,
             bankIds: List<Long>,
             concurrency: Int = 3,
+            chapters: List<String> = emptyList(),
             scope: String = GenerateScope.MISSING
         ) {
             val ids = bankIds.distinct()
             if (ids.isEmpty()) return
-            val requests = ids.map { request(it, false, concurrency, scope = scope) }
+            val requests = ids.map { request(it, false, concurrency, chapters, scope) }
             val wm = WorkManager.getInstance(context)
             var chain = wm.beginUniqueWork(
-                "maintenance_generate_${ids.joinToString("_")}",
+                sequentialName(ids),
                 ExistingWorkPolicy.REPLACE,
                 requests.first()
             )
             requests.drop(1).forEach { chain = chain.then(it) }
         }
+
+        fun sequentialName(bankIds: List<Long>): String =
+            "maintenance_generate_${bankIds.distinct().sorted().joinToString("_")}"
+
+        fun cancelSequence(context: Context, bankIds: List<Long>) {
+            val wm = WorkManager.getInstance(context)
+            wm.cancelUniqueWork(sequentialName(bankIds))
+            bankIds.distinct().forEach { wm.cancelUniqueWork(uniqueName(it)) }
+        }
+
         fun cancel(context: Context, bankId: Long) {
             WorkManager.getInstance(context).cancelUniqueWork(uniqueName(bankId))
         }
@@ -181,6 +194,16 @@ class GenerateWorker(
                 return Result.success()
             }
 
+            if (isStopped) {
+                dao.upsert(
+                    (dao.get(bankId) ?: GenerateJob(bankId = bankId)).copy(
+                        stage = "CANCELED",
+                        message = "已取消（尚未开始生成）"
+                    )
+                )
+                return Result.failure()
+            }
+
             dao.upsert(
                 GenerateJob(
                     bankId = bankId, stage = "RUNNING", forceAll = forceAll,
@@ -214,24 +237,33 @@ class GenerateWorker(
 
             coroutineScope {
                 val semaphore = Semaphore(concurrency)
-                val deferred = batches.map { batch ->
-                    async {
+                val completed = Channel<Triple<List<Question>, List<AggregatedVerdict>?, com.examhelper.shua.data.llm.ChatUsage?>>(Channel.UNLIMITED)
+                val jobs = batches.map { batch ->
+                    launch {
                         semaphore.withPermit {
-                            if (isStopped) {
-                                Triple(batch, null, null)
+                            val outcome = if (isStopped) {
+                                null
                             } else {
-                                val outcome = withTimeoutOrNull(300_000) {
-                                    runCatching { generator.aggregateBatch(batch, primary, others) }.getOrNull()
+                                withTimeoutOrNull(AnswerGenerator.PRIMARY_TIMEOUT_MS + 20_000L) {
+                                    try {
+                                        generator.aggregateBatch(batch, primary, others)
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (_: Exception) {
+                                        null
+                                    }
                                 }
-                                Triple<List<com.examhelper.shua.data.db.Question>, List<AggregatedVerdict>?, com.examhelper.shua.data.llm.ChatUsage?>(
-                                    batch, outcome?.first, outcome?.second
-                                )
                             }
+                            completed.send(Triple(batch, outcome?.first, outcome?.second))
                         }
                     }
                 }
-                deferred.forEach { d ->
-                    val (batch, verdicts, batchUsage) = d.await()
+                repeat(batches.size) {
+                    val (batch, verdicts, batchUsage) = completed.receive()
+                    val current = dao.get(bankId)
+                    if (isStopped || current?.stage == "CANCELED") {
+                        throw CancellationException("用户已停止生成")
+                    }
                     batchUsage?.let { usage.add(it) }
                     if (verdicts != null) {
                         batch.forEachIndexed { i, q ->
@@ -272,7 +304,7 @@ class GenerateWorker(
                             cacheHitTokens = baseHit + usage.hit,
                             cacheMissTokens = baseMiss + usage.miss,
                             outputTokens = baseOut + usage.out,
-                            message = "第 ${minOf(done / AnswerGenerator.BATCH_SIZE + 1, batches.size)}/${batches.size} 批 · 完成 $done/${targets.size}" +
+                            message = "已完成 $done/${targets.size} 题（${batches.size} 批并发）" +
                                 (Cost.hitRateOrNull(usage.hit, usage.miss)?.let { " · 命中 $it%" } ?: ""),
                             updatedAt = System.currentTimeMillis()
                         )
@@ -281,9 +313,10 @@ class GenerateWorker(
                         setForeground(foregroundInfo("AI 生成 $done/${targets.size}", done, targets.size))
                     }
                 }
+                jobs.forEach { it.join() }
             }
 
-            if (isStopped) {
+            if (isStopped || dao.get(bankId)?.stage == "CANCELED") {
                 dao.upsert(
                     (dao.get(bankId) ?: GenerateJob(bankId = bankId)).copy(
                         stage = "CANCELED", message = "已取消（已生成部分保留，可继续）"
@@ -331,10 +364,11 @@ class GenerateWorker(
         if (others > 0) "$primary +${others}部交叉验证" else primary
 
     private suspend fun fail(bankId: Long, message: String): Result {
-        container.database.generateJobDao().upsert(
-            (container.database.generateJobDao().get(bankId) ?: GenerateJob(bankId = bankId))
-                .copy(stage = "FAILED", errorMessage = message)
-        )
+        val dao = container.database.generateJobDao()
+        val current = dao.get(bankId) ?: GenerateJob(bankId = bankId)
+        if (current.stage != "CANCELED") {
+            dao.upsert(current.copy(stage = "FAILED", errorMessage = message))
+        }
         return Result.failure()
     }
 

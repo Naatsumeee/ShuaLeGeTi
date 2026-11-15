@@ -96,6 +96,31 @@ class BankJsonImportTest {
     }
 
     @Test
+    fun bTypeWithOnlySharedOptionsInfersChoiceAndSubtype() {
+        val raw = """
+            {"questions":[{"stem":"B2 配伍题","type":"B2型题","answer":["A","C"],
+              "sharedOptions":[{"key":"A","text":"甲"},{"key":"B","text":"乙"},{"key":"C","text":"丙"}]}]}
+        """.trimIndent()
+        val q = BankJsonImport.parse(raw).questions.first()
+        assertEquals("MULTIPLE", q.type)
+        assertEquals("B2", q.subtype)
+        assertEquals(3, q.sharedOptions.size)
+    }
+
+    @Test
+    fun arrayAnswersWithOptionTextAndBlanksStayUnambiguous() {
+        val raw = """
+            {"questions":[
+              {"stem":"多选","type":"MULTIPLE","answer":["A. 甲","C. 丙"]},
+              {"stem":"多空","type":"FILL","answer":["i-1","i-1","1"]}
+            ]}
+        """.trimIndent()
+        val questions = BankJsonImport.parse(raw).questions
+        assertEquals("AC", questions[0].answer)
+        assertEquals("i-1|i-1|1", questions[1].answer)
+    }
+
+    @Test
     fun chineseFieldNamesAreAccepted() {
         val raw = """
             {"name":"中文题目","questions":[

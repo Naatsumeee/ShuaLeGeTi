@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.examhelper.shua.data.db.QuestionType
 import com.examhelper.shua.data.model.JsonCodec
+import com.examhelper.shua.data.model.QuestionChoices
 import com.examhelper.shua.ui.bank.typeLabel
 import com.examhelper.shua.ui.theme.ChipTone
 import com.examhelper.shua.ui.theme.CompactTopBar
@@ -190,19 +191,23 @@ fun ExamScreen(
                             }
                         }
 
-                        q.sharedOptionsJson?.let { SharedOptionsCard(it) }
-
                         // 判断题兜底：老题库可能没存选项（只有「答案：对」），
                         // 这里补出「正确 / 错误」两行，否则测试模式无法作答。
-                        val rawOptions = JsonCodec.decodeOptions(q.optionsJson)
-                        val options = if (q.type == QuestionType.JUDGE) {
-                            com.examhelper.shua.data.model.JudgeOptions
-                                .normalize(q.type, rawOptions, q.answer)
-                                .first
-                        } else rawOptions
+                        val options = QuestionChoices.forQuestion(q)
+                        val usesSharedChoices = QuestionChoices.usesShared(q)
+                        if (q.sharedOptionsJson != null && !usesSharedChoices) {
+                            SharedOptionsCard(q.sharedOptionsJson)
+                        }
                         val selected = state.selected[q.id] ?: emptySet()
                         when (q.type) {
-                            QuestionType.SINGLE, QuestionType.MULTIPLE, QuestionType.JUDGE ->
+                            QuestionType.SINGLE, QuestionType.MULTIPLE, QuestionType.JUDGE -> {
+                                if (usesSharedChoices) {
+                                    Text(
+                                        "共用备选答案 · ${q.subtype ?: "B"}型题",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = extra.amber
+                                    )
+                                }
                                 options.forEach { opt ->
                                     val isSelected = opt.key in selected
                                     ExamOptionRow(
@@ -216,6 +221,7 @@ fun ExamScreen(
                                         }
                                     )
                                 }
+                            }
 
                             QuestionType.FILL, QuestionType.SHORT_ANSWER, QuestionType.TERM -> OutlinedTextField(
                                 value = state.textInputs[q.id] ?: "",

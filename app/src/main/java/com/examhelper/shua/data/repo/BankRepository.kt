@@ -103,7 +103,7 @@ class BankRepository(
         val ids = sourceIds.distinct()
         require(ids.size >= 2) { "至少选择两个题库才能合并" }
         return db.withTransaction {
-            val sources = ids.mapNotNull { bankDao.getById(it) }
+            val sources = ids.mapNotNull { bankDao.getById(it) }.sortedBy { it.createdAt }
             require(sources.size == ids.size) { "部分题库已不存在" }
             require(sources.none { it.isGroup }) { "题库组暂不支持直接合并，请选择组内题库" }
             val sourceQuestions = sources.associate { it.id to questionDao.getByBank(it.id) }
@@ -273,6 +273,24 @@ class BankRepository(
         return bankId
     }
 
+    /** 把新导入的题目追加到已有题库末尾，章节/题目顺序严格按本次导入顺序。 */
+    suspend fun appendQuestions(bankId: Long, parsed: List<ParsedQuestion>): Long {
+        require(parsed.isNotEmpty()) { "没有可追加的题目" }
+        return db.withTransaction {
+            val bank = bankDao.getById(bankId) ?: error("目标题库不存在")
+            require(!bank.isGroup) { "题库组不能直接添加题目，请选择组内题库" }
+            val start = questionDao.nextOrder(bankId)
+            questionDao.insertAll(parsed.mapIndexed { index, p -> p.toEntity(bankId, start + index) })
+            bankDao.update(
+                bank.copy(
+                    questionCount = questionDao.countByBank(bankId),
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+            bankId
+        }
+    }
+
     suspend fun deleteBank(bankId: Long) {
         val bank = bankDao.getById(bankId)
         if (bank?.isGroup == true) {
@@ -359,6 +377,9 @@ class BankRepository(
         val parsed = file.questions.map { it.toParsedQuestion() }
         return createBank(file.name, file.sourceFileName, parsed)
     }
+
+    suspend fun appendBankFile(bankId: Long, file: ShuaBankFile): Long =
+        appendQuestions(bankId, file.questions.map { it.toParsedQuestion() })
 
     private fun ShuaQuestionJson.toParsedQuestion(): ParsedQuestion = ParsedQuestion(
         chapter = chapter,

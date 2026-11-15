@@ -8,10 +8,17 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import kotlinx.coroutines.suspendCancellableCoroutine
+import java.io.IOException
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 @Serializable
 data class ChatMessage(
@@ -337,7 +344,7 @@ class LlmClient(
         result
     }
 
-    private fun streamOnce(
+    private suspend fun streamOnce(
         provider: LlmProvider,
         messages: List<ChatMessage>,
         jsonMode: Boolean,
@@ -366,7 +373,7 @@ class LlmClient(
             .post(json.encodeToString(body).toRequestBody(jsonMediaType))
             .build()
 
-        return client.newCall(request).execute().use { resp ->
+        return executeCancellable(request) { resp ->
             if (!resp.isSuccessful) {
                 throw LlmException("HTTP ${resp.code}: ${resp.body?.string().orEmpty().take(300)}")
             }
@@ -387,7 +394,7 @@ class LlmClient(
                     throw LlmException("模型未返回内容")
                 }
                 onDelta(content)
-                return@use ChatResult(content, parsed.usage ?: ChatUsage(), choice.finishReason)
+                return@executeCancellable ChatResult(content, parsed.usage ?: ChatUsage(), choice.finishReason)
             }
 
             val content = StringBuilder()
@@ -429,7 +436,7 @@ class LlmClient(
         }
     }
 
-    private fun chatOnce(
+    private suspend fun chatOnce(
         provider: LlmProvider,
         messages: List<ChatMessage>,
         jsonMode: Boolean,
@@ -453,7 +460,7 @@ class LlmClient(
             .post(json.encodeToString(body).toRequestBody(jsonMediaType))
             .build()
 
-        return client.newCall(request).execute().use { resp ->
+        return executeCancellable(request) { resp ->
             val text = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) {
                 throw LlmException("HTTP ${resp.code}: ${text.take(300)}")
@@ -477,6 +484,43 @@ class LlmClient(
             }
             ChatResult(content, parsed.usage ?: ChatUsage(), choice.finishReason)
         }
+    }
+
+    /**
+     * OkHttp 的阻塞 execute 不响应协程取消。改用 enqueue，并在取消时 call.cancel()，
+     * 这样「停止生成」、批次超时和切后台回收都能立即打断 socket。
+     */
+    private suspend fun executeCancellable(
+        request: Request,
+        parser: (Response) -> ChatResult
+    ): ChatResult = suspendCancellableCoroutine { continuation ->
+        val call = client.newCall(request)
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                if (continuation.isActive) {
+                    continuation.resumeWithException(LlmException("网络请求失败：${e.message}", e))
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                if (!continuation.isActive) {
+                    response.close()
+                    return
+                }
+                val result = runCatching { response.use(parser) }
+                if (!continuation.isActive) return
+                result.fold(
+                    onSuccess = { continuation.resume(it) },
+                    onFailure = { error ->
+                        continuation.resumeWithException(
+                            error as? LlmException
+                                ?: LlmException(error.message ?: "响应解析失败", error)
+                        )
+                    }
+                )
+            }
+        })
     }
 
     /** 测试连通性：发一句 "ping" 要求回复 pong */

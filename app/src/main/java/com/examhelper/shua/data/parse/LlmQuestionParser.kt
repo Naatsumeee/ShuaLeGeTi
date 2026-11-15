@@ -239,7 +239,13 @@ class LlmQuestionParser(
     fun QuestionDto.toParsed(): ParsedQuestion {
         val (opts, ans) = OptionNormalizer.normalize(options, answer)
         val (sopts, _) = OptionNormalizer.normalize(sharedOptions, null)
-        val qType = mapType(type)
+        val normalizedSubtype = subtype?.trim()?.uppercase()?.takeIf { it.isNotBlank() }
+        val answeredLetters = ans.orEmpty().filter { it in 'A'..'Z' }.toSet()
+        val qType = if (normalizedSubtype == "B2" && answeredLetters.size > 1) {
+            QuestionType.MULTIPLE
+        } else {
+            mapType(type)
+        }
         // 判断题：模型经常只回 {"type":"JUDGE","answer":"对"} 而不给 options，
         // 落库后做题页就没有可点的行。这里补齐「正确/错误」并把答案对齐到 A/B。
         val (finalOpts, finalAns) = com.examhelper.shua.data.model.JudgeOptions.normalize(
@@ -248,7 +254,7 @@ class LlmQuestionParser(
         return ParsedQuestion(
             chapter = chapter?.takeIf { it.isNotBlank() },
             type = qType,
-            subtype = subtype?.trim()?.uppercase()?.takeIf { it.isNotBlank() },
+            subtype = normalizedSubtype,
             stem = stem.trim(),
             sourceNumber = number ?: leadingNumber(stem),
             sharedStem = sharedStem?.trim()?.takeIf { it.isNotBlank() },

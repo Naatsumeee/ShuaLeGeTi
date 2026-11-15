@@ -70,6 +70,7 @@ import java.io.File
 @Composable
 fun ImportScreen(
     jobId: String? = null,
+    targetBankId: Long? = null,
     onDone: () -> Unit
 ) {
     val vm: ImportViewModel = viewModel()
@@ -88,8 +89,8 @@ fun ImportScreen(
         }
     }
 
-    LaunchedEffect(jobId) {
-        if (jobId != null) vm.resumeJob(jobId)
+    LaunchedEffect(jobId, targetBankId) {
+        if (jobId != null) vm.resumeJob(jobId) else if (targetBankId != null) vm.prepareTarget(targetBankId)
     }
 
     var cameraUri by remember { mutableStateOf<Uri?>(null) }
@@ -124,7 +125,7 @@ fun ImportScreen(
     Column(Modifier.fillMaxSize().safeTopPadding().safeBottomPadding(minBottom = 6.dp)) {
         CompactTopBar(
             title = when (state.stage) {
-                ImportViewModel.Stage.IDLE -> "导入题库"
+                ImportViewModel.Stage.IDLE -> if (state.targetBankId != null) "继续添加题目" else "导入题库"
                 ImportViewModel.Stage.CHOOSING_PARSE -> "选择解析方式"
                 ImportViewModel.Stage.RUNNING -> "解析中"
                 else -> "确认导入"
@@ -140,7 +141,8 @@ fun ImportScreen(
                 OutlinedTextField(
                     value = state.bankName,
                     onValueChange = vm::updateBankName,
-                    label = { Text("题库名称（可选）") },
+                    enabled = state.targetBankId == null,
+                    label = { Text(if (state.targetBankId != null) "追加到题库" else "题库名称（可选）") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     shape = RoundedCornerShape(14.dp)
@@ -251,7 +253,8 @@ fun ImportScreen(
                 OutlinedTextField(
                     value = state.bankName,
                     onValueChange = vm::updateBankName,
-                    label = { Text("题库名称") },
+                    enabled = state.targetBankId == null,
+                    label = { Text(if (state.targetBankId != null) "追加到题库" else "题库名称") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     shape = RoundedCornerShape(14.dp)
@@ -487,12 +490,18 @@ fun ImportScreen(
                     OutlinedTextField(
                         value = state.bankName,
                         onValueChange = vm::updateBankName,
-                        label = { Text("题库名称") },
+                        enabled = state.targetBankId == null,
+                        label = { Text(if (state.targetBankId != null) "追加到题库" else "题库名称") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         shape = RoundedCornerShape(14.dp)
                     )
-                    PrimaryAction("确认导入 ${state.preview.size} 题", extra.terracotta, enabled = state.preview.isNotEmpty()) {
+                    PrimaryAction(
+                        if (state.targetBankId != null) "追加 ${state.preview.size} 题"
+                        else "确认导入 ${state.preview.size} 题",
+                        extra.terracotta,
+                        enabled = state.preview.isNotEmpty()
+                    ) {
                         vm.save(onDone)
                     }
                 }

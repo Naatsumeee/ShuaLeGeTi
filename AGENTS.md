@@ -1,6 +1,6 @@
 ﻿# AGENTS.md — 刷了个题 (ShuaGeLeTi) 项目记忆
 
-> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-14（**v1.2.0 发布批次**：导入/题库组/PDF/解析维护/动效与数据管理升级）。
+> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-15（**v1.2.0 后待测批次**：B1/B2、维护任务、继续添加题目与自动更新检查）。
 >
 > **文档分工**（别把三份混在一起）：
 > - `AGENTS.md`（本文件，**入库**）—— 项目的长期公共记忆：架构、决策、踩过的坑、待办。所有 Agent 都该读。
@@ -32,7 +32,7 @@ Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）�
 ## 技术栈与关键决策
 
 - Kotlin + Jetpack Compose（BOM 2024.12.01）+ Material3；MVVM（ViewModel 用 @JvmOverloads/SavedStateHandle 构造，无 DI 框架，`ShuaApp.instance.container` 手工容器）
-- **Room v15**（`data/db/`：Entities/Daos/AppDatabase，迁移 1→2→…→15 全部注册在 `AppDatabase.addMigrations`）。`fallbackToDestructiveMigration` **仍在**，新增字段必须写正式迁移，否则老用户升级即丢库。各版本加了什么：v2 `subtype`/`sharedStem`/`sharedOptionsJson`/`attempt_records.runId`/`durationMs`/`study_progress.filterJson`；v3 `sourcePage`；v4 `originalAnswer`；v5 `aiAnswer`/`answerVerified`/`deepSolved`；v6 三个 token 字段；v7 余额快照（已废弃）；v8 `import_jobs.streamTail`/`banks.pinned`/`banks.archived`；v9 `wrong_records.flagged`（重点标记，与「已掌握」互相独立）；**v10 是数据迁移**（`MIGRATION_9_10` 用 `HeadingClassifier.cleanChapter` 把库里已有的脏章节名就地洗掉，不重导）；**v11 也是数据迁移**（再洗一次 + `unifyChapterNames` 归一）；v12 新增 `balance_snapshots` 表；**v13** 给 `banks` 新增组/颜色/备注/排序/合并快照字段；**v14** 新增 `ai_usage_records` 统一 AI 调用账本（`callId`/`taskId`/模型/token/时间戳）；**v15** 给 `questions` 新增 `minimalSolved`，极简解析不再与普通/深度解析混为一谈
+- **Room v16**（`data/db/`：Entities/Daos/AppDatabase，迁移 1→2→…→16 全部注册在 `AppDatabase.addMigrations`）。`fallbackToDestructiveMigration` **仍在**，新增字段必须写正式迁移，否则老用户升级即丢库。各版本加了什么：v2 `subtype`/`sharedStem`/`sharedOptionsJson`/`attempt_records.runId`/`durationMs`/`study_progress.filterJson`；v3 `sourcePage`；v4 `originalAnswer`；v5 `aiAnswer`/`answerVerified`/`deepSolved`；v6 三个 token 字段；v7 余额快照（已废弃）；v8 `import_jobs.streamTail`/`banks.pinned`/`banks.archived`；v9 `wrong_records.flagged`（重点标记，与「已掌握」互相独立）；**v10 是数据迁移**（`MIGRATION_9_10` 用 `HeadingClassifier.cleanChapter` 把库里已有的脏章节名就地洗掉，不重导）；**v11 也是数据迁移**（再洗一次 + `unifyChapterNames` 归一）；v12 新增 `balance_snapshots` 表；**v13** 给 `banks` 新增组/颜色/备注/排序/合并快照字段；**v14** 新增 `ai_usage_records` 统一 AI 调用账本（`callId`/`taskId`/模型/token/时间戳）；**v15** 给 `questions` 新增 `minimalSolved`；**v16** 给 `import_jobs` 新增 `targetBankId`，让「继续添加题目」在进程重开后仍能追加到原题库
 - 双 OCR 引擎（`data/ocr/`）：**默认 RapidOCR**（PP-OCRv5 ONNX，v1.0.11 起）+ ML Kit 中文 bundled（备选，轻量）；OCR 后做**双栏阅读顺序重排**（`MlKitOcrEngine.rebuildReadingOrder`，扫描试卷是左右双栏）；RapidOCR 额外跑**版面分析**（见「版面分析」节）
 - RapidOCR 为**源码模块** `rapidocr-src/OcrLibrary`（Apache-2.0，已入库 ~93MB）：NDK r27 + `ANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON` + onnxruntime **1.20**（16KB 页对齐，Maven 的 AAR 抽取）+ opencv-mobile 3.4.15（`src/sdk/`）。**16KB 页对齐是硬要求**（用户手机是 16KB 设备），换依赖时必须验证 PT_LOAD p_align=16384
 - 后台任务 = WorkManager 前台服务（dataSync 类型）：`ImportPipelineWorker`（导入/解析，断点续传按"已落盘分块"）与 `GenerateWorker`（AI 生成，断点续传按"已答即跳过"）；进度写 Room 表（import_jobs/generate_jobs），UI 观察 Flow
@@ -237,7 +237,7 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - **合并/撤销**：保留原 question id，只迁移归属；attempt/wrong/favorite/kill 的 bankId 跟随。撤销放在 Room 事务里，按快照 `questionId -> 原 bankId` 一次性恢复记录——**不能按原题库循环搬移**，否则同一条记录会被反复搬到最后一本。题库组暂不支持直接合并或嵌套（UI 会明确提示）。
 - **颜色/拖拽**：8 个区分色不含默认橘红和黑白；自定义支持 `#RGB/#RRGGBB/#AARRGGBB`，HSL 二维色盘 + 色相条 + 十六进制实时校验。整张题库卡片长按进入拖拽，跨越相邻卡时即时交换本地顺序，其他项用弹簧让位，松手一次写 `sortOrder`；长按不会再弹旧菜单/误进题库。
 - **动效**：一级 Tab 横向过场与 Dock 同组弹簧参数；问 AI Bottom Sheet 有橡皮筋阻尼/速度吸附；做题主按钮有 0.96 压缩、内阴影和释放回弹。
-- **题库维护**：AI 生成与编辑章节先进入维护选择页；支持单库维护和按子库顺序的一键维护，选择页明确提示耗时与失败率风险。
+- **题库维护**：单题库直接进入 1.1.0 原维护页；只有题库组/多库才进入选择页。多库必须先选题库、章节和生成类型，再手动开始，按题库顺序串行处理并可停止；不能自动开跑。
 - **错题 PDF**：错题本标题栏增加“输出错题 PDF”，继承当前选项卡；导出页已压缩重排：来源+题库下拉、范围主次按钮、按章节次级下拉、仅导题目主题色选中、位置两按钮、解析程度同一行。条件区域用 spring 展开/收起，其余控件用 `animateContentSize` 平滑让位。Markdown 在排版前清洗；首页显示完整标题，后续页左上题库名、页脚页码；上边距 76.35pt；A4 使用内置 Noto Sans/Serif SC，标题 20pt Sans Bold，正文 12pt Serif。**Android ICU 正则比 JVM 严格：`\frac`/`\sqrt` 里的字面 `{` `}` 必须成对转义，否则 `WrongBookExport` 初始化即崩。**
 - **解析后台维护**：`PdfAnalysisWorker` 走 WorkManager 前台任务，逐题写库，切屏/锁屏不中断；返回导出页通过唯一任务 Flow 恢复状态。开始前若已有对应解析，弹窗让用户选“仍重新生成 / 跳过已有解析”。极简解析输出预算 512 token，提示词要求 60 字内但不得截断，导出不再按 30 字硬切。
 - **维护取消与心跳**：逐题开始前写一次 WorkManager 进度，避免长请求看起来卡死；`CancellationException` 必须重新抛出，不能被逐题 `runCatching` 当失败吞掉；PDF 页提供“停止当前生成任务”，点击后立即把 UI 切回非运行态并取消唯一任务。
@@ -246,7 +246,15 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - **AI 用量账本**：所有导入/生成/问 AI/深度解题/极简解析调用统一写 `ai_usage_records`，本地估算按每次调用自己的时间戳和编号计算；DeepSeek 官方只有账号级余额接口，没有 API Key 级消费查询。
 - **设置/更新**：关于页使用矢量前景图标 + 绿色底，**不能把 adaptive-icon XML 直接传给 Compose `painterResource`（它只接受 `<vector>`，否则稳定崩溃）**；检查更新同时比较 versionName 与 Release 说明里的 `versionCode:N`，本机任一项更高都提示最新；网络失败显示 HTTP 状态码，连接失败明确显示无状态码。字体大小滑杆松手才应用、跨档震动；震动强度用振幅和脉冲密度共同表达。
 - **交互修复**：空题库首页不渲染编辑按钮；编辑模式未选项透明度 0.48、已选项恢复对比度；菜单/拖拽横条固定容器消除跳动；批量操作栏弹性上滑；问 AI 开关的颜色与震动即时响应。
-- **回归基线**：`./gradlew testDebugUnitTest --rerun-tasks` 当前 **282 项全绿**。真实《流行病学学习指导与习题集》148 页扫描件离线 OCR 后，用现有 728 题 AI 解析结果做“清空答案再回填”回归：新版规则回填 **660/719（91.8%）**，多数章节 100%，明显高于旧版约 61%。模拟器 UI 已验证空题库/PDF 新布局/维护状态恢复；关于页图标、Git versionCode、HTTP 错误提示已实测。真机完整重导该 PDF 仍需用户复测。
+- **回归基线**：`./gradlew testDebugUnitTest --rerun-tasks` 当前 **291 项全绿**。真实《流行病学学习指导与习题集》148 页扫描件离线 OCR 后，用现有 728 题 AI 解析结果做“清空答案再回填”回归：新版规则回填 **660/719（91.8%）**，多数章节 100%，明显高于旧版约 61%。模拟器 UI 已验证空题库/PDF 新布局/维护状态恢复；关于页图标、Git versionCode、HTTP 错误提示已实测。真机完整重导该 PDF 仍需用户复测。
+
+## v1.2.0 后待测批次（2026-11-15，DB v16）
+
+- **B1/B2 作答**：`QuestionChoices.forQuestion()` 统一从 `sharedOptionsJson` 取可点击选项，做题页/测试页不再只展示不可作答的共用选项卡片；B1/B2 子类型从标题和 JSON 保留，编辑页可手动修正。
+- **多选与答案容错**：多选答案支持 `A,C` / `A、C` / 数组 / 带选项正文的数组；AI `answer` 允许字符串或数组，多选数组转连续字母，多空填空转竖线分隔，不会因一题拖垮整批 12 题。
+- **生成任务**：`LlmClient` 改 OkHttp `enqueue + call.cancel()`，协程停止/超时能立即打断 socket；主部 150s、副部 90s 独立超时；批次完成即按完成顺序落库，不再被前一批卡住；手动停止立即写 `CANCELED`，WorkManager 链式多库任务也可取消。
+- **继续添加题目**：首页题库右上角菜单新增「继续添加题目」，导入结果直接追加到目标题库；`orderInBank` 接在旧题之后，章节/题目顺序按本次导入顺序。`import_jobs.targetBankId` 持久化目标，进程重开不丢。合并题库来源按 `createdAt` 原导入顺序排列。
+- **自动更新检查**：每次冷启动静默查询 GitHub Release；失败不提示。检查到新版本才弹简要更新日志和「前往更新 / 暂不更新」；手动检查失败仍显示 HTTP 状态码。
 
 ## AI 解析流式预览（`ImportPipelineWorker` + `ImportScreen.kt`，v1.0.11）
 

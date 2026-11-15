@@ -768,6 +768,10 @@ class StudyViewModel(
             q.sharedStem?.takeIf { it.isNotBlank() }?.let { appendLine("共用题干：$it") }
             appendLine("题干：${q.stem}")
             val opts = com.examhelper.shua.data.model.JsonCodec.decodeOptions(q.optionsJson)
+            val sharedOpts = com.examhelper.shua.data.model.JsonCodec.decodeOptions(q.sharedOptionsJson)
+            if (sharedOpts.isNotEmpty()) {
+                appendLine("共用选项：" + sharedOpts.joinToString("；") { "${it.key}.${it.text}" })
+            }
             if (opts.isNotEmpty()) {
                 appendLine("选项：" + opts.joinToString("；") { "${it.key}.${it.text}" })
             }
