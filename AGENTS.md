@@ -263,6 +263,7 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - Gitee 只托管 `update.json` 和 Release 附件，不镜像完整 Git 历史。Gitee 单个附件上限 100MB，当前 arm64 APK 满足；公开 Raw 小于 10MB 无需认证，官方缓存 60～300 秒。
 - `scripts/publish-gitee-release.ps1`：用 `GITEE_TOKEN` 创建 Gitee Release 并上传 APK，输出附件下载 URL。
 - `scripts/generate-update-json.ps1`：根据版本号、APK、Gitee/GitHub 下载链接和发布说明生成 `update.json`，同时计算 SHA256。
+- `scripts/sync-gitee-manifest.ps1`：用 `GITEE_TOKEN` 把仓库根目录 `update.json` 直接同步到 Gitee `master`。
 - 发布顺序：GitHub Release → Gitee Release 附件 → 更新 `update.json` → 同时推 GitHub `main` 与 Gitee 小仓库 `master`。
 
 ## AI 解析流式预览（`ImportPipelineWorker` + `ImportScreen.kt`，v1.0.11）
