@@ -9,6 +9,7 @@
     "修复维护任务停止、合并后记录归属和多项崩溃问题。"
   ],
   "downloads": [
+    "https://gitee.com/Naatsumeee/ShuaLeGeTi-release/releases/download/v1.2.0/Shualegeti-arm64-v8a-1.2.0.apk",
     "https://github.com/Naatsumeee/ShuaLeGeTi/releases/download/v1.2.0/Shualegeti-arm64-v8a-1.2.0.apk"
   ],
   "releaseUrl": "https://github.com/Naatsumeee/ShuaLeGeTi/releases/tag/v1.2.0",
