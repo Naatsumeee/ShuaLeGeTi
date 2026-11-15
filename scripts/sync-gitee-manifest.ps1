@@ -20,12 +20,18 @@ $api = "https://gitee.com/api/v5/repos/$Owner/$Repo/contents/update.json"
 $current = Invoke-RestMethod -Method Get -Uri "$api`?access_token=$token&ref=$Branch"
 $encoded = [Convert]::ToBase64String([IO.File]::ReadAllBytes($manifest))
 
-Invoke-RestMethod -Method Put -Uri $api -Body @{
+$payload = @{
     access_token = $token
     content      = $encoded
     sha          = $current.sha
     message      = "更新 App 更新清单"
     branch       = $Branch
-} | Out-Null
+} | ConvertTo-Json -Compress
+
+Invoke-RestMethod `
+    -Method Put `
+    -Uri $api `
+    -ContentType "application/json" `
+    -Body $payload | Out-Null
 
 Write-Host "Synced $manifest to Gitee $Owner/$Repo@$Branch"
