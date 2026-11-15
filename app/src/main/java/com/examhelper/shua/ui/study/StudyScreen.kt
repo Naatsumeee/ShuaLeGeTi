@@ -347,7 +347,12 @@ fun StudyScreen(
                         }
                     }
                     val canPrev = livePrev != null && state.mode != StudyMode.RANDOM
-                    val canNext = liveNext != null
+                    val canNext = canMoveForward(
+                        mode = state.mode,
+                        answered = state.answered,
+                        revealed = state.revealed,
+                        hasNext = liveNext != null
+                    )
 
                     // 按钮翻页也要走同一套滑动动画。
                     //
@@ -390,7 +395,16 @@ fun StudyScreen(
                         if (flipTick == 0) return@LaunchedEffect
                         val dir = flipDir
                         val target = if (dir > 0) liveNext else livePrev
-                        if (target == null) return@LaunchedEffect
+                        if (target == null) {
+                            if (dir > 0 && canMoveForward(
+                                    mode = state.mode,
+                                    answered = state.answered,
+                                    revealed = state.revealed,
+                                    hasNext = false
+                                )
+                            ) vm.next()
+                            return@LaunchedEffect
+                        }
                         val cur = session?.question
                         // 协程内读取：拿到的是此刻真实的布局宽度，而不是组合时的 1f
                         val width = pageWidth.intValue.toFloat().coerceAtLeast(1f)
@@ -518,7 +532,7 @@ fun StudyScreen(
                                 livePrev?.let { PeekPage(it, state.mode, vm, compact, stateFor(it)) }
                             }
                         }
-                        if (canNext) {
+                        if (liveNext != null) {
                             PeekSlot(x = drag + w) {
                                 liveNext?.let { PeekPage(it, state.mode, vm, compact, stateFor(it)) }
                             }
@@ -1434,7 +1448,11 @@ private fun BottomControls(
                             }
                     ) {
                         Text(
-                            if (state.answered || state.revealed) "下一题" else "先作答",
+                            when {
+                                state.session?.nextQuestion == null && (state.answered || state.revealed) -> "完成"
+                                state.answered || state.revealed -> "下一题"
+                                else -> "先作答"
+                            },
                             style = MaterialTheme.typography.labelLarge,
                             color = if (canNext) MaterialTheme.colorScheme.onPrimary
                             else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1446,6 +1464,13 @@ private fun BottomControls(
         }
     }
 }
+
+internal fun canMoveForward(
+    mode: StudyMode,
+    answered: Boolean,
+    revealed: Boolean,
+    hasNext: Boolean
+): Boolean = hasNext || answered || revealed || mode == StudyMode.RECITE
 
 /** 解析下方的小字免责声明（用户要求：内容为 AI 生成，可能会出错） */
 @Composable

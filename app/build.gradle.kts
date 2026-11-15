@@ -77,7 +77,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             // 有正式 keystore 就用它；没有则退回 debug 签名（包能出，但不能覆盖已装正版）
             signingConfig = if (hasReleaseKey) {
                 signingConfigs.getByName("release")
@@ -103,6 +104,14 @@ android {
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
         resources.excludes += "/META-INF/DEPENDENCIES"
+        // PDFBox 会传递依赖 BouncyCastle；这些 PQC 参数文件与本项目的常规 PDF 处理无关。
+        resources.excludes += listOf(
+            "org/bouncycastle/pqc/crypto/picnic/lowmc.properties",
+            "org/bouncycastle/pqc/crypto/sike/p751.properties",
+            "org/bouncycastle/pqc/crypto/sike/p610.properties",
+            "org/bouncycastle/pqc/crypto/sike/p503.properties",
+            "org/bouncycastle/pqc/crypto/sike/p434.properties"
+        )
     }
 }
 
