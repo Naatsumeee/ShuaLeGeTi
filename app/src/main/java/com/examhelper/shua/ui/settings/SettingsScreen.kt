@@ -1071,6 +1071,12 @@ private fun AboutCard(
             onUpdate = {
                 onOpen(info.downloadUrl.ifBlank { info.releaseUrl })
                 onDismissUpdate()
+            },
+            onFallback = info.fallbackDownloadUrl?.let { url ->
+                {
+                    onOpen(url)
+                    onDismissUpdate()
+                }
             }
         )
     }
@@ -1080,7 +1086,8 @@ private fun AboutCard(
 fun UpdateAvailableDialog(
     info: com.examhelper.shua.data.update.UpdateInfo,
     onDismiss: () -> Unit,
-    onUpdate: () -> Unit
+    onUpdate: () -> Unit,
+    onFallback: (() -> Unit)? = null
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1094,7 +1101,14 @@ fun UpdateAvailableDialog(
             )
         },
         confirmButton = { TextButton(onClick = onUpdate) { Text("前往更新") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("暂不更新") } }
+        dismissButton = {
+            Row {
+                onFallback?.let { fallback ->
+                    TextButton(onClick = fallback) { Text("备用下载") }
+                }
+                TextButton(onClick = onDismiss) { Text("暂不更新") }
+            }
+        }
     )
 }
 

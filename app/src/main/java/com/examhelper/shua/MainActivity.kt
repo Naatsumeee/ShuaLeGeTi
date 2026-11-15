@@ -55,6 +55,12 @@ class MainActivity : ComponentActivity() {
                         onUpdate = {
                             uriHandler.openUri(info.downloadUrl.ifBlank { info.releaseUrl })
                             updateInfo = null
+                        },
+                        onFallback = info.fallbackDownloadUrl?.let { url ->
+                            {
+                                uriHandler.openUri(url)
+                                updateInfo = null
+                            }
                         }
                     )
                 }

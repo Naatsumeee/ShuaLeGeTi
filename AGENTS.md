@@ -246,7 +246,7 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - **AI 用量账本**：所有导入/生成/问 AI/深度解题/极简解析调用统一写 `ai_usage_records`，本地估算按每次调用自己的时间戳和编号计算；DeepSeek 官方只有账号级余额接口，没有 API Key 级消费查询。
 - **设置/更新**：关于页使用矢量前景图标 + 绿色底，**不能把 adaptive-icon XML 直接传给 Compose `painterResource`（它只接受 `<vector>`，否则稳定崩溃）**；检查更新同时比较 versionName 与 Release 说明里的 `versionCode:N`，本机任一项更高都提示最新；网络失败显示 HTTP 状态码，连接失败明确显示无状态码。字体大小滑杆松手才应用、跨档震动；震动强度用振幅和脉冲密度共同表达。
 - **交互修复**：空题库首页不渲染编辑按钮；编辑模式未选项透明度 0.48、已选项恢复对比度；菜单/拖拽横条固定容器消除跳动；批量操作栏弹性上滑；问 AI 开关的颜色与震动即时响应。
-- **回归基线**：`./gradlew testDebugUnitTest --rerun-tasks` 当前 **291 项全绿**。真实《流行病学学习指导与习题集》148 页扫描件离线 OCR 后，用现有 728 题 AI 解析结果做“清空答案再回填”回归：新版规则回填 **660/719（91.8%）**，多数章节 100%，明显高于旧版约 61%。模拟器 UI 已验证空题库/PDF 新布局/维护状态恢复；关于页图标、Git versionCode、HTTP 错误提示已实测。真机完整重导该 PDF 仍需用户复测。
+- **回归基线**：`./gradlew testDebugUnitTest --rerun-tasks` 当前 **294 项全绿**。真实《流行病学学习指导与习题集》148 页扫描件离线 OCR 后，用现有 728 题 AI 解析结果做“清空答案再回填”回归：新版规则回填 **660/719（91.8%）**，多数章节 100%，明显高于旧版约 61%。模拟器 UI 已验证空题库/PDF 新布局/维护状态恢复；关于页图标、Git versionCode、HTTP 错误提示已实测。真机完整重导该 PDF 仍需用户复测。
 
 ## v1.2.0 后待测批次（2026-11-15，DB v16）
 
@@ -254,7 +254,16 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - **多选与答案容错**：多选答案支持 `A,C` / `A、C` / 数组 / 带选项正文的数组；AI `answer` 允许字符串或数组，多选数组转连续字母，多空填空转竖线分隔，不会因一题拖垮整批 12 题。
 - **生成任务**：`LlmClient` 改 OkHttp `enqueue + call.cancel()`，协程停止/超时能立即打断 socket；主部 150s、副部 90s 独立超时；批次完成即按完成顺序落库，不再被前一批卡住；手动停止立即写 `CANCELED`，WorkManager 链式多库任务也可取消。
 - **继续添加题目**：首页题库右上角菜单新增「继续添加题目」，导入结果直接追加到目标题库；`orderInBank` 接在旧题之后，章节/题目顺序按本次导入顺序。`import_jobs.targetBankId` 持久化目标，进程重开不丢。合并题库来源按 `createdAt` 原导入顺序排列。
-- **自动更新检查**：每次冷启动静默查询 GitHub Release；失败不提示。检查到新版本才弹简要更新日志和「前往更新 / 暂不更新」；手动检查失败仍显示 HTTP 状态码。
+- **自动更新检查**：每次冷启动依次查询 `update.json`：Gitee Raw → jsDelivr → GitHub Raw → GitHub API。每源独立 8 秒超时；失败不提示，手动检查显示逐源状态。静态 manifest 的下载地址只允许官方 Gitee/GitHub/jsDelivr HTTPS 域名；有新版本时展示简要日志、「前往更新」「备用下载」「暂不更新」。
+
+## 更新渠道与发布
+
+- `update.json` 固定在仓库根目录，schema 1：`versionName`、`versionCode`、`notes[]`、`downloads[]`、`releaseUrl`、`sha256`。
+- App 的国内主源假设 Gitee 小仓库为 `Naatsumeee/ShuaLeGeTi-release`，默认分支 `master`；若实际账号/仓库不同，同步修改 `UpdateChecker` 顶部常量。
+- Gitee 只托管 `update.json` 和 Release 附件，不镜像完整 Git 历史。Gitee 单个附件上限 100MB，当前 arm64 APK 满足；公开 Raw 小于 10MB 无需认证，官方缓存 60～300 秒。
+- `scripts/publish-gitee-release.ps1`：用 `GITEE_TOKEN` 创建 Gitee Release 并上传 APK，输出附件下载 URL。
+- `scripts/generate-update-json.ps1`：根据版本号、APK、Gitee/GitHub 下载链接和发布说明生成 `update.json`，同时计算 SHA256。
+- 发布顺序：GitHub Release → Gitee Release 附件 → 更新 `update.json` → 同时推 GitHub `main` 与 Gitee 小仓库 `master`。
 
 ## AI 解析流式预览（`ImportPipelineWorker` + `ImportScreen.kt`，v1.0.11）
 

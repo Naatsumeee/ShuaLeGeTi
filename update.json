@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "versionName": "1.2.0",
+  "versionCode": 1090,
+  "publishedAt": 1794585600,
+  "notes": [
+    "新增题库组、题库合并与撤销、错题 PDF 导出和 .shua 完整数据导出。",
+    "优化大型扫描件章节/答案恢复、长文档导入与主要交互动效。",
+    "修复维护任务停止、合并后记录归属和多项崩溃问题。"
+  ],
+  "downloads": [
+    "https://github.com/Naatsumeee/ShuaLeGeTi/releases/download/v1.2.0/Shualegeti-arm64-v8a-1.2.0.apk"
+  ],
+  "releaseUrl": "https://github.com/Naatsumeee/ShuaLeGeTi/releases/tag/v1.2.0",
+  "sha256": "F37C20A0B601C202F145FFFC0ABA48149AC4422694206C869DB39086ACBFB36C"
+}
