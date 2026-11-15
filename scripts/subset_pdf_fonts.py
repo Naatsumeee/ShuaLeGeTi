@@ -46,6 +46,14 @@ PRESERVED_RANGES = (
     (0x2460, 0x24FF),  # Enclosed Alphanumerics
     (0x25A0, 0x25FF),  # Geometric Shapes
     (0x2600, 0x26FF),  # Miscellaneous Symbols
+    (0x2700, 0x27BF),  # Dingbats
+    (0x27C0, 0x27EF),  # Miscellaneous Mathematical Symbols-A
+    (0x27F0, 0x27FF),  # Supplemental Arrows-A
+    (0x2800, 0x28FF),  # Braille Patterns
+    (0x2900, 0x297F),  # Supplemental Arrows-B
+    (0x2980, 0x29FF),  # Miscellaneous Mathematical Symbols-B
+    (0x2A00, 0x2AFF),  # Supplemental Mathematical Operators
+    (0x2B00, 0x2BFF),  # Miscellaneous Symbols and Arrows
     (0x2C60, 0x2C7F),  # Latin Extended-C
     (0x3000, 0x303F),  # CJK Symbols and Punctuation
     (0xFE10, 0xFE1F),  # Vertical Forms
@@ -54,6 +62,7 @@ PRESERVED_RANGES = (
     (0xFF00, 0xFFEF),  # Halfwidth and Fullwidth Forms
     (0xA720, 0xA7FF),  # Latin Extended-D
     (0xAB30, 0xAB6F),  # Latin Extended-E
+    (0x1D400, 0x1D7FF),  # Mathematical Alphanumeric Symbols
 )
 
 CJK_RANGES = (

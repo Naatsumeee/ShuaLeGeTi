@@ -247,7 +247,7 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - **设置/更新**：关于页使用矢量前景图标 + 绿色底，**不能把 adaptive-icon XML 直接传给 Compose `painterResource`（它只接受 `<vector>`，否则稳定崩溃）**；检查更新同时比较 versionName 与 Release 说明里的 `versionCode:N`，本机任一项更高都提示最新；网络失败显示 HTTP 状态码，连接失败明确显示无状态码。字体大小滑杆松手才应用、跨档震动；震动强度用振幅和脉冲密度共同表达。
 - **交互修复**：空题库首页不渲染编辑按钮；编辑模式未选项透明度 0.48、已选项恢复对比度；菜单/拖拽横条固定容器消除跳动；批量操作栏弹性上滑；问 AI 开关的颜色与震动即时响应。
 - **回归基线**：`./gradlew testDebugUnitTest --rerun-tasks` 当前 **295 项全绿**。真实《流行病学学习指导与习题集》148 页扫描件离线 OCR 后，用现有 728 题 AI 解析结果做“清空答案再回填”回归：新版规则回填 **660/719（91.8%）**，多数章节 100%，明显高于旧版约 61%。模拟器 UI 已验证空题库/PDF 新布局/维护状态恢复；关于页图标、Git versionCode、HTTP 错误提示已实测。真机完整重导该 PDF 仍需用户复测。
-- **PDF 字体子集**：两套 Noto SC 字体只保留《通用规范汉字表》8105 字 + 常用拉丁/希腊/西里尔/数学符号/中文标点。原始 24.26MiB，子集后约 6.60MiB；release APK 压缩字体从约 14.96MB 降到约 4.18MB，APK 实测减少约 10.8MB。字体仍完整内嵌（PDFBox 默认按使用字形子集化），不依赖系统字体。重新生成命令和字表在 `scripts/subset_pdf_fonts.py`、`scripts/gb8105.txt`；原字体备份在本地 `.shots/font-originals/`（gitignore）。
+- **PDF 字体子集**：两套 Noto SC 字体只保留《通用规范汉字表》8105 字 + 常用拉丁/希腊/西里尔、数学运算符、补充数学/工程符号、箭头、几何、盲文与中文标点。原始 24.26MiB，子集后约 6.60MiB；release APK 压缩字体从约 14.96MB 降到约 4.18MB，APK 实测减少约 10.8MB。字体仍完整内嵌（PDFBox 默认按使用字形子集化），不依赖系统字体。重新生成命令和字表在 `scripts/subset_pdf_fonts.py`、`scripts/gb8105.txt`；原字体备份在本地 `.shots/font-originals/`（gitignore）。
 - **字体缺字边界**：GB8105 或保留符号范围外的生僻字不会自动回退系统字体；PDFBox 抛出无字形错误，导出页会显示失败提示。修改范围时必须同步跑 `PdfFontSubsetCoverageTest` 和 `WrongBookPdfRendererTest`。
 
 ## v1.2.0 后待测批次（2026-11-15，DB v16）
