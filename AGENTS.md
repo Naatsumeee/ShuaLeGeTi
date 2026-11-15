@@ -1,6 +1,6 @@
 ﻿# AGENTS.md — 刷了个题 (ShuaGeLeTi) 项目记忆
 
-> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-15（**v1.2.0 后待测批次**：B1/B2、维护任务、继续添加题目与自动更新检查）。
+> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-16（**v1.2.0 后待测批次**：B1/B2、维护任务、继续添加题目、多源更新与 PDF 字体子集）。
 >
 > **文档分工**（别把三份混在一起）：
 > - `AGENTS.md`（本文件，**入库**）—— 项目的长期公共记忆：架构、决策、踩过的坑、待办。所有 Agent 都该读。
@@ -106,7 +106,7 @@ RapidOCR 识别一页分两步：**先版面分析，再识别文字**。模型�
 - DeepSeek 模型名现为 deepseek-flash / deepseek-v4-pro（旧 deepseek-chat 已下线）
 - APK 体积（实测 v1.1.0）：**release arm64-v8a ≈ 81MB**、debug arm64-v8a ≈ 93MB（内置 PP-OCRv5 + PP-DocLayout-S 模型与 onnxruntime/opencv 原生库是大头）。v1.0.0 起启用 **ABI splits**，release 自 v1.1.0 起用**正式签名**（根目录 `release.jks` + `keystore.properties`，均在 .gitignore；密码表缺失时构建会优雅回退 debug 签名）
 - **只发 arm64-v8a**（v1.0.11 之后，`app/build.gradle.kts` 的 `splits.abi.include` 默认 `listOf("arm64-v8a")`）：v7a 是 2017 年前 32 位老机、x86_64 只有模拟器/Chromebook，真实手机用户接近 0，却让 Release 多 156MB。**要给模拟器或老机出包时用命令行覆盖，不要改代码**：`./gradlew assembleDebug -PabiOverride=arm64-v8a,x86_64`（逗号分隔）。**Release 产物统一命名为 `Shualegeti-<abi>-<version>.apk`**（如 `Shualegeti-arm64-v8a-1.1.0.apk`），由 `app/build.gradle.kts` 末尾的 `applicationVariants.configureEach` 设置 `outputFileName`。**debug 包名保持 `app-<abi>-debug.apk` 不变** —— `启动模拟器.bat` 按这个名字找包装机。根目录同步放同名 release 包；模拟器需先带 override 构建 x86_64 包。
-- **APK 一律不入库**（v1.0.4 起）：`/app-*.apk` 已被 `.gitignore` 忽略，分发只走 GitHub Releases；但 `启动模拟器.bat` 仍读根目录 APK，所以本地构建后要手动 `cp app/build/outputs/apk/debug/app-<abi>-debug.apk .`
+- **APK 一律不入库**（v1.0.4 起）：`/app-*.apk` 已被 `.gitignore` 忽略，正式分发走 GitHub Releases + Gitee Release 镜像；但 `启动模拟器.bat` 仍读根目录 APK，所以本地构建后要手动 `cp app/build/outputs/apk/debug/app-<abi>-debug.apk .`
 - 样例题库在 `QuestionBankExample/`（gitignore，版权资料）；`app-debug*.apk` 也 gitignore
 - **仓库体积**：v1.0.9 时代仓库已有 167MB（GitHub 上），其中约 290MB 历史 blob 是早期误跟踪的 APK（x86_64/arm64/v7a 三包）与 `app/libs/OcrLibrary-1.3.0-release.aar`。这些已从工作区移除并写入 `.gitignore`，但**仍在历史里**——若要真正瘦身需 `git filter-repo` 重写历史 + 强推（会改变所有 commit hash）。**用户已决定「先不动历史，保持现状」，不要再提重写**。当前入库大文件只有内置模型与预编译 onnxruntime.so（合计 74.9MB，构建必需，不可删）
 
@@ -124,7 +124,7 @@ RapidOCR 识别一页分两步：**先版面分析，再识别文字**。模型�
 
 ```bash
 export JAVA_HOME="/c/Program Files/Microsoft/jdk-17.0.20.101-hotspot"; export PATH="$JAVA_HOME/bin:$PATH"
-./gradlew assembleDebug testDebugUnitTest          # 构建 + 单测（270 项）
+./gradlew assembleDebug testDebugUnitTest          # 构建 + 单测（当前 295 项）
 ./gradlew assembleRelease                          # → app/build/outputs/apk/release/Shualegeti-arm64-v8a-<版本>.apk
 ADB="/c/Users/xutia/AppData/Local/Android/Sdk/platform-tools/adb.exe"
 "$ADB" -s e87a3fe4 install -r app-arm64-v8a-debug.apk   # 模拟器/debug 签名机；手机若是正式签名包会拒绝
@@ -248,9 +248,11 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - **交互修复**：空题库首页不渲染编辑按钮；编辑模式未选项透明度 0.48、已选项恢复对比度；菜单/拖拽横条固定容器消除跳动；批量操作栏弹性上滑；问 AI 开关的颜色与震动即时响应。
 - **回归基线**：`./gradlew testDebugUnitTest --rerun-tasks` 当前 **295 项全绿**。真实《流行病学学习指导与习题集》148 页扫描件离线 OCR 后，用现有 728 题 AI 解析结果做“清空答案再回填”回归：新版规则回填 **660/719（91.8%）**，多数章节 100%，明显高于旧版约 61%。模拟器 UI 已验证空题库/PDF 新布局/维护状态恢复；关于页图标、Git versionCode、HTTP 错误提示已实测。真机完整重导该 PDF 仍需用户复测。
 - **PDF 字体子集**：两套 Noto SC 字体只保留《通用规范汉字表》8105 字 + 常用拉丁/希腊/西里尔、数学运算符、补充数学/工程符号、箭头、几何、盲文与中文标点。原始 24.26MiB，子集后约 6.60MiB；release APK 压缩字体从约 14.96MB 降到约 4.18MB，APK 实测减少约 10.8MB。字体仍完整内嵌（PDFBox 默认按使用字形子集化），不依赖系统字体。重新生成命令和字表在 `scripts/subset_pdf_fonts.py`、`scripts/gb8105.txt`；原字体备份在本地 `.shots/font-originals/`（gitignore）。
+- 字体官方 OFL 文本已随 assets 打包为 `assets/pdf/OFL-NotoSansSC.txt` 和 `OFL-NotoSerifSC.txt`，不要删。
 - **字体缺字边界**：GB8105 或保留符号范围外的生僻字不会自动回退系统字体；PDFBox 抛出无字形错误，导出页会显示失败提示。修改范围时必须同步跑 `PdfFontSubsetCoverageTest` 和 `WrongBookPdfRendererTest`。
+- **字体覆盖测试文档**：`scripts/generate_font_test_pdf.py` 生成 33 页 A4 文档，包含两套字体各 8105 汉字、字体实际支持的 49 个希腊字母、358 个数学/工程符号及公式样张；产物为未入库的 `output/pdf/字体覆盖测试-8105-西文-数学符号.pdf`。生成依赖临时 `.tmp-fonttools` 环境（fontTools + reportlab + pypdf）。ReportLab 对扩展区生僻汉字的 ToUnicode/复制搜索不完整，但视觉/打印正常；App 自身的 PDFBox 输出不受此限制。
 
-## v1.2.0 后待测批次（2026-11-15，DB v16）
+## v1.2.0 后待测批次（2026-11-16，DB v16）
 
 - **B1/B2 作答**：`QuestionChoices.forQuestion()` 统一从 `sharedOptionsJson` 取可点击选项，做题页/测试页不再只展示不可作答的共用选项卡片；B1/B2 子类型从标题和 JSON 保留，编辑页可手动修正。
 - **多选与答案容错**：多选答案支持 `A,C` / `A、C` / 数组 / 带选项正文的数组；AI `answer` 允许字符串或数组，多选数组转连续字母，多空填空转竖线分隔，不会因一题拖垮整批 12 题。
@@ -267,6 +269,11 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - `scripts/generate-update-json.ps1`：根据版本号、APK、Gitee/GitHub 下载链接和发布说明生成 `update.json`，同时计算 SHA256。
 - `scripts/sync-gitee-manifest.ps1`：用 `GITEE_TOKEN` 把仓库根目录 `update.json` 直接同步到 Gitee `master`。
 - 发布顺序：GitHub Release → Gitee Release 附件 → 更新 `update.json` → 同时推 GitHub `main` 与 Gitee 小仓库 `master`。
+- 2026-11-16 已实测：Gitee 仓库公开、默认分支 `master`、Raw `update.json` 可匿名读取；`v1.2.0` APK 附件 100,374,621 B，SHA256 与 GitHub 正式包一致；Gitee 下载不支持 Range/断点续传。
+- GitHub API 的 403 已实测为未认证 IP 限流（`X-RateLimit-Remaining: 0`）；Gitee OpenAPI 同样观测到 60 次/小时额度，所以 App 检查更新走 Gitee Raw，不依赖 Gitee API。
+- App 当前解析 `versionName/versionCode/notes/downloads/releaseUrl`；`publishedAt` 和 `sha256` 只是清单元数据，**App 内没有校验 APK SHA256**。安装时仍由 Android 校验 APK 签名必须与已安装包一致。
+- 更新检查采用**首个成功且可解析的清单**，不会继续比较其他源是否有更高版本。发版后必须及时同步 Gitee `update.json`，否则旧清单会遮住 jsDelivr/GitHub 新版本。
+- `scripts/publish-gitee-release.ps1` 使用 PowerShell 7 的 `Invoke-RestMethod -Form`；本机没有 `pwsh` 时不能直接运行，`sync-gitee-manifest.ps1` 已兼容 Windows PowerShell 5.1。
 
 ## AI 解析流式预览（`ImportPipelineWorker` + `ImportScreen.kt`，v1.0.11）
 
@@ -388,7 +395,7 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - **`AnswerSheet` 的两个排版缺口**：① Java 的 `\s` **不含全角空格 U+3000**，`1.B　2.D` 这种最常见的中文分隔会被判「有实义残留」→ 落到主观题分支得到伪数据；② `A1型：1.B 2.D` 这类题型分组前缀会让整行不合格、整组答案全丢。两者都已修（`fillerRe` 补 `\u3000`、新增 `typeLabelRe` 剥前缀）。
 - **提示词必须要求模型输出题号**：`QuestionDto.number` 新增并写进 `PARSE_DEFAULT` 规则 2（「number 必填，原样照抄原文数字，不要改写成全书连续编号，题号不要留在 stem 里」）。这是绑定可靠的前提。
 - 实测：AI 链路答案覆盖 **31/336 → 281/336（83%）**，客观题绑定 205/211 且**零错填**；离线链路维持 345/346。护栏单测：`AnswerBinderTest.kt`（12 项）+ `AnswerCoverageRealFileTest.kt`（真实素材，客观题零错填 + 端到端覆盖率 ≥ 80%）。
-- **改这块必须 `--rerun-tasks` 跑全量**（现为 282 项）。
+- **改这块必须 `--rerun-tasks` 跑全量**（现为 295 项）。
 
 ### 11. AI 成本优化（已落地，全部实测）
 
