@@ -124,6 +124,9 @@ interface QuestionDao {
     @Update
     suspend fun update(question: Question)
 
+    @Query("UPDATE questions SET askChatJson = :json WHERE id = :questionId")
+    suspend fun updateAskChat(questionId: Long, json: String?)
+
     @Query("DELETE FROM questions WHERE bankId = :bankId")
     suspend fun deleteByBank(bankId: Long)
 

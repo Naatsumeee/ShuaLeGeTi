@@ -16,11 +16,13 @@ import com.examhelper.shua.data.settings.AppSettings
 import com.examhelper.shua.data.settings.SettingsStore
 import com.examhelper.shua.ui.sound.Haptics
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -212,6 +214,7 @@ class StudyViewModel(
             favorite = session.question?.let { studyRepo.isFavorite(it.id) } ?: false,
             killed = session.question?.let { studyRepo.isKilled(it.id) } ?: false,
             deepSolved = q?.deepSolved ?: false,
+            chat = q?.let(studyRepo::loadChat).orEmpty(),
             roundWrongCount = roundWrongIds.size,
             roundWrongOnly = roundWrongFilter != null,
             filterSummary = filter?.takeIf { !it.isDefault }?.let { f ->
@@ -731,12 +734,15 @@ class StudyViewModel(
         val q = s.session?.question ?: return
         if (s.asking) return
 
-        val history = s.chat + ChatTurn("user", text)
+        val userTurn = ChatTurn("user", text)
+        val history = s.chat + userTurn
         _state.value = s.copy(chat = history, asking = true, askError = null, askOpen = true, askStream = "")
         Haptics.click()
         // 记下提问时的题目 id：请求途中切题的话，回答不能落到新题目头上
         val askedForId = q.id
         viewModelScope.launch {
+            // 用户问题先落库；即使随后切题或请求失败，也不会丢提问。
+            withContext(NonCancellable) { studyRepo.saveChat(q.id, history) }
             val buf = StringBuilder()
             var lastPush = 0L
             fun push(force: Boolean = false) {
@@ -753,13 +759,18 @@ class StudyViewModel(
                 }
             }.fold(
                 onSuccess = { reply ->
-                    if (_state.value.session?.question?.id != askedForId) return@fold
-                    _state.value = _state.value.copy(
-                        chat = _state.value.chat + ChatTurn("assistant", reply),
-                        asking = false,
-                        askError = null,
-                        askStream = ""
-                    )
+                    val assistantTurn = ChatTurn("assistant", reply)
+                    withContext(NonCancellable) {
+                        studyRepo.saveChat(q.id, history + assistantTurn)
+                    }
+                    if (_state.value.session?.question?.id == askedForId) {
+                        _state.value = _state.value.copy(
+                            chat = history + assistantTurn,
+                            asking = false,
+                            askError = null,
+                            askStream = ""
+                        )
+                    }
                 },
                 onFailure = { e ->
                     if (_state.value.session?.question?.id != askedForId) return@fold
@@ -777,7 +788,13 @@ class StudyViewModel(
     /** 清空当前题目的追问记录 */
     fun clearAsk() {
         Haptics.click()
+        val q = _state.value.session?.question
         _state.value = _state.value.copy(chat = emptyList(), askError = null)
+        if (q != null) {
+            viewModelScope.launch(NonCancellable) {
+                studyRepo.saveChat(q.id, emptyList())
+            }
+        }
     }
 
     /** 当前题目 + 对话轮次 → 消息列表（流式：边收边通过 [onDelta] 上屏） */

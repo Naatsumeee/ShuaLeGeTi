@@ -358,6 +358,16 @@ class StudyRepository(
 
     suspend fun isFavorite(questionId: Long): Boolean = recordDao.getFavorite(questionId) != null
 
+    suspend fun saveChat(questionId: Long, turns: List<com.examhelper.shua.data.model.ChatTurn>) {
+        db.questionDao().updateAskChat(
+            questionId,
+            turns.takeIf { it.isNotEmpty() }?.let(JsonCodec::encodeChat)
+        )
+    }
+
+    fun loadChat(question: Question): List<com.examhelper.shua.data.model.ChatTurn> =
+        JsonCodec.decodeChat(question.askChatJson)
+
     /** 该题最近一次作答（用于「划回已做题不重复作答」） */
     suspend fun latestAttempt(questionId: Long) = recordDao.latestAttempt(questionId)
 

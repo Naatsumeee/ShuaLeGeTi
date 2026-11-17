@@ -245,7 +245,7 @@ fun StudyScreen(
                             deepStream = memo.deepStream,
                             deepError = memo.deepError,
                             deepSolving = false,
-                            chat = emptyList(),
+                            chat = memo.chat,
                             asking = false,
                             askError = null
                         ) else state.copy(
@@ -722,7 +722,7 @@ private fun PeekPage(
     state: StudyUiState = peekState(mode, q)
 ) {
     val clean = remember(q.id, state.answered, state.revealed, state.selected, state.textInput, state.deepSolved, state.deepStream, mode) {
-        state.copy(deepSolving = false, chat = emptyList(), asking = false, askError = null)
+        state.copy(deepSolving = false, asking = false, askError = null)
     }
     // 修饰符顺序与真卡严格一致：先 verticalScroll 再 padding（内边距属于滚动内容），
     // 这样两张卡的可用宽度、首行基线与行距完全相同，滑入落地时不会"缩一下再长开"。
