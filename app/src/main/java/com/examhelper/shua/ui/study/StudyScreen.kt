@@ -662,9 +662,14 @@ fun StudyScreen(
                         ) {
                             Text(
                                 "${i + 1}",
-                                style = monoStyle(12.sp, FontWeight.Medium),
+                                style = monoStyle(
+                                    if ("${i + 1}".length >= 4) 9.sp else 12.sp,
+                                    FontWeight.Medium
+                                ),
                                 color = if (isCurrent) MaterialTheme.colorScheme.onPrimary
-                                else MaterialTheme.colorScheme.onSurface
+                                else MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
                     }

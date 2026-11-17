@@ -58,6 +58,7 @@ import com.examhelper.shua.ui.theme.ChipTone
 import com.examhelper.shua.ui.theme.CompactTopBar
 import com.examhelper.shua.ui.theme.GlassSurface
 import com.examhelper.shua.ui.theme.PaperCard
+import com.examhelper.shua.ui.theme.QuestionNumberBadge
 import com.examhelper.shua.ui.theme.SectionLabel
 import com.examhelper.shua.ui.theme.SemanticChip
 import com.examhelper.shua.ui.theme.isCompactWidth
@@ -620,15 +621,7 @@ private fun ParsedCard(index: Int, q: ParsedLine) {
                 horizontalArrangement = Arrangement.spacedBy(5.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    Modifier
-                        .size(21.dp)
-                        .clip(CircleShape)
-                        .background(extra.terracottaSoft),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("$index", style = MaterialTheme.typography.labelSmall, color = extra.terracotta)
-                }
+                QuestionNumberBadge(index, compact = true)
                 SemanticChip(
                     runCatching { typeLabel(QuestionType.valueOf(q.type)) }.getOrDefault("单选") +
                         (q.subtype?.let { "·$it" } ?: ""),

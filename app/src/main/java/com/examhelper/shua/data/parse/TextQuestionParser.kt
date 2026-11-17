@@ -818,7 +818,7 @@ object TextQuestionParser {
     private fun isLikelyNotQuestion(m: MatchResult): Boolean {
         val number = m.groupValues[1]
         val rest = m.groupValues[2]
-        if (number.length > 3) return true
+        if (number.length > 4) return true
         return rest.isNotEmpty() && rest[0].isDigit()
     }
 
