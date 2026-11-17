@@ -256,7 +256,29 @@ class StudyRepository(
                 bankId = bankId,
                 mode = StudyMode.RANDOM,
                 randomOrderJson = JsonCodec.encodeIdList(questionIds.shuffled()),
-                randomCursor = 0
+                randomCursor = 0,
+                roundId = UUID.randomUUID().toString()
+            )
+        )
+    }
+
+    /** 原地开始新一轮，保留当前筛选条件但换 roundId，不能恢复上一轮作答。 */
+    suspend fun startNewRound(bankId: Long, mode: StudyMode, questionIds: List<Long>) {
+        val existing = progressDao.get(bankId, mode)
+        progressDao.upsert(
+            StudyProgress(
+                bankId = bankId,
+                mode = mode,
+                currentIndex = 0,
+                randomOrderJson = if (mode == StudyMode.RANDOM) {
+                    JsonCodec.encodeIdList(questionIds.shuffled())
+                } else {
+                    existing?.randomOrderJson
+                },
+                randomCursor = 0,
+                filterJson = existing?.filterJson,
+                roundId = UUID.randomUUID().toString(),
+                updatedAt = System.currentTimeMillis()
             )
         )
     }

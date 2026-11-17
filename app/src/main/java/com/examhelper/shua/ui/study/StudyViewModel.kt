@@ -373,7 +373,7 @@ class StudyViewModel(
         beginNewRound()
         viewModelScope.launch {
             answerWriteJob?.join()
-            studyRepo.resetRandom(bankId, questions.map { it.id })
+            studyRepo.startNewRound(bankId, StudyMode.RANDOM, questions.map { it.id })
             reload()
         }
     }
@@ -386,7 +386,7 @@ class StudyViewModel(
         beginNewRound()
         viewModelScope.launch {
             answerWriteJob?.join()
-            studyRepo.seek(bankId, mode, 0)
+            studyRepo.startNewRound(bankId, mode, questions.map { it.id })
             reload()
         }
     }

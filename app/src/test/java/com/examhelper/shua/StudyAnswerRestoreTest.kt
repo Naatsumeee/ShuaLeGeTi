@@ -22,6 +22,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 @RunWith(RobolectricTestRunner::class)
 class StudyAnswerRestoreTest {
@@ -168,6 +169,26 @@ class StudyAnswerRestoreTest {
 
         assertNotNull(created.roundId)
         assertEquals(created.roundId, reopened.roundId)
+    }
+
+    @Test
+    fun startingNewRoundReplacesRoundId() = runBlocking {
+        val first = repository.ensureProgress(
+            bankId = 6,
+            mode = StudyMode.SEQUENTIAL,
+            questionIds = listOf(60, 61)
+        )
+
+        repository.startNewRound(6, StudyMode.SEQUENTIAL, listOf(60, 61))
+        val second = repository.ensureProgress(
+            bankId = 6,
+            mode = StudyMode.SEQUENTIAL,
+            questionIds = listOf(60, 61)
+        )
+
+        assertNotNull(first.roundId)
+        assertNotNull(second.roundId)
+        assertTrue(first.roundId != second.roundId)
     }
 
     @Test

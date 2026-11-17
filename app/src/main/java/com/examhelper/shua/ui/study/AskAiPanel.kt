@@ -40,6 +40,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -152,10 +153,13 @@ fun AskAiPanel(
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val inputBringIntoView = remember { BringIntoViewRequester() }
+    var previousChatCount by remember { mutableIntStateOf(state.chat.size) }
 
     // 完整消息只触发一次滚动；流式输出另走节流，避免每个 token 重启动画。
-    LaunchedEffect(state.chat.lastOrNull()?.id, state.asking) {
-        if (state.chat.isNotEmpty()) {
+    LaunchedEffect(state.chat.size, state.asking) {
+        val shouldAnimate = shouldAnimateToNewMessage(previousChatCount, state.chat.size, state.asking)
+        previousChatCount = state.chat.size
+        if (shouldAnimate) {
             listState.animateScrollToItem(state.chat.lastIndex)
         }
     }
