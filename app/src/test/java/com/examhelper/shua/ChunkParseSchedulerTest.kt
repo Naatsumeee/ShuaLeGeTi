@@ -9,6 +9,8 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlin.coroutines.cancellation.CancellationException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -86,5 +88,26 @@ class ChunkParseSchedulerTest {
         parseStarted.await()
         scheduler.cancelAndJoin()
         assertTrue(cleanupAfterCancel)
+    }
+
+    @Test
+    fun parseCancellationPropagatesToWholeScheduler() = runBlocking {
+        val failure = runCatching {
+            withTimeout(250) {
+                runChunkScheduler(
+                    indices = listOf(0, 1),
+                    concurrency = 2,
+                    warmupRequired = false,
+                    parse = { index ->
+                        if (index == 0) withTimeout(1) { awaitCancellation() }
+                        awaitCancellation()
+                    },
+                    onResult = {}
+                )
+            }
+        }.exceptionOrNull()
+
+        assertTrue(failure is CancellationException)
+        assertEquals("Timed out waiting for 1 ms", failure?.message)
     }
 }

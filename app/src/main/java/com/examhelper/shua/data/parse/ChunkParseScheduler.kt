@@ -4,6 +4,7 @@ import com.examhelper.shua.data.model.ParsedLine
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlin.coroutines.cancellation.CancellationException
 
 data class ChunkWorkResult(
     val index: Int,
@@ -34,7 +35,13 @@ suspend fun runChunkScheduler(
         repeat(concurrency.coerceAtLeast(1)) {
             launch {
                 for (index in work) {
-                    results.send(parse(index))
+                    try {
+                        results.send(parse(index))
+                    } catch (e: CancellationException) {
+                        // A cancelled worker otherwise looks like normal completion to its parent.
+                        results.close(e)
+                        throw e
+                    }
                 }
             }
         }
