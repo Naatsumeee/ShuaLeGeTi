@@ -11,10 +11,12 @@ import com.examhelper.shua.data.db.ProgressDao
 import com.examhelper.shua.data.model.JsonCodec
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.json.Json
+import java.util.UUID
 
 /** 学习会话状态：当前应展示的题目与游标信息 */
 data class StudySession(
     val mode: StudyMode,
+    val roundId: String,
     val question: Question?,
     val indexInQueue: Int,   // 当前第几题（1-based 展示用）
     val total: Int,
@@ -25,6 +27,24 @@ data class StudySession(
     /** 下一题（右邻卡片） */
     val nextQuestion: Question? = null
 )
+
+data class RoundAnswer(
+    val userAnswer: String,
+    val correct: Boolean?,
+    val answeredAt: Long,
+    val attemptId: Long
+)
+
+internal fun latestAnswerMap(records: List<AttemptRecord>): Map<Long, RoundAnswer> =
+    records.groupBy { it.questionId }.mapValues { (_, rows) ->
+        val latest = rows.maxWith(compareBy<AttemptRecord> { it.answeredAt }.thenBy { it.id })
+        RoundAnswer(
+            userAnswer = latest.userAnswer,
+            correct = latest.correct.takeIf { latest.correctKnown },
+            answeredAt = latest.answeredAt,
+            attemptId = latest.id
+        )
+    }
 
 class StudyRepository(
     private val db: AppDatabase,
@@ -52,14 +72,29 @@ class StudyRepository(
         val existing = progressDao.get(bankId, mode)
         if (existing != null && existing.filterJson == filterJson &&
             !(mode == StudyMode.RANDOM && existing.randomOrderJson == null)
-        ) return existing
+        ) {
+            if (existing.roundId != null) return existing
+            val upgraded = existing.copy(
+                roundId = UUID.randomUUID().toString(),
+                updatedAt = System.currentTimeMillis()
+            )
+            progressDao.upsert(upgraded)
+            return upgraded
+        }
+        val roundId = UUID.randomUUID().toString()
         val fresh = if (mode == StudyMode.RANDOM) {
             StudyProgress(
                 bankId = bankId, mode = mode, filterJson = filterJson,
-                randomOrderJson = JsonCodec.encodeIdList(questionIds.shuffled())
+                randomOrderJson = JsonCodec.encodeIdList(questionIds.shuffled()),
+                roundId = roundId
             )
         } else {
-            StudyProgress(bankId = bankId, mode = mode, filterJson = filterJson)
+            StudyProgress(
+                bankId = bankId,
+                mode = mode,
+                filterJson = filterJson,
+                roundId = roundId
+            )
         }
         progressDao.upsert(fresh)
         return fresh
@@ -73,6 +108,7 @@ class StudyRepository(
         filterJson: String? = null
     ): StudySession {
         val progress = ensureProgress(bankId, mode, questions.map { it.id }, filterJson)
+        val roundId = requireNotNull(progress.roundId)
         val byId = questions.associateBy { it.id }
         return when (mode) {
             StudyMode.RANDOM -> {
@@ -80,6 +116,7 @@ class StudyRepository(
                 val cursor = progress.randomCursor.coerceIn(0, order.size)
                 StudySession(
                     mode = mode,
+                    roundId = roundId,
                     question = order.getOrNull(cursor)?.let(byId::get),
                     indexInQueue = cursor + 1,
                     total = order.size,
@@ -93,6 +130,7 @@ class StudyRepository(
                 val index = progress.currentIndex.coerceIn(0, questions.size)
                 StudySession(
                     mode = mode,
+                    roundId = roundId,
                     question = questions.getOrNull(index),
                     indexInQueue = index + 1,
                     total = questions.size,
@@ -134,6 +172,9 @@ class StudyRepository(
             existing
         )
     }
+
+    suspend fun latestAnswersByRound(runId: String): Map<Long, RoundAnswer> =
+        latestAnswerMap(recordDao.getByRun(runId))
 
     /** 测试模式报告数据 */
     suspend fun examReport(runId: String): ExamReport? {
