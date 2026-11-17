@@ -8,6 +8,7 @@ import com.examhelper.shua.data.db.QuestionType
 import com.examhelper.shua.data.model.ChatTurn
 import com.examhelper.shua.data.model.JsonCodec
 import com.examhelper.shua.data.repo.StudyRepository
+import com.examhelper.shua.ui.study.shouldAnimateToNewMessage
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.After
@@ -71,5 +72,11 @@ class QuestionChatPersistenceTest {
         repository.saveChat(questionId, emptyList())
         val cleared = db.questionDao().getById(questionId)!!
         assertTrue(repository.loadChat(cleared).isEmpty())
+    }
+
+    @Test
+    fun streamingDoesNotStartRepeatedScrollAnimations() {
+        assertTrue(!shouldAnimateToNewMessage(2, 2, asking = true))
+        assertTrue(shouldAnimateToNewMessage(2, 3, asking = false))
     }
 }

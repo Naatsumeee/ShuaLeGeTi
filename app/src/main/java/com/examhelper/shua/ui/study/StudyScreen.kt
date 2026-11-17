@@ -31,6 +31,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -143,6 +145,16 @@ fun StudyScreen(
     val compact = isCompactWidth()
     LaunchedEffect(state.askOpen) { if (state.askOpen) askSheetState.show() }
 
+    fun closeAskSheet() {
+        if (askClosing) return
+        askClosing = true
+        pageScope.launch {
+            askSheetState.hide()
+            vm.toggleAsk()
+            askClosing = false
+        }
+    }
+
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().safeTopPadding()) {
             CompactTopBar(
@@ -174,12 +186,7 @@ fun StudyScreen(
                 // 常驻「问 AI」入口：任何时候都能就当前题目提问
                 AskAiButton(compact = compact, active = state.askOpen && !askClosing) {
                     if (state.askOpen) {
-                        askClosing = true
-                        pageScope.launch {
-                            askSheetState.hide()
-                            vm.toggleAsk()
-                            askClosing = false
-                        }
+                        closeAskSheet()
                     } else {
                         vm.toggleAsk()
                     }
@@ -595,10 +602,10 @@ fun StudyScreen(
         ModalBottomSheet(
             onDismissRequest = {
                 com.examhelper.shua.ui.sound.Haptics.tap()
-                askClosing = true
-                pageScope.launch { askSheetState.hide(); vm.toggleAsk(); askClosing = false }
+                closeAskSheet()
             },
             containerColor = MaterialTheme.colorScheme.surface,
+            contentWindowInsets = { WindowInsets.ime },
             // 键盘弹起时面板自动上移，输入框不会被遮挡
             // 半屏/全屏/关闭三档锚点，跟手阻尼与松手速度吸附由 Material3 完成。
             sheetState = askSheetState
@@ -616,8 +623,7 @@ fun StudyScreen(
                 onClear = vm::clearAsk,
                 onDismiss = {
                     com.examhelper.shua.ui.sound.Haptics.tap()
-                    askClosing = true
-                    pageScope.launch { askSheetState.hide(); vm.toggleAsk(); askClosing = false }
+                    closeAskSheet()
                 }
             )
         }
