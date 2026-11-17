@@ -10,6 +10,7 @@ import com.examhelper.shua.data.db.StudyProgress
 import com.examhelper.shua.data.db.ProgressDao
 import com.examhelper.shua.data.model.JsonCodec
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.Json
 import java.util.UUID
 
@@ -309,31 +310,39 @@ class StudyRepository(
      * 只有真的往前走过（position > 1）才算可恢复，避免刚进入就提示。
      */
     suspend fun savedProgress(bankId: Long, filterJson: String? = null): List<SavedProgress> {
-        val rows = progressDao.allByBank(bankId)
-        if (rows.isEmpty()) return emptyList()
-        return rows.mapNotNull { row ->
-            val questions = filteredQuestions(bankId, com.examhelper.shua.data.model.StudyFilter.fromFingerprint(row.filterJson))
-            val total = if (row.mode == StudyMode.RANDOM) {
-                com.examhelper.shua.data.model.JsonCodec.decodeIdList(row.randomOrderJson).size
-            } else {
-                questions.size
-            }
-            val pos = if (row.mode == StudyMode.RANDOM) row.randomCursor + 1 else row.currentIndex + 1
-            if (pos <= 1) return@mapNotNull null
-            // 已经刷到队尾（pos > total）说明这轮做完了：这条进度不该再以
-            // 「第 30 / 30 题 · 继续」的形式挂在范围页上。做完即清，
-            // 下次进来就是新的一轮，而不是接着一个不存在的第 31 题。
-            if (total > 0 && pos > total) return@mapNotNull null
-            val chapter = questions.getOrNull(pos - 1)?.chapter?.takeIf { it.isNotBlank() }
-            SavedProgress(
-                mode = row.mode,
-                position = pos.coerceAtMost(total.coerceAtLeast(pos)),
-                total = total,
-                chapter = chapter,
-                updatedAt = row.updatedAt,
-                filterJson = row.filterJson
-            )
-        }.sortedByDescending { it.updatedAt }
+        return progressDao.allByBank(bankId)
+            .mapNotNull { savedProgressFor(bankId, it) }
+            .sortedByDescending { it.updatedAt }
+    }
+
+    fun observeSavedProgress(bankId: Long): Flow<List<SavedProgress>> =
+        progressDao.observeAllByBank(bankId).map { rows ->
+            rows.mapNotNull { savedProgressFor(bankId, it) }
+                .sortedByDescending { it.updatedAt }
+        }
+
+    private suspend fun savedProgressFor(bankId: Long, row: StudyProgress): SavedProgress? {
+        val questions = filteredQuestions(
+            bankId,
+            com.examhelper.shua.data.model.StudyFilter.fromFingerprint(row.filterJson)
+        )
+        val total = if (row.mode == StudyMode.RANDOM) {
+            JsonCodec.decodeIdList(row.randomOrderJson).size
+        } else {
+            questions.size
+        }
+        val position = if (row.mode == StudyMode.RANDOM) row.randomCursor + 1 else row.currentIndex + 1
+        if (position <= 1) return null
+        if (total > 0 && position > total) return null
+        val chapter = questions.getOrNull(position - 1)?.chapter?.takeIf { it.isNotBlank() }
+        return SavedProgress(
+            mode = row.mode,
+            position = position.coerceAtMost(total.coerceAtLeast(position)),
+            total = total,
+            chapter = chapter,
+            updatedAt = row.updatedAt,
+            filterJson = row.filterJson
+        )
     }
 
     suspend fun toggleFavorite(question: Question): Boolean {

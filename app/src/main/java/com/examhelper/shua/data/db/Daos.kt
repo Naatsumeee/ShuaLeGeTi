@@ -169,6 +169,9 @@ interface ProgressDao {
     @Query("SELECT * FROM study_progress WHERE bankId = :bankId ORDER BY updatedAt DESC")
     suspend fun allByBank(bankId: Long): List<StudyProgress>
 
+    @Query("SELECT * FROM study_progress WHERE bankId = :bankId ORDER BY updatedAt DESC")
+    fun observeAllByBank(bankId: Long): Flow<List<StudyProgress>>
+
     /** 实时刷新最近活动时间：作答即算触达，不必等点“下一题” */
     @Query("UPDATE study_progress SET updatedAt = :ts WHERE bankId = :bankId AND mode = :mode")
     suspend fun touch(bankId: Long, mode: StudyMode, ts: Long)

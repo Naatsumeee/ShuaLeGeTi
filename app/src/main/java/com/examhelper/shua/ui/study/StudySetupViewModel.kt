@@ -64,9 +64,16 @@ class StudySetupViewModel(
                 subtypesPresent = questions.mapNotNull { it.subtype }.distinct().sorted(),
                 filter = StudyFilter(),
                 matchCount = questions.size,
-                saved = runCatching { container.studyRepo.savedProgress(bankId) }.getOrDefault(emptyList()),
+                saved = _state.value.saved,
                 loading = false
             )
+        }
+        viewModelScope.launch {
+            runCatching {
+                container.studyRepo.observeSavedProgress(bankId).collect { saved ->
+                    _state.value = _state.value.copy(saved = saved)
+                }
+            }
         }
     }
 
