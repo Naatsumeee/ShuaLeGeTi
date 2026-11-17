@@ -2,6 +2,7 @@ package com.examhelper.shua
 
 import com.examhelper.shua.data.db.StudyMode
 import com.examhelper.shua.ui.study.canMoveForward
+import com.examhelper.shua.ui.study.shouldShowAnswerCard
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -56,6 +57,28 @@ class StudyNavigationTest {
                 answered = true,
                 revealed = true,
                 hasNext = false
+            )
+        )
+    }
+
+    @Test
+    fun answeredNeighborKeepsAnswerCardVisible() {
+        assertTrue(
+            shouldShowAnswerCard(
+                interactive = false,
+                answered = true,
+                revealed = true
+            )
+        )
+    }
+
+    @Test
+    fun unansweredNeighborDoesNotRevealAnswerCard() {
+        assertFalse(
+            shouldShowAnswerCard(
+                interactive = false,
+                answered = false,
+                revealed = true
             )
         )
     }
