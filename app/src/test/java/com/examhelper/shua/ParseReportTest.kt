@@ -1,15 +1,42 @@
 package com.examhelper.shua
 
 import com.examhelper.shua.data.model.ParsedLine
+import com.examhelper.shua.data.db.ImportJob
 import com.examhelper.shua.data.parse.ChunkPlanner
 import com.examhelper.shua.data.parse.FailedChunk
 import com.examhelper.shua.data.parse.MissingAnswer
 import com.examhelper.shua.data.parse.ParseReport
 import com.examhelper.shua.data.parse.ParseReportBuilder
+import com.examhelper.shua.ui.import_.ImportViewModel
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class ParseReportTest {
+    @Test
+    fun importJobStateCarriesParseReport() {
+        val job = ImportJob(
+            id = "j",
+            bankName = "B",
+            sourceName = "S",
+            parseReportJson = ParseReport(
+                missingAnswers = listOf(MissingAnswer(1, listOf(2), null, 1000, "题干"))
+            ).encode()
+        )
+
+        assertEquals(1, ParseReport.decode(job.parseReportJson).missingAnswers.size)
+    }
+
+    @Test
+    fun importViewModelStateCarriesParseReport() {
+        val report = ParseReport(
+            missingAnswers = listOf(MissingAnswer(1, listOf(2), null, 1000, "题干"))
+        )
+
+        val state = ImportViewModel.UiState(parseReport = report)
+
+        assertEquals(report, state.parseReport)
+    }
+
     @Test
     fun parseReportRoundTrips() {
         val report = ParseReport(

@@ -53,6 +53,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.examhelper.shua.data.db.QuestionType
 import com.examhelper.shua.data.llm.Prompts
 import com.examhelper.shua.data.model.ParsedLine
+import com.examhelper.shua.data.parse.ParseReport
 import com.examhelper.shua.ui.bank.typeLabel
 import com.examhelper.shua.ui.theme.ChipTone
 import com.examhelper.shua.ui.theme.CompactTopBar
@@ -470,13 +471,18 @@ fun ImportScreen(
                         TextButton(onClick = vm::resumeJob) { Text("补齐失败段", color = extra.terracotta) }
                     }
                 }
-                LazyColumn(
-                    Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(7.dp),
-                    contentPadding = PaddingValues(bottom = 6.dp)
-                ) {
-                    itemsIndexed(state.preview) { i, q -> ParsedCard(i + 1, q) }
-                }
+            state.parseReport?.takeIf {
+                it.failedChunks.isNotEmpty() || it.missingAnswers.isNotEmpty()
+            }?.let { report ->
+                ParseReportCard(report)
+            }
+            LazyColumn(
+                Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(7.dp),
+                contentPadding = PaddingValues(bottom = 6.dp)
+            ) {
+                itemsIndexed(state.preview) { i, q -> ParsedCard(i + 1, q) }
+            }
                 if (state.stage == ImportViewModel.Stage.SAVING) {
                     Row(
                         Modifier.fillMaxWidth().padding(vertical = 12.dp),
@@ -511,6 +517,118 @@ fun ImportScreen(
         }
     }
 }
+
+@Composable
+private fun ParseReportCard(report: ParseReport) {
+    val extra = shuaColors
+    var expanded by remember { mutableStateOf(false) }
+    val failedByChunk = report.failedChunks.groupBy { it.chunkIndex }
+    val missingByChunk = report.missingAnswers.groupBy { it.chunkIndex }
+    val chunkIndexes = (failedByChunk.keys + missingByChunk.keys).distinct().sorted()
+
+    PaperCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(15.dp)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            Row(
+                Modifier.fillMaxWidth().clickableTab { expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                SemanticChip("解析问题", ChipTone.Amber)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "失败 ${report.failedChunks.size} 段 · 缺答案 ${report.missingAnswers.size} 题",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    if (expanded) "收起" else "展开",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = extra.terracottaDeep
+                )
+            }
+            if (expanded) {
+                chunkIndexes.forEach { chunkIndex ->
+                    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Text(
+                            "分段 ${chunkIndex + 1}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = extra.terracottaDeep
+                        )
+                        failedByChunk[chunkIndex].orEmpty().forEach { failed ->
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                SemanticChip("失败段", ChipTone.Sage)
+                                Text(
+                                    pageRangeLabel(failed.pageFrom, failed.pageTo),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.outline
+                                )
+                            }
+                            Text(
+                                failed.reason,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = extra.sage,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        missingByChunk[chunkIndex].orEmpty().forEach { missing ->
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (missing.number != null) {
+                                    QuestionNumberBadge(missing.number, compact = true)
+                                } else {
+                                    SemanticChip("无题号", ChipTone.Neutral)
+                                }
+                                Text(
+                                    pageListLabel(missing.pages),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.outline,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            missing.chapter?.let {
+                                Text(
+                                    it,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Text(
+                                missing.stemPreview,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun pageRangeLabel(from: Int?, to: Int?): String = when {
+    from == null && to == null -> "页码未知"
+    from == to || to == null -> "第 $from 页"
+    from == null -> "第 $to 页"
+    else -> "第 $from-$to 页"
+}
+
+private fun pageListLabel(pages: List<Int>): String =
+    if (pages.isEmpty()) "页码未知" else "第 ${pages.joinToString("、")} 页"
 
 @Composable
 private fun PrimaryAction(text: String, color: androidx.compose.ui.graphics.Color, enabled: Boolean = true, onClick: () -> Unit) {

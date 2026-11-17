@@ -10,6 +10,7 @@ import com.examhelper.shua.data.importjob.ImportPipelineWorker
 import com.examhelper.shua.data.model.JsonCodec
 import com.examhelper.shua.data.model.ParsedLine
 import com.examhelper.shua.data.model.toParsedQuestion
+import com.examhelper.shua.data.parse.ParseReport
 import com.examhelper.shua.data.parse.OptionNormalizer
 import com.examhelper.shua.data.db.QuestionType
 import com.examhelper.shua.data.model.QuestionOption
@@ -42,6 +43,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
         val providersReady: Boolean = false,
         /** 本次解析所用模型的 model 名（成本按它挑价目挡位：flash / v4-pro 差一个数量级） */
         val providerModel: String? = null,
+        val parseReport: ParseReport? = null,
         val concurrency: Int = 4,
         /** 本次导入使用的 OCR 引擎 */
         val ocrEngine: String = com.examhelper.shua.data.settings.OcrEngine.RAPID_OCR,
@@ -101,7 +103,8 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                 targetBankId = job.targetBankId,
                 targetBankName = job.targetBankId?.let { bankRepo.getBank(it)?.name }.orEmpty(),
                 sourceName = job.sourceName,
-                providerModel = resolveProviderModel()
+                providerModel = resolveProviderModel(),
+                parseReport = ParseReport.decode(job.parseReportJson)
             )
             observeJob(jobId)
         }
@@ -215,6 +218,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                 _state.value = _state.value.copy(
                     job = job,
                     preview = preview,
+                    parseReport = ParseReport.decode(job.parseReportJson),
                     log = newLog,
                     stage = when {
                         job.stage == "DONE" -> Stage.PREVIEW
