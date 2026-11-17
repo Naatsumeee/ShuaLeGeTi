@@ -138,8 +138,8 @@ internal fun shouldAnimateToNewMessage(
 /**
  * 追问面板（底部弹层）。
  *
- * 深度解题之后这里就是"继续问"的入口，也可以不深度解题直接问。对话只属于当前题目，
- * 切题即清空（由 ViewModel 的 reload 负责），避免把上一题的上下文带进来聊错。
+ * 深度解题之后这里就是"继续问"的入口，也可以不深度解题直接问。对话按题目持久化，
+ * 切题时只切换当前题目的历史，不会把上一题的上下文带进来聊错。
  */
 @Composable
 fun AskAiPanel(
@@ -204,7 +204,7 @@ fun AskAiPanel(
                 modifier = Modifier.weight(1f, fill = false)
             )
             Spacer(Modifier.weight(1f))
-            if (state.chat.isNotEmpty()) {
+            if (state.chat.isNotEmpty() && !state.asking) {
                 Box(
                     Modifier
                         .clip(CircleShape)

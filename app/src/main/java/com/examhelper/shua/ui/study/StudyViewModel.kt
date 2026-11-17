@@ -25,6 +25,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 data class StudyUiState(
     val loading: Boolean = true,
@@ -52,7 +54,7 @@ data class StudyUiState(
     val deepReasoning: String = "",
     /** 追问面板是否展开 */
     val askOpen: Boolean = false,
-    /** 当前题目的追问对话（切题即清空） */
+    /** 当前题目的追问对话（按题目从 askChatJson 恢复） */
     val chat: List<ChatTurn> = emptyList(),
     /** 追问请求进行中 */
     val asking: Boolean = false,
@@ -120,6 +122,19 @@ internal fun restoreStudyAnswer(
     )
 }
 
+/** Tracks in-flight Ask AI requests per question so stale streams cannot overwrite a cleared chat. */
+internal class AskRevisionState {
+    private val revisions = ConcurrentHashMap<Long, AtomicLong>()
+
+    fun begin(questionId: Long): Long =
+        revisions.computeIfAbsent(questionId) { AtomicLong() }.incrementAndGet()
+
+    fun invalidate(questionId: Long): Long = begin(questionId)
+
+    fun isCurrent(questionId: Long, revision: Long): Boolean =
+        revisions[questionId]?.get() == revision
+}
+
 class StudyViewModel(
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
@@ -147,6 +162,8 @@ class StudyViewModel(
     private var countdownJob: Job? = null
     private var answerWriteJob: Job? = null
     private var questionShownAt: Long = 0L
+    private val askRevisions = AskRevisionState()
+    private val activeAskQuestions = ConcurrentHashMap.newKeySet<Long>()
 
     /** 本轮做错的题号集合（完成页「刷本轮错题」用；开始新一轮即清空） */
     private var roundWrongIds: MutableSet<Long> = mutableSetOf()
@@ -215,6 +232,7 @@ class StudyViewModel(
             killed = session.question?.let { studyRepo.isKilled(it.id) } ?: false,
             deepSolved = q?.deepSolved ?: false,
             chat = q?.let(studyRepo::loadChat).orEmpty(),
+            asking = q?.id?.let(activeAskQuestions::contains) == true,
             roundWrongCount = roundWrongIds.size,
             roundWrongOnly = roundWrongFilter != null,
             filterSummary = filter?.takeIf { !it.isDefault }?.let { f ->
@@ -733,55 +751,67 @@ class StudyViewModel(
         val s = _state.value
         val q = s.session?.question ?: return
         if (s.asking) return
+        if (!activeAskQuestions.add(q.id)) return
 
         val userTurn = ChatTurn("user", text)
         val history = s.chat + userTurn
+        val revision = askRevisions.begin(q.id)
         _state.value = s.copy(chat = history, asking = true, askError = null, askOpen = true, askStream = "")
         Haptics.click()
         // 记下提问时的题目 id：请求途中切题的话，回答不能落到新题目头上
         val askedForId = q.id
         viewModelScope.launch {
-            // 用户问题先落库；即使随后切题或请求失败，也不会丢提问。
-            withContext(NonCancellable) { studyRepo.saveChat(q.id, history) }
-            val buf = StringBuilder()
-            var lastPush = 0L
-            fun push(force: Boolean = false) {
-                val now = System.currentTimeMillis()
-                if (!force && now - lastPush < 40L) return
-                lastPush = now
-                if (_state.value.session?.question?.id != askedForId) return
-                _state.value = _state.value.copy(askStream = buf.toString())
-            }
-            runCatching {
-                requestAsk(q, history) { delta ->
-                    buf.append(delta)
-                    push()
+            try {
+                // 用户问题先落库；即使随后切题或请求失败，也不会丢提问。
+                withContext(NonCancellable) { studyRepo.saveChat(q.id, history) }
+                val buf = StringBuilder()
+                var lastPush = 0L
+                fun push(force: Boolean = false) {
+                    val now = System.currentTimeMillis()
+                    if (!force && now - lastPush < 40L) return
+                    lastPush = now
+                    if (!askRevisions.isCurrent(q.id, revision)) return
+                    if (_state.value.session?.question?.id != askedForId) return
+                    _state.value = _state.value.copy(askStream = buf.toString())
                 }
-            }.fold(
-                onSuccess = { reply ->
-                    val assistantTurn = ChatTurn("assistant", reply)
-                    withContext(NonCancellable) {
-                        studyRepo.saveChat(q.id, history + assistantTurn)
+                runCatching {
+                    requestAsk(q, history) { delta ->
+                        buf.append(delta)
+                        push()
                     }
-                    if (_state.value.session?.question?.id == askedForId) {
+                }.fold(
+                    onSuccess = { reply ->
+                        if (askRevisions.isCurrent(q.id, revision)) {
+                            val assistantTurn = ChatTurn("assistant", reply)
+                            withContext(NonCancellable) {
+                                studyRepo.saveChat(q.id, history + assistantTurn)
+                            }
+                            if (_state.value.session?.question?.id == askedForId) {
+                                _state.value = _state.value.copy(
+                                    chat = history + assistantTurn,
+                                    asking = false,
+                                    askError = null,
+                                    askStream = ""
+                                )
+                            }
+                        }
+                    },
+                    onFailure = { e ->
+                        if (_state.value.session?.question?.id != askedForId) return@fold
+                        // 失败时把这条提问留在列表里（用户能改改再问），并给出原因
                         _state.value = _state.value.copy(
-                            chat = history + assistantTurn,
                             asking = false,
-                            askError = null,
+                            askError = e.message?.take(140) ?: "追问失败，请重试",
                             askStream = ""
                         )
                     }
-                },
-                onFailure = { e ->
-                    if (_state.value.session?.question?.id != askedForId) return@fold
-                    // 失败时把这条提问留在列表里（用户能改改再问），并给出原因
-                    _state.value = _state.value.copy(
-                        asking = false,
-                        askError = e.message?.take(140) ?: "追问失败，请重试",
-                        askStream = ""
-                    )
+                )
+            } finally {
+                activeAskQuestions.remove(q.id)
+                if (_state.value.session?.question?.id == askedForId) {
+                    _state.value = _state.value.copy(asking = false, askStream = "")
                 }
-            )
+            }
         }
     }
 
@@ -789,6 +819,7 @@ class StudyViewModel(
     fun clearAsk() {
         Haptics.click()
         val q = _state.value.session?.question
+        q?.let { askRevisions.invalidate(it.id) }
         _state.value = _state.value.copy(chat = emptyList(), askError = null)
         if (q != null) {
             viewModelScope.launch(NonCancellable) {

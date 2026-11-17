@@ -503,6 +503,21 @@ class ImportPipelineWorker(
                 coverage = com.examhelper.shua.data.parse.AnswerCoverage.audit(after)
             }
             if (okCount == 0 && chunks.isNotEmpty()) {
+                val report = ParseReportBuilder.build(
+                    chunkList,
+                    text,
+                    JsonCodec.readParsedLines(parsed),
+                    failedChunks
+                )
+                updateJob(jobId) {
+                    it.copy(
+                        stage = "FAILED",
+                        errorMessage = "AI 解析全部失败：${provider.name} 连接异常或返回不可解析",
+                        parseReportJson = report.encode(),
+                        streamTail = null
+                    )
+                }
+                tailScope.cancel()
                 return fail(jobId, "AI 解析全部失败：${provider.name} 连接异常或返回不可解析")
             }
             val finalLines = JsonCodec.readParsedLines(parsed)
