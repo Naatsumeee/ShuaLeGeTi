@@ -68,14 +68,22 @@ roundId TEXT DEFAULT NULL
 
 ### 5.2 AttemptRecord
 
-不为学习模式新增字段，复用：
+复用并补充：
 
 - `id`：自增唯一编号。
 - `runId`：学习时为 `StudyProgress.roundId`，测试模式继续用考试 run id。
 - `answeredAt`：作答时间戳。
 - `durationMs`：作答用时。
+- `correctKnown`：该题是否有可判定的参考答案。
 
 同一题在当前轮次存在多条记录时，按 `answeredAt DESC, id DESC` 选择最后一条。
+
+无参考答案的客观题仍保存用户选择，但：
+
+- `correct = false`
+- `correctKnown = false`
+
+这类记录用于恢复作答状态，但不得计入错题、正确数或正确率分母。
 
 ### 5.3 Question
 
@@ -300,6 +308,7 @@ revealed && (interactive || answered)
 ALTER TABLE study_progress ADD COLUMN roundId TEXT DEFAULT NULL;
 ALTER TABLE questions ADD COLUMN askChatJson TEXT DEFAULT NULL;
 ALTER TABLE import_jobs ADD COLUMN parseReportJson TEXT DEFAULT NULL;
+ALTER TABLE attempt_records ADD COLUMN correctKnown INTEGER NOT NULL DEFAULT 1;
 ```
 
 迁移要求：
@@ -327,6 +336,7 @@ ALTER TABLE import_jobs ADD COLUMN parseReportJson TEXT DEFAULT NULL;
 - parse report JSON 编解码与分组。
 - 当前轮次只恢复本轮作答。
 - 同题多记录按时间戳和 id 取最新。
+- 无参考答案的作答可恢复，但不进入错题或正确率统计。
 - 问 AI 只持久化完整回答。
 - chat JSON 编解码和清空。
 - 章节题型页 progress Flow 删除后不再返回旧进度。
