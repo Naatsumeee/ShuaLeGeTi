@@ -1,6 +1,6 @@
 ﻿# AGENTS.md — 刷了个题 (ShuaGeLeTi) 项目记忆
 
-> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-16（**v1.2.0 后待测批次**：B1/B2、维护任务、继续添加题目、多源更新与 PDF 字体子集）。
+> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-18（**v1.2.0 后 A/B/C 待真机批次**：导入 warm-up + 固定 worker 池、当前轮次作答恢复、每题问 AI 持久化、DB v17）。
 >
 > **文档分工**（别把三份混在一起）：
 > - `AGENTS.md`（本文件，**入库**）—— 项目的长期公共记忆：架构、决策、踩过的坑、待办。所有 Agent 都该读。
@@ -32,13 +32,13 @@ Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）�
 ## 技术栈与关键决策
 
 - Kotlin + Jetpack Compose（BOM 2024.12.01）+ Material3；MVVM（ViewModel 用 @JvmOverloads/SavedStateHandle 构造，无 DI 框架，`ShuaApp.instance.container` 手工容器）
-- **Room v16**（`data/db/`：Entities/Daos/AppDatabase，迁移 1→2→…→16 全部注册在 `AppDatabase.addMigrations`）。`fallbackToDestructiveMigration` **仍在**，新增字段必须写正式迁移，否则老用户升级即丢库。各版本加了什么：v2 `subtype`/`sharedStem`/`sharedOptionsJson`/`attempt_records.runId`/`durationMs`/`study_progress.filterJson`；v3 `sourcePage`；v4 `originalAnswer`；v5 `aiAnswer`/`answerVerified`/`deepSolved`；v6 三个 token 字段；v7 余额快照（已废弃）；v8 `import_jobs.streamTail`/`banks.pinned`/`banks.archived`；v9 `wrong_records.flagged`（重点标记，与「已掌握」互相独立）；**v10 是数据迁移**（`MIGRATION_9_10` 用 `HeadingClassifier.cleanChapter` 把库里已有的脏章节名就地洗掉，不重导）；**v11 也是数据迁移**（再洗一次 + `unifyChapterNames` 归一）；v12 新增 `balance_snapshots` 表；**v13** 给 `banks` 新增组/颜色/备注/排序/合并快照字段；**v14** 新增 `ai_usage_records` 统一 AI 调用账本（`callId`/`taskId`/模型/token/时间戳）；**v15** 给 `questions` 新增 `minimalSolved`；**v16** 给 `import_jobs` 新增 `targetBankId`，让「继续添加题目」在进程重开后仍能追加到原题库
+- **Room v17**（`data/db/`：Entities/Daos/AppDatabase，迁移 1→2→…→17 全部注册在 `AppDatabase.addMigrations`）。`fallbackToDestructiveMigration` **仍在**，新增字段必须写正式迁移，否则老用户升级即丢库。各版本加了什么：v2 `subtype`/`sharedStem`/`sharedOptionsJson`/`attempt_records.runId`/`durationMs`/`study_progress.filterJson`；v3 `sourcePage`；v4 `originalAnswer`；v5 `aiAnswer`/`answerVerified`/`deepSolved`；v6 三个 token 字段；v7 余额快照（已废弃）；v8 `import_jobs.streamTail`/`banks.pinned`/`banks.archived`；v9 `wrong_records.flagged`（重点标记，与「已掌握」互相独立）；**v10 是数据迁移**（`MIGRATION_9_10` 用 `HeadingClassifier.cleanChapter` 把库里已有的脏章节名就地洗掉，不重导）；**v11 也是数据迁移**（再洗一次 + `unifyChapterNames` 归一）；v12 新增 `balance_snapshots` 表；**v13** 给 `banks` 新增组/颜色/备注/排序/合并快照字段；**v14** 新增 `ai_usage_records` 统一 AI 调用账本（`callId`/`taskId`/模型/token/时间戳）；**v15** 给 `questions` 新增 `minimalSolved`；**v16** 给 `import_jobs` 新增 `targetBankId`，让「继续添加题目」在进程重开后仍能追加到原题库；**v17** 给 `study_progress` 新增 `roundId`、`questions` 新增 `askChatJson`、`import_jobs` 新增 `parseReportJson`、`attempt_records` 新增 `correctKnown`，用于当前轮次恢复、每题问 AI 持久化、解析审计和无参考答案统计隔离
 - 双 OCR 引擎（`data/ocr/`）：**默认 RapidOCR**（PP-OCRv5 ONNX，v1.0.11 起）+ ML Kit 中文 bundled（备选，轻量）；OCR 后做**双栏阅读顺序重排**（`MlKitOcrEngine.rebuildReadingOrder`，扫描试卷是左右双栏）；RapidOCR 额外跑**版面分析**（见「版面分析」节）
 - RapidOCR 为**源码模块** `rapidocr-src/OcrLibrary`（Apache-2.0，已入库 ~93MB）：NDK r27 + `ANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON` + onnxruntime **1.20**（16KB 页对齐，Maven 的 AAR 抽取）+ opencv-mobile 3.4.15（`src/sdk/`）。**16KB 页对齐是硬要求**（用户手机是 16KB 设备），换依赖时必须验证 PT_LOAD p_align=16384
-- 后台任务 = WorkManager 前台服务（dataSync 类型）：`ImportPipelineWorker`（导入/解析，断点续传按"已落盘分块"）与 `GenerateWorker`（AI 生成，断点续传按"已答即跳过"）；进度写 Room 表（import_jobs/generate_jobs），UI 观察 Flow
+- 后台任务 = WorkManager 前台服务（dataSync 类型）：`ImportPipelineWorker`（导入/解析，断点续传按"已落盘分块"）与 `GenerateWorker`（AI 生成，断点续传按"已答即跳过"）；进度写 Room 表（import_jobs/generate_jobs），UI 观察 Flow。导入分段现在先单独跑第一段 warm-up，再启动不超过配置并发数的固定 worker 池；完成一段立即补下一段，JSONL 由单一 writer 串行追加，状态只报“已完成 X/Y 段”
 - LLM：`data/llm/LlmClient.kt`（OpenAI 兼容 chat/completions，jsonMode 失败自动降级重试，max_tokens 支持）；**系统提示词集中**在 `data/llm/Prompts.kt`（用户可在设置页覆盖，稳定前缀为命中 DeepSeek 前缀缓存——命中价是未命中 1/50）
 - 答案生成：`data/generate/AnswerGenerator.kt` 批量 12 题/请求 × 3 批并发；三省六部=主部高权重 0.6 + 一致率 0.4，分歧存 dissent；**与题库原答案冲突时**原答案存 `Question.originalAnswer` 做题页双展示
-- 解析：AI（`LlmQuestionParser`，分块交 `ChunkPlanner` 按题目边界切分 + 重叠窗口，页码标记 `[[PG:n]]` 贯穿到 `Question.sourcePage`）+ 离线正则兜底（`TextQuestionParser`）；`OptionNormalizer` 合并重复选项字母并重映射答案（OCR 重复 B 类问题的修复）
+- 解析：AI（`LlmQuestionParser`，分块交 `ChunkPlanner` 按题目边界切分 + 重叠窗口，页码标记 `[[PG:n]]` 贯穿到 `Question.sourcePage`）+ 离线正则兜底（`TextQuestionParser`）；`OptionNormalizer` 合并重复选项字母并重映射答案（OCR 重复 B 类问题的修复）。题号支持 1-4 位（`1000-9999`），共享 `QuestionNumberBadge` 强制单行；缺失答案和失败分块写入 `ImportJob.parseReportJson`，解析完成页可展开查看页码、章节、题号、摘要与失败原因
 - 判分：`StudyRepository.judgeAnswer`（伴生对象，字母优先+选项内容兜底+文本归一化）
 - UI 主题：**Anthropic 暖纸 + 苹果液态玻璃 v2**（`ui/theme/Theme.kt` 色板与排版 + `ui/theme/Glass.kt` 玻璃组件与安全区扩展）。双套色板 `PaperPalette`（日间）/`OlivePalette`（夜间）：画布暖中性 Parchment、表层 Ivory、主色 Terracotta `#D97757`、错误 Sage `#B53333`、标注 Amber `#D97706`、边框 CreamLine `#F0EEE6`（夜间 `#30302E`）。字体：标题/大数字衬线（`serifTitle`，Georgia/Noto Serif CJK，字重 500），正文无衬线行高 1.6–1.75，数据等宽（`monoNumber`）。玻璃拟态统一走 `GlassSurface`/`PaperCard`/`CompactTopBar`/`FloatingDock`（backdrop blur 16dp + 半透明白内衬 + 高光边 + 内发光倒角）。
   - **安全区硬规范**：每页根容器必须 `.safeTopPadding().safeBottomPadding()`（`Glass.kt` 里的 Modifier 扩展）。Android 15 edge-to-edge 下自绘 Surface 不会自动避让状态栏/手势条，漏写就会被安卓状态栏或导航条盖住。
@@ -46,7 +46,7 @@ Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）�
   - 暗黑模式由用户在设置页决定（`SettingsStore.darkMode`：FOLLOW/LIGHT/DARK），**不再跟随系统**；`MainActivity` 读设置后传给 `ShuaTheme(darkTheme = ...)`。
   - **切题是跟手左右连续卡片**（v1.0.8，`StudyScreen.kt` 的 `PeekSlot`/`PeekPage` + 拖拽偏移量）：拖动时当前卡跟手平移、左右邻卡露出边缘，松手按阈值/速度吸附到上一题或下一题。三条硬约定：
     1. **邻卡排版必须与真卡逐像素同构** —— `PeekPage` 直接复用 `QuestionBody(q, peekState(...), vm, compact, interactive = false)`，内边距/字号/行距/选项行高全部共用；**绝不能再手写"降级预览"**（v1.0.8 之前就是这么写的：选项 9dp 内边距、题干最多 6 行、纯文本两行，滑入落地时整页文字间距"由小到大跳一下"）。
-    2. **邻卡 interactive = false**：`OptionRow(enabled = interactive && !state.answered)`、输入框 `readOnly`、`AnswerCard` 只在 `state.revealed && interactive` 时画；否则会误改当前题状态、或在背诵模式下提前泄题。
+    2. **邻卡 interactive = false**：`OptionRow(enabled = interactive && !state.answered)`、输入框 `readOnly`；解析卡条件必须是 `revealed && (interactive || answered)`，这样已答题的解析在滑动全程存在，未作答题和背题模式邻卡仍不提前泄题。
     3. **当前卡的投影是随位移自 0 升到 2.5dp 的暖色淡影**（`graphicsLayer { shadowElevation = 2.5f * prog * density; ambientShadowColor = shadowTint; spotShadowColor = shadowTint }`），不是旧的 `shadow(20.dp)` 硬黑边——用户明确反馈 20dp 一离手就"糊上一圈黑边"太突兀。
     4. 动画只播一次：`onDragStopped` 里 `animateTo(±w, tween(150))` 滑出 → 同一帧把 `snapCur` 换成目标题 + `frozen = true` + `drag = 0`，**不要再让 LaunchedEffect(pageKey) 从 ∓w 弹回 0**（那是"动画播两遍+中间闪一下"的根因）。
 - **本轮完成页**（`FinishedView`）：「返回」是主按钮、「刷本轮错题（N）」进独立子会话（`brushRoundWrong`，用 `roundFilterKey()` 的独立进度指纹，刷完点「完成」只清子进度不 reload）。
@@ -57,10 +57,21 @@ Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）�
 - 做题页**常驻入口两处**：`CompactTopBar` 右侧 `AskAiButton`（小屏自动收成纯图标）、解析区 `DeepSolveRow` 里的「追问 AI」。无参考答案的分支**不能提前 return**，否则连深度解题入口都没了。
 - 上下文 = `Prompts.ASK_DEFAULT` 系统提示 + 题目全文（题干/选项/参考答案/解析/当前作答）+ 已有对话轮次；`llmClient.chatWithMessages(jsonMode=false, maxTokens=1500)`。
 - 默认走 `providerDao.getPrimary()`，没有主部时退化为第一个启用中的模型；两者都没有 → "尚未配置 AI 模型，请到设置页添加"。
-- 对话状态只在内存（`StudyUiState.chat`），**切题即清空**（`reload` 重建 state）；请求途中切题用 `askedForId` 守卫，回答不会落到新题上。
+- 做题页对话现在按题目持久化到 `questions.askChatJson`：用户消息发送后立即落库，助手只在完整结束后落库；失败、取消或切题会丢弃半截回答但保留用户问题。重新进入题目恢复完整历史；请求途中仍用 `askedForId` 守卫，旧请求不能写到新题。
 - 深度解题成功后**不再自动弹面板**（v1.0.7 起）：解析刚生成要先读，追问入口常驻在解析下方 `DeepSolveRow`。`applyDeepSolve` 返回的 `updated` 必须回写 `questions` 与 `session.question`，否则页面仍显示旧解析；回填前用 `stillHere = session?.question?.id == q.id` 守卫，避免请求途中切题被旧结果覆盖。
 - **流式逐字输出**（v1.0.8）：`LlmClient.chatStream(...)` 走 SSE（`data:`/`data: [DONE]`，解析在 `data/llm/SseParser.kt`），深度解题与问 AI 都边生成边刷新到 UI（`StudyUiState.deepStreaming` / `chat` 的最后一轮），流断了会自动重试一次；非流式 `chatWithMessages` 仍保留给批量生成等场景。
 - 深度解题失败会**带退避重试 3 次**（0 / 900 / 2200 ms），只对配置/鉴权/参数类错误立即放弃（`isRetryable`）；`max_tokens = 4096`（`DEEP_SOLVE_MAX_TOKENS`），`ChatResult.truncated`（finishReason=="length"）且正文为空时判失败重试，**绝不把半截解析写库**。
+- 问 AI 的 Sheet 只允许一个 IME inset 来源，内部不再叠加 `imePadding`；输入区用 `BringIntoViewRequester` 保证键盘弹出时可见。新消息完成时动画滚到底，流式输出按约 80 字符节流 `scrollToItem`，不能按每次 token 重启滚动动画；按钮、下滑和关闭共用同一个受保护的关闭 Job。
+
+## A/B/C 批次（2026-11-18，DB v17，待真机）
+
+- 导入：`ChunkParseScheduler` 先 warm-up，再固定 worker 数并发；快段完成后立即接队列下一段。持久化顺序按 `chunkIndex * 100000 + indexInChunk` 读取，完成顺序不会打乱题序。全部新分块失败时任务失败；单段失败进入解析问题报告但不阻塞其余段。
+- 做题：`StudyProgress.roundId` 是当前轮次唯一标识，学习记录复用 `AttemptRecord.runId`。每次作答先更新 UI，再立即写库；上一题/下一题/答题卡跳转先等待待写记录。恢复时按 `answeredAt DESC, id DESC` 取每题最新记录，因此切屏、重进和进程重启都能恢复当前轮。
+- 无参考答案：作答仍保存，但 `correctKnown=false`，`correct=false` 只作为存储占位；这类记录不进退错题、不计正确数、不进正确率分母。开始新一轮和随机重开必须生成新 `roundId`，不能继续显示上一轮作答。
+- 成功页/进度页：标准、速刷、背题、随机及“刷本轮错题”共用最后一题完成逻辑；章节题型页订阅 Room Flow，完成或删除的轮次实时消失。
+- 当前验证：全量 **327 项单测通过**；Release + R8 + `shrinkResources` 构建成功。隔离 worktree 产物 `Shualegeti-arm64-v8a-1.2.0.apk` 为 **71,162,283 B / 67.87 MiB**、`versionCode 1117`、仅 arm64-v8a；因为未复制正式 keystore，这个包是 debug 签名，只能用于构建验证，不能覆盖用户手机上的正式签名包。
+- 尚未完成：v16→v17 真机覆盖升级、真实文档 warm-up/并发导入、四位数题号视觉、强停后轮次恢复、已答解析滑动连续性、键盘/Sheet 动画回归。没有连接设备时不要声称这些已通过。
+- RapidOCR 2/3/4 路并发仍是后续 D 模块，尚未实现。A/B/C 合入并由用户接受前不要混入 native 实例池与实验开关。
 
 ## 公式与 Markdown 渲染（`ui/theme/Latex.kt` + `ui/theme/Markdown.kt`，v1.0.6）
 
@@ -106,6 +117,7 @@ RapidOCR 识别一页分两步：**先版面分析，再识别文字**。模型�
 - DeepSeek 模型名现为 deepseek-flash / deepseek-v4-pro（旧 deepseek-chat 已下线）
 - APK 体积（实测 v1.1.0）：**release arm64-v8a ≈ 81MB**、debug arm64-v8a ≈ 93MB（内置 PP-OCRv5 + PP-DocLayout-S 模型与 onnxruntime/opencv 原生库是大头）。v1.0.0 起启用 **ABI splits**，release 自 v1.1.0 起用**正式签名**（根目录 `release.jks` + `keystore.properties`，均在 .gitignore；密码表缺失时构建会优雅回退 debug 签名）
 - **R8 + PDF 资源瘦身（2026-11-16）**：release 已开启 `isMinifyEnabled=true` 与 `isShrinkResources=true`，并只从 BouncyCastle 排除 5 个 PQC 属性文件（`lowmc.properties`、`sike/p434|p503|p610|p751.properties`），`x509` 资源保留。`app/proguard-rules.pro` 只补 PDFBox 可选 JP2 后端的 `-dontwarn`，不要改成整包 `-keep`。当时 `versionCode 1098` 的 arm64 APK 为 **67.77 MiB / 71,061,151 B**，`apkanalyzer` 下载估算 44.9 MiB；全量 298 项单测通过，修复包已覆盖安装到真机并冷启动 25 秒无崩溃。实际 PDF 导入仍需用户回归。R8 后 `mapping.txt` 是崩溃定位必需产物（`app/build/outputs/mapping/release/`），必须随版本保存。
+- **A/B/C release 验证（2026-11-18）**：代码提交 `74ca786` 构建的 arm64 APK 为 **67.87 MiB / 71,162,283 B**，`versionCode 1117`，SHA-256 `E538936AAFC2057D6F978353CBA9EB0B72648DE47F9A4B47E74CE7280C548386`。包内已确认仅 arm64 原生库、PP-OCRv5/版面模型保留、5 个 PQC 属性文件不存在、X.509 资源保留；`mapping.txt` 中 `OcrResult`、`Point`、`TextBlock` 均保持原名。此包因隔离 worktree 缺少 `release.jks`/`keystore.properties` 而是 debug 签名，不能安装覆盖正式签名手机。
 - **R8 的 JNI 契约类必须 keep**：RapidOCR native 侧用 `FindClass/NewObject` 创建 `OcrResult`、`Point`、`TextBlock`，已在 `rapidocr-src/OcrLibrary/consumer-rules.pro` 保留这三个类及成员。删掉会让 OCR 直接 `ClassNotFoundException: com.benjaminwan.ocrlibrary.Point` 并以 SIGABRT 闪退；R8 后看 `mapping.txt` 应仍有原名映射。
 - **最后一题完成页（2026-11-16 修）**：标准/速刷/背题/随机以及“刷本轮错题”子会话共用 `StudyScreen`，不能再用 `nextQuestion != null` 作为唯一前进条件。最后一题答完或背题已揭晓时必须允许 `vm.next()` 推进到 `finished`；`StudyNavigationTest` 锁住这四种模式。测试模式走独立 `ExamScreen`，最后一题本来就是“交卷”，不受此 bug 影响。
 - **只发 arm64-v8a**（v1.0.11 之后，`app/build.gradle.kts` 的 `splits.abi.include` 默认 `listOf("arm64-v8a")`）：v7a 是 2017 年前 32 位老机、x86_64 只有模拟器/Chromebook，真实手机用户接近 0，却让 Release 多 156MB。**要给模拟器或老机出包时用命令行覆盖，不要改代码**：`./gradlew assembleDebug -PabiOverride=arm64-v8a,x86_64`（逗号分隔）。**Release 产物统一命名为 `Shualegeti-<abi>-<version>.apk`**（如 `Shualegeti-arm64-v8a-1.1.0.apk`），由 `app/build.gradle.kts` 末尾的 `applicationVariants.configureEach` 设置 `outputFileName`。**debug 包名保持 `app-<abi>-debug.apk` 不变** —— `启动模拟器.bat` 按这个名字找包装机。根目录同步放同名 release 包；模拟器需先带 override 构建 x86_64 包。
