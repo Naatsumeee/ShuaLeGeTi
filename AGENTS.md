@@ -69,8 +69,8 @@ Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）�
 - 做题：`StudyProgress.roundId` 是当前轮次唯一标识，学习记录复用 `AttemptRecord.runId`。每次作答先更新 UI，再立即写库；上一题/下一题/答题卡跳转先等待待写记录。恢复时按 `answeredAt DESC, id DESC` 取每题最新记录，因此切屏、重进和进程重启都能恢复当前轮。
 - 无参考答案：作答仍保存，但 `correctKnown=false`，`correct=false` 只作为存储占位；这类记录不进退错题、不计正确数、不进正确率分母。开始新一轮和随机重开必须生成新 `roundId`，不能继续显示上一轮作答。
 - 成功页/进度页：标准、速刷、背题、随机及“刷本轮错题”共用最后一题完成逻辑；章节题型页订阅 Room Flow，完成或删除的轮次实时消失。
-- 当前验证：全量 **327 项单测通过**；Release + R8 + `shrinkResources` 构建成功。隔离 worktree 产物 `Shualegeti-arm64-v8a-1.2.0.apk` 为 **71,162,283 B / 67.87 MiB**、`versionCode 1117`、仅 arm64-v8a；因为未复制正式 keystore，这个包是 debug 签名，只能用于构建验证，不能覆盖用户手机上的正式签名包。
-- 尚未完成：v16→v17 真机覆盖升级、真实文档 warm-up/并发导入、四位数题号视觉、强停后轮次恢复、已答解析滑动连续性、键盘/Sheet 动画回归。没有连接设备时不要声称这些已通过。
+- 当前验证：全量 **327 项单测通过**；Release + R8 + `shrinkResources` 构建成功。正式签名的 arm64 验证包为 **71,162,283 B / 67.87 MiB**、`versionCode 1118`，已通过 `adb install -r` 覆盖安装到真机 `e87a3fe4`；冷启动 18 秒进程存活，无 Room/SQLite 或 `AndroidRuntime` 崩溃。
+- 尚未完成：真实文档 warm-up/并发导入、四位数题号视觉、强停后轮次恢复、已答解析滑动连续性、键盘/Sheet 动画回归。冷启动只能证明 v17 迁移没有立即崩溃，仍需用户确认原有题库/作答/错题完整。
 - RapidOCR 2/3/4 路并发仍是后续 D 模块，尚未实现。A/B/C 合入并由用户接受前不要混入 native 实例池与实验开关。
 
 ## 公式与 Markdown 渲染（`ui/theme/Latex.kt` + `ui/theme/Markdown.kt`，v1.0.6）
@@ -117,7 +117,7 @@ RapidOCR 识别一页分两步：**先版面分析，再识别文字**。模型�
 - DeepSeek 模型名现为 deepseek-flash / deepseek-v4-pro（旧 deepseek-chat 已下线）
 - APK 体积（实测 v1.1.0）：**release arm64-v8a ≈ 81MB**、debug arm64-v8a ≈ 93MB（内置 PP-OCRv5 + PP-DocLayout-S 模型与 onnxruntime/opencv 原生库是大头）。v1.0.0 起启用 **ABI splits**，release 自 v1.1.0 起用**正式签名**（根目录 `release.jks` + `keystore.properties`，均在 .gitignore；密码表缺失时构建会优雅回退 debug 签名）
 - **R8 + PDF 资源瘦身（2026-11-16）**：release 已开启 `isMinifyEnabled=true` 与 `isShrinkResources=true`，并只从 BouncyCastle 排除 5 个 PQC 属性文件（`lowmc.properties`、`sike/p434|p503|p610|p751.properties`），`x509` 资源保留。`app/proguard-rules.pro` 只补 PDFBox 可选 JP2 后端的 `-dontwarn`，不要改成整包 `-keep`。当时 `versionCode 1098` 的 arm64 APK 为 **67.77 MiB / 71,061,151 B**，`apkanalyzer` 下载估算 44.9 MiB；全量 298 项单测通过，修复包已覆盖安装到真机并冷启动 25 秒无崩溃。实际 PDF 导入仍需用户回归。R8 后 `mapping.txt` 是崩溃定位必需产物（`app/build/outputs/mapping/release/`），必须随版本保存。
-- **A/B/C release 验证（2026-11-18）**：代码提交 `74ca786` 构建的 arm64 APK 为 **67.87 MiB / 71,162,283 B**，`versionCode 1117`，SHA-256 `E538936AAFC2057D6F978353CBA9EB0B72648DE47F9A4B47E74CE7280C548386`。包内已确认仅 arm64 原生库、PP-OCRv5/版面模型保留、5 个 PQC 属性文件不存在、X.509 资源保留；`mapping.txt` 中 `OcrResult`、`Point`、`TextBlock` 均保持原名。此包因隔离 worktree 缺少 `release.jks`/`keystore.properties` 而是 debug 签名，不能安装覆盖正式签名手机。
+- **A/B/C release 验证（2026-11-18）**：分支提交 `f188619` 构建的正式签名 arm64 APK 为 **67.87 MiB / 71,162,283 B**，`versionCode 1118`，SHA-256 `8508B00A5ED0F63505144EB996358DB58E42EFD7B73EEC333D7DA26DFFFF0654`，签名证书 `CN=ShuaGeLeTi`。包内已确认仅 arm64 原生库、PP-OCRv5/版面模型保留、5 个 PQC 属性文件不存在、X.509 资源保留；`mapping.txt` 中 `OcrResult`、`Point`、`TextBlock` 均保持原名。该包已覆盖安装到真机 `e87a3fe4`，手机版本从 `1098` 升到 `1118`，冷启动 18 秒无崩溃。构建用的临时 keystore 副本已删除，未提交。
 - **R8 的 JNI 契约类必须 keep**：RapidOCR native 侧用 `FindClass/NewObject` 创建 `OcrResult`、`Point`、`TextBlock`，已在 `rapidocr-src/OcrLibrary/consumer-rules.pro` 保留这三个类及成员。删掉会让 OCR 直接 `ClassNotFoundException: com.benjaminwan.ocrlibrary.Point` 并以 SIGABRT 闪退；R8 后看 `mapping.txt` 应仍有原名映射。
 - **最后一题完成页（2026-11-16 修）**：标准/速刷/背题/随机以及“刷本轮错题”子会话共用 `StudyScreen`，不能再用 `nextQuestion != null` 作为唯一前进条件。最后一题答完或背题已揭晓时必须允许 `vm.next()` 推进到 `finished`；`StudyNavigationTest` 锁住这四种模式。测试模式走独立 `ExamScreen`，最后一题本来就是“交卷”，不受此 bug 影响。
 - **只发 arm64-v8a**（v1.0.11 之后，`app/build.gradle.kts` 的 `splits.abi.include` 默认 `listOf("arm64-v8a")`）：v7a 是 2017 年前 32 位老机、x86_64 只有模拟器/Chromebook，真实手机用户接近 0，却让 Release 多 156MB。**要给模拟器或老机出包时用命令行覆盖，不要改代码**：`./gradlew assembleDebug -PabiOverride=arm64-v8a,x86_64`（逗号分隔）。**Release 产物统一命名为 `Shualegeti-<abi>-<version>.apk`**（如 `Shualegeti-arm64-v8a-1.1.0.apk`），由 `app/build.gradle.kts` 末尾的 `applicationVariants.configureEach` 设置 `outputFileName`。**debug 包名保持 `app-<abi>-debug.apk` 不变** —— `启动模拟器.bat` 按这个名字找包装机。根目录同步放同名 release 包；模拟器需先带 override 构建 x86_64 包。
