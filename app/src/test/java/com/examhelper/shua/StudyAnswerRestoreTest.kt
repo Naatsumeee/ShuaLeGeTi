@@ -225,7 +225,9 @@ class StudyAnswerRestoreTest {
         val bankStat = db.recordDao().observeBankStats().first().single()
         assertEquals(2, bankStat.cnt)
         assertEquals(1, bankStat.ok)
+        assertEquals(2, db.recordDao().observeKnownAttemptCountSince(timestamp).first())
         assertEquals(1, db.recordDao().observeCorrectCountSince(timestamp).first())
+        assertEquals(2, db.recordDao().observeKnownTotalAttempts().first())
         assertEquals(1, db.recordDao().observeTotalCorrect().first())
     }
 

@@ -192,11 +192,17 @@ interface RecordDao {
     @Query("SELECT COUNT(*) FROM attempt_records WHERE answeredAt >= :since")
     fun observeAttemptCountSince(since: Long): Flow<Int>
 
+    @Query("SELECT COUNT(*) FROM attempt_records WHERE correctKnown = 1 AND answeredAt >= :since")
+    fun observeKnownAttemptCountSince(since: Long): Flow<Int>
+
     @Query("SELECT COUNT(*) FROM attempt_records WHERE correct = 1 AND correctKnown = 1 AND answeredAt >= :since")
     fun observeCorrectCountSince(since: Long): Flow<Int>
 
     @Query("SELECT COUNT(*) FROM attempt_records")
     fun observeTotalAttempts(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM attempt_records WHERE correctKnown = 1")
+    fun observeKnownTotalAttempts(): Flow<Int>
 
     @Query("SELECT COUNT(*) FROM attempt_records WHERE correct = 1 AND correctKnown = 1")
     fun observeTotalCorrect(): Flow<Int>
