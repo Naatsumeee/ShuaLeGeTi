@@ -97,6 +97,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.examhelper.shua.data.db.Question
 import com.examhelper.shua.data.db.QuestionType
 import com.examhelper.shua.data.db.StudyMode
+import com.examhelper.shua.data.model.ChatTurn
 import com.examhelper.shua.data.model.JsonCodec
 import com.examhelper.shua.data.model.QuestionChoices
 import com.examhelper.shua.ui.bank.typeLabel

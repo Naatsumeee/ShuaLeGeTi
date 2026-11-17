@@ -6,9 +6,9 @@ import androidx.lifecycle.viewModelScope
 import com.examhelper.shua.ShuaApp
 import com.examhelper.shua.data.llm.ChatMessage
 import com.examhelper.shua.data.llm.Prompts
+import com.examhelper.shua.data.model.ChatTurn
 import com.examhelper.shua.ui.sound.Haptics
 import com.examhelper.shua.ui.study.AskAiState
-import com.examhelper.shua.ui.study.ChatTurn
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first

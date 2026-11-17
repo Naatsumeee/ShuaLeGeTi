@@ -50,6 +50,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.examhelper.shua.data.model.ChatTurn
 import com.examhelper.shua.ui.theme.Markdown
 import com.examhelper.shua.ui.theme.Latex
 import com.examhelper.shua.ui.theme.monoStyle

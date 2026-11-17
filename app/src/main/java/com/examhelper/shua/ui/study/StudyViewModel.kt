@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.examhelper.shua.ShuaApp
 import com.examhelper.shua.data.db.Question
 import com.examhelper.shua.data.db.StudyMode
+import com.examhelper.shua.data.model.ChatTurn
 import com.examhelper.shua.data.model.StudyFilter
 import com.examhelper.shua.data.repo.BankRepository
 import com.examhelper.shua.data.repo.StudyRepository
@@ -63,11 +64,6 @@ data class StudyUiState(
     /** 当前是否已在「刷本轮错题」的子会话里 */
     val roundWrongOnly: Boolean = false
 )
-
-/** 一条追问对话 */
-data class ChatTurn(val role: String, val text: String) {
-    val isUser: Boolean get() = role == "user"
-}
 
 /** 深度解题返回的 JSON 结构 */
 @Serializable

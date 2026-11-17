@@ -4,6 +4,7 @@ import com.examhelper.shua.data.db.QuestionType
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.util.UUID
 
 /** 题目选项 */
 @Serializable
@@ -126,6 +127,16 @@ data class DissentEntry(
     val selfConfidence: Int? = null
 )
 
+@Serializable
+data class ChatTurn(
+    val role: String,
+    val text: String,
+    val id: String = UUID.randomUUID().toString(),
+    val createdAt: Long = System.currentTimeMillis()
+) {
+    val isUser: Boolean get() = role == "user"
+}
+
 object JsonCodec {
     val json: Json = Json {
         ignoreUnknownKeys = true
@@ -148,6 +159,12 @@ object JsonCodec {
 
     fun decodeIdList(raw: String?): List<Long> =
         runCatching { json.decodeFromString<List<Long>>(raw ?: return emptyList()) }
+            .getOrDefault(emptyList())
+
+    fun encodeChat(turns: List<ChatTurn>): String = json.encodeToString(turns)
+
+    fun decodeChat(raw: String?): List<ChatTurn> =
+        runCatching { json.decodeFromString<List<ChatTurn>>(raw ?: return emptyList()) }
             .getOrDefault(emptyList())
 
     fun encodeStringList(items: List<String>): String? =
