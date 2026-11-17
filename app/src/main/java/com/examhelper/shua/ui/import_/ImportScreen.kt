@@ -53,6 +53,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.examhelper.shua.data.db.QuestionType
 import com.examhelper.shua.data.llm.Prompts
 import com.examhelper.shua.data.model.ParsedLine
+import com.examhelper.shua.data.parse.FailedChunk
+import com.examhelper.shua.data.parse.MissingAnswer
 import com.examhelper.shua.data.parse.ParseReport
 import com.examhelper.shua.ui.bank.typeLabel
 import com.examhelper.shua.ui.theme.ChipTone
@@ -84,6 +86,7 @@ fun ImportScreen(
     // 电脑端整理题库的路线说明默认收起：它是「少数人才需要」的长文本，
     // 常驻展开会把首屏的选择文件按钮挤出屏幕。
     var showPcGuide by remember { mutableStateOf(false) }
+    var reportExpanded by remember(state.jobId, state.parseReport) { mutableStateOf(false) }
     LaunchedEffect(promptCopied) {
         if (promptCopied) {
             kotlinx.coroutines.delay(4000)
@@ -471,18 +474,50 @@ fun ImportScreen(
                         TextButton(onClick = vm::resumeJob) { Text("补齐失败段", color = extra.terracotta) }
                     }
                 }
-            state.parseReport?.takeIf {
-                it.failedChunks.isNotEmpty() || it.missingAnswers.isNotEmpty()
-            }?.let { report ->
-                ParseReportCard(report)
-            }
-            LazyColumn(
-                Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(7.dp),
-                contentPadding = PaddingValues(bottom = 6.dp)
-            ) {
-                itemsIndexed(state.preview) { i, q -> ParsedCard(i + 1, q) }
-            }
+                val report = state.parseReport?.takeIf {
+                    it.failedChunks.isNotEmpty() || it.missingAnswers.isNotEmpty()
+                }
+                val failedByChunk = report?.failedChunks?.groupBy { it.chunkIndex }.orEmpty()
+                val missingByChunk = report?.missingAnswers?.groupBy { it.chunkIndex }.orEmpty()
+                val reportChunkIndexes = (failedByChunk.keys + missingByChunk.keys).distinct().sorted()
+                LazyColumn(
+                    Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(7.dp),
+                    contentPadding = PaddingValues(bottom = 6.dp)
+                ) {
+                    if (report != null) {
+                        item(key = "parse-report-header") {
+                            ParseReportHeader(
+                                report = report,
+                                expanded = reportExpanded,
+                                onToggle = { reportExpanded = !reportExpanded }
+                            )
+                        }
+                        if (reportExpanded) {
+                            reportChunkIndexes.forEach { chunkIndex ->
+                                item(key = "report-chunk-$chunkIndex") {
+                                    Text(
+                                        "分段 ${chunkIndex + 1}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = extra.terracottaDeep,
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                    )
+                                }
+                                failedByChunk[chunkIndex].orEmpty().forEachIndexed { index, failed ->
+                                    item(key = "report-failed-$chunkIndex-$index") {
+                                        ParseFailedChunkRow(failed)
+                                    }
+                                }
+                                missingByChunk[chunkIndex].orEmpty().forEachIndexed { index, missing ->
+                                    item(key = "report-missing-$chunkIndex-$index") {
+                                        ParseMissingAnswerRow(missing)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    itemsIndexed(state.preview) { i, q -> ParsedCard(i + 1, q) }
+                }
                 if (state.stage == ImportViewModel.Stage.SAVING) {
                     Row(
                         Modifier.fillMaxWidth().padding(vertical = 12.dp),
@@ -519,103 +554,98 @@ fun ImportScreen(
 }
 
 @Composable
-private fun ParseReportCard(report: ParseReport) {
+private fun ParseReportHeader(report: ParseReport, expanded: Boolean, onToggle: () -> Unit) {
     val extra = shuaColors
-    var expanded by remember { mutableStateOf(false) }
-    val failedByChunk = report.failedChunks.groupBy { it.chunkIndex }
-    val missingByChunk = report.missingAnswers.groupBy { it.chunkIndex }
-    val chunkIndexes = (failedByChunk.keys + missingByChunk.keys).distinct().sorted()
-
     PaperCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(15.dp)) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        Row(
+            Modifier.fillMaxWidth().clickableTab(onToggle).padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            SemanticChip("解析问题", ChipTone.Amber)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "失败 ${report.failedChunks.size} 段 · 缺答案 ${report.missingAnswers.size} 题",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                if (expanded) "收起" else "展开",
+                style = MaterialTheme.typography.labelSmall,
+                color = extra.terracottaDeep
+            )
+        }
+    }
+}
+
+@Composable
+private fun ParseFailedChunkRow(failed: FailedChunk) {
+    val extra = shuaColors
+    PaperCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(
-                Modifier.fillMaxWidth().clickableTab { expanded = !expanded },
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                SemanticChip("解析问题", ChipTone.Amber)
-                Spacer(Modifier.width(8.dp))
+                SemanticChip("失败段", ChipTone.Sage)
                 Text(
-                    "失败 ${report.failedChunks.size} 段 · 缺答案 ${report.missingAnswers.size} 题",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f),
+                    pageRangeLabel(failed.pageFrom, failed.pageTo),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            }
+            Text(
+                failed.reason,
+                style = MaterialTheme.typography.labelSmall,
+                color = extra.sage,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun ParseMissingAnswerRow(missing: MissingAnswer) {
+    PaperCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (missing.number != null) {
+                    QuestionNumberBadge(missing.number, compact = true)
+                } else {
+                    SemanticChip("无题号", ChipTone.Neutral)
+                }
+                Text(
+                    pageListLabel(missing.pages),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+            }
+            missing.chapter?.let {
                 Text(
-                    if (expanded) "收起" else "展开",
+                    it,
                     style = MaterialTheme.typography.labelSmall,
-                    color = extra.terracottaDeep
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
-            if (expanded) {
-                chunkIndexes.forEach { chunkIndex ->
-                    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                        Text(
-                            "分段 ${chunkIndex + 1}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = extra.terracottaDeep
-                        )
-                        failedByChunk[chunkIndex].orEmpty().forEach { failed ->
-                            Row(
-                                Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                SemanticChip("失败段", ChipTone.Sage)
-                                Text(
-                                    pageRangeLabel(failed.pageFrom, failed.pageTo),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
-                            }
-                            Text(
-                                failed.reason,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = extra.sage,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        missingByChunk[chunkIndex].orEmpty().forEach { missing ->
-                            Row(
-                                Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                if (missing.number != null) {
-                                    QuestionNumberBadge(missing.number, compact = true)
-                                } else {
-                                    SemanticChip("无题号", ChipTone.Neutral)
-                                }
-                                Text(
-                                    pageListLabel(missing.pages),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.outline,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                            missing.chapter?.let {
-                                Text(
-                                    it,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                            Text(
-                                missing.stemPreview,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-                }
-            }
+            Text(
+                missing.stemPreview,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
