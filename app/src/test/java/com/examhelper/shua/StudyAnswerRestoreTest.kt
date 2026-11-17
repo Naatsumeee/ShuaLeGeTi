@@ -3,11 +3,14 @@ package com.examhelper.shua
 import androidx.room.Room
 import com.examhelper.shua.data.db.AttemptRecord
 import com.examhelper.shua.data.db.AppDatabase
+import com.examhelper.shua.data.db.QuestionType
 import com.examhelper.shua.data.db.StudyMode
 import com.examhelper.shua.data.db.StudyProgress
 import com.examhelper.shua.data.db.WrongRecord
+import com.examhelper.shua.data.repo.RoundAnswer
 import com.examhelper.shua.data.repo.latestAnswerMap
 import com.examhelper.shua.data.repo.StudyRepository
+import com.examhelper.shua.ui.study.restoreStudyAnswer
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -84,6 +87,19 @@ class StudyAnswerRestoreTest {
 
         assertEquals("C", answer?.userAnswer)
         assertNull(answer?.correct)
+    }
+
+    @Test
+    fun restoredChoiceDecodesLettersAndCorrectness() {
+        val restored = restoreStudyAnswer(
+            questionType = QuestionType.MULTIPLE,
+            answer = RoundAnswer("ABD", true, 1L, 9L)
+        )
+
+        assertEquals(setOf("A", "B", "D"), restored.selected)
+        assertEquals("", restored.textInput)
+        assertEquals(true, restored.answered)
+        assertEquals(true, restored.correct)
     }
 
     private lateinit var db: AppDatabase

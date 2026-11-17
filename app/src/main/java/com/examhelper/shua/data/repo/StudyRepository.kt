@@ -151,6 +151,7 @@ class StudyRepository(
         mode: StudyMode,
         userAnswer: String,
         correct: Boolean,
+        correctKnown: Boolean = true,
         selfRated: Boolean = false,
         runId: String? = null,
         durationMs: Long? = null
@@ -165,6 +166,7 @@ class StudyRepository(
                 mode = mode,
                 userAnswer = userAnswer,
                 correct = correct,
+                correctKnown = correctKnown,
                 selfRated = selfRated,
                 runId = runId,
                 durationMs = durationMs

@@ -9,6 +9,7 @@ import com.examhelper.shua.data.db.StudyMode
 import com.examhelper.shua.data.model.ChatTurn
 import com.examhelper.shua.data.model.StudyFilter
 import com.examhelper.shua.data.repo.BankRepository
+import com.examhelper.shua.data.repo.RoundAnswer
 import com.examhelper.shua.data.repo.StudyRepository
 import com.examhelper.shua.data.repo.StudySession
 import com.examhelper.shua.data.settings.AppSettings
@@ -88,6 +89,35 @@ private data class DeepSolveBatchPayload(
  */
 private const val DEEP_SOLVE_MAX_TOKENS = 4096
 
+internal data class RestoredStudyAnswer(
+    val selected: Set<String>,
+    val textInput: String,
+    val answered: Boolean,
+    val correct: Boolean?
+)
+
+internal fun restoreStudyAnswer(
+    questionType: com.examhelper.shua.data.db.QuestionType?,
+    answer: RoundAnswer?
+): RestoredStudyAnswer {
+    if (answer == null) return RestoredStudyAnswer(emptySet(), "", false, null)
+    val choice = questionType == com.examhelper.shua.data.db.QuestionType.SINGLE ||
+        questionType == com.examhelper.shua.data.db.QuestionType.MULTIPLE ||
+        questionType == com.examhelper.shua.data.db.QuestionType.JUDGE
+    return RestoredStudyAnswer(
+        selected = if (choice) {
+            answer.userAnswer.filter { it.isLetter() }
+                .map { it.uppercaseChar().toString() }
+                .toSet()
+        } else {
+            emptySet()
+        },
+        textInput = if (choice) "" else answer.userAnswer,
+        answered = true,
+        correct = answer.correct
+    )
+}
+
 class StudyViewModel(
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
@@ -113,6 +143,7 @@ class StudyViewModel(
     private var questions: List<Question> = emptyList()
     private var appSettings: AppSettings = AppSettings()
     private var countdownJob: Job? = null
+    private var answerWriteJob: Job? = null
     private var questionShownAt: Long = 0L
 
     /** 本轮做错的题号集合（完成页「刷本轮错题」用；开始新一轮即清空） */
@@ -124,15 +155,7 @@ class StudyViewModel(
     /** 主轮总题数（错题子会话结束后要回到主轮完成页，得知道它是几题） */
     private var mainRoundTotal: Int = 0
 
-    /**
-     * 本轮内答过的题：题号 → (作答内容, 是否答对)。
-     *
-     * **刻意只存在内存里，不查数据库**。旧实现用 `latestAttempt()` 翻历史记录，
-     * 结果只要这题在以前的任何时候做过（哪怕隔了一个月、刷的是别的模式），
-     * 进来就是「已揭晓」—— 用户看到的就是「任何模式刷题都会直接显示解析」。
-     * 现在只有本轮真正答过的题才会还原；退出重进、开新一轮都从零开始。
-     * 背题模式（RECITE）不受影响，它本来就该直接展开解析。
-     */
+    /** 当前轮次内答过的题，由 roundId 对应的数据库记录恢复。 */
     private val roundAnswers: MutableMap<Long, Pair<String, Boolean?>> = mutableMapOf()
 
     /** 新一轮开始：清掉本轮的作答记忆（题库/模式/筛选变化走这里） */
@@ -166,30 +189,26 @@ class StudyViewModel(
             runCatching { studyRepo.clearRound(bankId, mode) }
         }
         questionShownAt = System.currentTimeMillis()
-        // 划回本轮已经答过的题时还原作答与解析；没答过的题一律干净态。
-        // 注意这里读的是**内存里的本轮记忆**，不是数据库历史 —— 后者会让
-        // 「以前做过的题」一进来就揭晓答案（用户报的「所有模式都直接显示解析」）。
+        // 只恢复当前 roundId 的记录；历史轮次仍用于统计/错题本，但不能混进本轮。
         val q = session.question
-        val memo = q?.let { roundAnswers[it.id] }
-        val restored = memo != null
-        val restoredLetters = when {
-            !restored -> emptySet()
-            q?.type == com.examhelper.shua.data.db.QuestionType.MULTIPLE ||
-                q?.type == com.examhelper.shua.data.db.QuestionType.SINGLE ||
-                q?.type == com.examhelper.shua.data.db.QuestionType.JUDGE ->
-                memo!!.first.filter { it.isLetter() }.map { it.uppercaseChar().toString() }.toSet()
-            else -> emptySet()
+        val dbAnswers = studyRepo.latestAnswersByRound(session.roundId)
+        roundAnswers.clear()
+        roundWrongIds.clear()
+        dbAnswers.forEach { (questionId, answer) ->
+            roundAnswers[questionId] = answer.userAnswer to answer.correct
+            if (answer.correct == false) roundWrongIds.add(questionId)
         }
+        val restoredAnswer = restoreStudyAnswer(q?.type, q?.let { dbAnswers[it.id] })
         _state.value = StudyUiState(
             loading = false,
             bankName = bank?.name.orEmpty(),
             mode = mode,
             session = session,
-            answered = restored,
-            correct = memo?.second,
-            selected = restoredLetters,
-            textInput = if (restored && restoredLetters.isEmpty()) memo?.first.orEmpty() else "",
-            revealed = restored || mode == StudyMode.RECITE,
+            answered = restoredAnswer.answered,
+            correct = restoredAnswer.correct,
+            selected = restoredAnswer.selected,
+            textInput = restoredAnswer.textInput,
+            revealed = restoredAnswer.answered || mode == StudyMode.RECITE,
             favorite = session.question?.let { studyRepo.isFavorite(it.id) } ?: false,
             killed = session.question?.let { studyRepo.isKilled(it.id) } ?: false,
             deepSolved = q?.deepSolved ?: false,
@@ -250,22 +269,24 @@ class StudyViewModel(
             revealed = true,
             selected = selected
         )
-        // 记进本轮作答记忆：划回这道题时能看到答案与解析（退出重进即失效）
+        // 先更新内存，再立即落库；翻页会等待这条写入，避免刚答完就被 reload 覆盖。
         roundAnswers[q.id] = answerStr to correct
         // 震动只给一记：选项点击和判对错不叠加，否则用户听到的就是「震两下」。
         // 答对/答错用不同手感，但仍然只有一次触发。
         Haptics.click()
         // 记进「本轮错题」：完成页据此提供「刷本轮错题」入口
         if (correct == false) roundWrongIds.add(q.id)
-        if (hasAnswer) {
-            viewModelScope.launch {
+        answerWriteJob = viewModelScope.launch {
+            runCatching {
                 studyRepo.submitAnswer(
                     question = q, mode = mode,
                     userAnswer = answerStr, correct = correct == true,
+                    correctKnown = hasAnswer,
+                    runId = s.session?.roundId,
                     durationMs = duration
                 )
                 // 作答即刷新进度时间戳：即便用户直接杀进程，下次也能看到准确时间
-                runCatching { studyRepo.touchProgress(bankId, mode) }
+                studyRepo.touchProgress(bankId, mode)
             }
         }
         if (mode == StudyMode.SPEED) beginCountdown(appSettings.speedModeSeconds)
@@ -286,20 +307,24 @@ class StudyViewModel(
         val q = s.session?.question ?: return
         if (s.answered) return
         val duration = elapsedMs()
-        viewModelScope.launch {
-            studyRepo.submitAnswer(
-                question = q, mode = mode,
-                userAnswer = s.textInput.take(200),
-                correct = correct, selfRated = true,
-                durationMs = duration
-            )
-            runCatching { studyRepo.touchProgress(bankId, mode) }
-            _state.value = _state.value.copy(answered = true, correct = correct)
-            if (!correct) roundWrongIds.add(q.id)
-            // 震动只给一记（与选择题一致），选对选错不额外加震
-            Haptics.click()
-            if (mode == StudyMode.SPEED) beginCountdown(appSettings.speedModeSeconds)
+        _state.value = s.copy(answered = true, correct = correct, revealed = true)
+        roundAnswers[q.id] = s.textInput.take(200) to correct
+        if (!correct) roundWrongIds.add(q.id)
+        // 震动只给一记（与选择题一致），选对选错不额外加震
+        Haptics.click()
+        answerWriteJob = viewModelScope.launch {
+            runCatching {
+                studyRepo.submitAnswer(
+                    question = q, mode = mode,
+                    userAnswer = s.textInput.take(200),
+                    correct = correct, correctKnown = true, selfRated = true,
+                    runId = s.session?.roundId,
+                    durationMs = duration
+                )
+                studyRepo.touchProgress(bankId, mode)
+            }
         }
+        if (mode == StudyMode.SPEED) beginCountdown(appSettings.speedModeSeconds)
     }
 
     fun next() {
@@ -309,6 +334,7 @@ class StudyViewModel(
         // 这里不再震 —— 两面都调就会出现「点一次震两下」。
         if (s.session?.finished != true) {
             viewModelScope.launch {
+                answerWriteJob?.join()
                 studyRepo.advance(bankId, mode)
                 reload()
             }
@@ -321,6 +347,7 @@ class StudyViewModel(
         if (index < 0) return
         countdownJob?.cancel()
         viewModelScope.launch {
+            answerWriteJob?.join()
             studyRepo.seek(bankId, mode, index)
             reload()
         }
@@ -331,6 +358,7 @@ class StudyViewModel(
         if (mode == StudyMode.RANDOM) return
         countdownJob?.cancel()
         viewModelScope.launch {
+            answerWriteJob?.join()
             studyRepo.seek(bankId, mode, (indexInQueue - 1).coerceAtLeast(0))
             reload()
         }
@@ -341,6 +369,7 @@ class StudyViewModel(
         // 重新随机巩固同样算开新一轮
         beginNewRound()
         viewModelScope.launch {
+            answerWriteJob?.join()
             studyRepo.resetRandom(bankId, questions.map { it.id })
             reload()
         }
@@ -353,6 +382,7 @@ class StudyViewModel(
         // 还是直接摊着解析（用户报的「任何模式都直接显示解析」的另一半原因）。
         beginNewRound()
         viewModelScope.launch {
+            answerWriteJob?.join()
             studyRepo.seek(bankId, mode, 0)
             reload()
         }
