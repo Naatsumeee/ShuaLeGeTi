@@ -69,7 +69,7 @@ Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）�
 - 做题：`StudyProgress.roundId` 是当前轮次唯一标识，学习记录复用 `AttemptRecord.runId`。每次作答先更新 UI，再立即写库；上一题/下一题/答题卡跳转先等待待写记录。恢复时按 `answeredAt DESC, id DESC` 取每题最新记录，因此切屏、重进和进程重启都能恢复当前轮。
 - 无参考答案：作答仍保存，但 `correctKnown=false`，`correct=false` 只作为存储占位；这类记录不进退错题、不计正确数、不进正确率分母。开始新一轮和随机重开必须生成新 `roundId`，不能继续显示上一轮作答。
 - 成功页/进度页：标准、速刷、背题、随机及“刷本轮错题”共用最后一题完成逻辑；章节题型页订阅 Room Flow，完成或删除的轮次实时消失。
-- 当前验证：全量 **337 项单测通过**；Release + R8 + `shrinkResources` 构建成功。当前正式签名 arm64 包为 **71,178,667 B / 67.88 MiB**、`versionCode 1120`，已通过 `adb install -r` 覆盖安装到真机 `e87a3fe4`，原数据保留。
+- 当前验证：全量 **337 项单测通过**；Release + R8 + `shrinkResources` 构建成功。v1.3.0 正式签名 arm64 包为 **71,178,667 B / 67.88 MiB**、`versionCode 1123`。
 - 真机确认：生成过程卡片已能持续显示流式内容；4 路 RapidOCR 完整处理 124 页扫描 PDF 未崩溃，随后完成 22 段 AI 解析并得到 1000 题。严格同文件的 1/2/3/4 路耗时对比尚未做，不能宣称可信加速倍数。
 - 尚未完成：其余 A/B/C 交互回归仍需用户按实际使用继续确认；照片和短文档上的多路开销也未单独测。
 
@@ -138,6 +138,7 @@ RapidOCR 识别一页分两步：**先版面分析，再识别文字**。模型�
 - **R8 + PDF 资源瘦身（2026-11-16）**：release 已开启 `isMinifyEnabled=true` 与 `isShrinkResources=true`，并只从 BouncyCastle 排除 5 个 PQC 属性文件（`lowmc.properties`、`sike/p434|p503|p610|p751.properties`），`x509` 资源保留。`app/proguard-rules.pro` 只补 PDFBox 可选 JP2 后端的 `-dontwarn`，不要改成整包 `-keep`。当时 `versionCode 1098` 的 arm64 APK 为 **67.77 MiB / 71,061,151 B**，`apkanalyzer` 下载估算 44.9 MiB；全量 298 项单测通过，修复包已覆盖安装到真机并冷启动 25 秒无崩溃。实际 PDF 导入仍需用户回归。R8 后 `mapping.txt` 是崩溃定位必需产物（`app/build/outputs/mapping/release/`），必须随版本保存。
 - **A/B/C release 验证（2026-11-18）**：分支提交 `f188619` 构建的正式签名 arm64 APK 为 **67.87 MiB / 71,162,283 B**，`versionCode 1118`，SHA-256 `8508B00A5ED0F63505144EB996358DB58E42EFD7B73EEC333D7DA26DFFFF0654`，签名证书 `CN=ShuaGeLeTi`。包内已确认仅 arm64 原生库、PP-OCRv5/版面模型保留、5 个 PQC 属性文件不存在、X.509 资源保留；`mapping.txt` 中 `OcrResult`、`Point`、`TextBlock` 均保持原名。该包已覆盖安装到真机 `e87a3fe4`，手机版本从 `1098` 升到 `1118`，冷启动 18 秒无崩溃。构建用的临时 keystore 副本已删除，未提交。
 - **D/流式预览验证（2026-11-18）**：`versionCode 1120` 的正式签名 arm64 APK 为 **71,178,667 B / 67.88 MiB**，SHA-256 `F7CDE9150D86395F9F8C00FE18C87EFD264BE8E4D798C1BA9D52C15F04F5B397`。已覆盖安装真机并完成 4 路 124 页扫描件；用户确认生成过程卡片能显示实际流式内容。
+- **v1.3.0 正式发布（2026-11-18）**：从 `main` merge commit `cff6d259c3d3d65f1c4c6e7d471da5601daea741` 构建，正式签名 arm64 APK 为 **71,178,667 B / 67.88 MiB**、`versionName 1.3.0`、`versionCode 1123`，SHA-256 `6E62FBCDB878923BD197AF8FD22F9D3F3EFB9B3B83762A1CA3576BDE816973C0`。核验证书 `CN=ShuaGeLeTi`，仅含 arm64 ABI，OCR/版面模型保留，5 个 PQC 资源不存在且 X.509 保留，R8 mapping 中五个 JNI 契约类均保持原名。按用户要求本轮未执行 adb 安装或手机推送，更新检查由用户自行测试。
 - **R8 的 JNI 契约类必须 keep**：RapidOCR native 侧用 `FindClass/NewObject` 创建 `OcrResult`、`Point`、`TextBlock`，Java 侧通过 `OcrEngine`/`LayoutEngine` 的 native 方法创建和释放 handle，已在该模块 `consumer-rules.pro` 保留这五个类及成员。删掉会让 OCR 直接 `ClassNotFoundException` 或 JNI 符号找不到并以 SIGABRT 闪退；R8 后看 `mapping.txt` 应仍有原名映射。
 - **最后一题完成页（2026-11-16 修）**：标准/速刷/背题/随机以及“刷本轮错题”子会话共用 `StudyScreen`，不能再用 `nextQuestion != null` 作为唯一前进条件。最后一题答完或背题已揭晓时必须允许 `vm.next()` 推进到 `finished`；`StudyNavigationTest` 锁住这四种模式。测试模式走独立 `ExamScreen`，最后一题本来就是“交卷”，不受此 bug 影响。
 - **只发 arm64-v8a**（v1.0.11 之后，`app/build.gradle.kts` 的 `splits.abi.include` 默认 `listOf("arm64-v8a")`）：v7a 是 2017 年前 32 位老机、x86_64 只有模拟器/Chromebook，真实手机用户接近 0，却让 Release 多 156MB。**要给模拟器或老机出包时用命令行覆盖，不要改代码**：`./gradlew assembleDebug -PabiOverride=arm64-v8a,x86_64`（逗号分隔）。**Release 产物统一命名为 `Shualegeti-<abi>-<version>.apk`**（如 `Shualegeti-arm64-v8a-1.1.0.apk`），由 `app/build.gradle.kts` 末尾的 `applicationVariants.configureEach` 设置 `outputFileName`。**debug 包名保持 `app-<abi>-debug.apk` 不变** —— `启动模拟器.bat` 按这个名字找包装机。根目录同步放同名 release 包；模拟器需先带 override 构建 x86_64 包。
@@ -178,7 +179,7 @@ GH_TOKEN=$TOKEN gh release list                    # GitHub API 操作
 4. 提交并推送分支，创建或更新 PR；PR 必须用 **merge commit 或 rebase merge**，不能 squash。`versionCode` 依赖提交数，squash 会让新包小于已安装版本而无法覆盖升级。
 5. PR 合入 `main` 后 fetch，切到最终 merge commit，重新执行 `git rev-list --count HEAD` 得到实际 `N = 1000 + count`。Release APK 必须从这个最终 commit 构建，不能沿用 PR 分支上的预构建包。
 6. 正式构建后必须核验：`apksigner verify --print-certs` 是 `CN=ShuaGeLeTi`；`aapt dump badging` 的 versionName 与上方 `N` 正确；记录 APK 大小与 SHA256；R8 mapping 保留 OCR JNI 契约类。
-7. 在最终 build commit 上创建 `vX.Y.Z` tag 并推送。GitHub Release 说明第一行必须是 `versionCode: N`，正文按 **新增 / 优化 / 修复** 三段写；先推 tag，再 `gh release create --verify-tag`。
+7. 在最终 build commit 上创建 `vX.Y.Z` tag 并推送。GitHub Release 说明第一行必须是 `versionCode: N`，正文按 **新增 / 优化 / 修复** 三段写；先推 tag，再创建 Release 并上传 APK。`gh` 令牌缺 `read:org` 时用 GitHub REST API，`repo` scope 已足够。
 8. 用 `scripts/publish-gitee-release.ps1` 在 `Naatsumeee/ShuaLeGeTi-release` 创建同名 Gitee Release 并上传同一 APK。脚本使用 `curl.exe`，兼容 Windows PowerShell 5.1。
 9. 用 `scripts/generate-update-json.ps1` 写入刚构建 APK 的实际 `versionName/versionCode/SHA256`、GitHub/Gitee 下载地址与三段式摘要；提交 `update.json` 到 `main` 并推送。
 10. 用 `scripts/sync-gitee-manifest.ps1` 把同一 `update.json` 同步到 Gitee 小仓库 `master`，确保 Gitee Raw、jsDelivr、GitHub Raw 三源一致。
