@@ -26,13 +26,15 @@ $release = Invoke-RestMethod `
         target_commitish = $TargetBranch
     }
 
-$asset = Invoke-RestMethod `
-    -Method Post `
-    -Uri "https://gitee.com/api/v5/repos/$Owner/$Repo/releases/$($release.id)/attach_files" `
-    -Form @{
-        access_token = $token
-        file         = Get-Item -LiteralPath $apk
-    }
+$response = & curl.exe --silent --show-error --fail-with-body `
+    -X POST `
+    -F "access_token=$token" `
+    -F "file=@$apk" `
+    "https://gitee.com/api/v5/repos/$Owner/$Repo/releases/$($release.id)/attach_files"
+if ($LASTEXITCODE -ne 0) {
+    throw "Gitee 附件上传失败，curl 退出码 $LASTEXITCODE"
+}
+$asset = $response | ConvertFrom-Json
 
 Write-Host "Gitee release: https://gitee.com/$Owner/$Repo/releases/tag/$Tag"
 Write-Host "Gitee APK: $($asset.browser_download_url)"

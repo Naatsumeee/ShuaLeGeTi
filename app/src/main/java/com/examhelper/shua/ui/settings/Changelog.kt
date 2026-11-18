@@ -20,9 +20,39 @@ data class NoteItem(val kind: Kind, val text: String) {
 
 val RELEASE_NOTES: List<ReleaseNote> = listOf(
     ReleaseNote(
+        version = "1.3.0",
+        date = "2026-11-18",
+        current = true,
+        items = listOf(
+            NoteItem(NoteItem.Kind.NEW, "AI 题库导入新增“首段优先”和连续接力解析：开始后更快看到首批题目，后续分段持续推进，不再长时间空白"),
+            NoteItem(NoteItem.Kind.NEW, "做题进度按每一轮实时保存；切屏、退出或重新进入后，已答题目、作答结果与解析会自动恢复"),
+            NoteItem(NoteItem.Kind.NEW, "每道题的“问 AI”对话会随题目保存，重新进入后仍能查看完整回答并继续追问"),
+            NoteItem(NoteItem.Kind.NEW, "RapidOCR 新增 1/2/3/4 路实验并发设置，多页扫描件可按设备性能提速；2 路以上会明确提示内存和闪退风险"),
+            NoteItem(NoteItem.Kind.NEW, "同一文件已有 OCR 结果时，可查看识别时间与所用引擎，并选择复用旧结果或重新识别"),
+            NoteItem(NoteItem.Kind.NEW, "解析完成页可展开查看缺失答案与失败分段，精确定位到页码、章节和题号；题号支持 1000-9999 四位数"),
+            NoteItem(NoteItem.Kind.IMPROVE, "AI 导入改为固定并发池即时补位，状态按“已完成几段”展示；前一段完成并空出线程后立即接续下一段，不按分段死等"),
+            NoteItem(NoteItem.Kind.IMPROVE, "生成过程卡片持续显示各分段的真实流式内容，并保持顺序和最终状态稳定，不再只闪出开头一行"),
+            NoteItem(NoteItem.Kind.IMPROVE, "做题页补齐“下一题 / 请先作答 / 回答正确 / 回答错误”及面板高度变化的过渡动画"),
+            NoteItem(NoteItem.Kind.IMPROVE, "已作答的解析在切题动画期间持续显示；“深度解题”和“问 AI”入口保持常驻，长题滚动后切题也始终回到题目顶部"),
+            NoteItem(NoteItem.Kind.IMPROVE, "问 AI 的键盘避让、输入框可见性和流式滚动重新整理，避免输入法遮挡与动画错乱"),
+            NoteItem(NoteItem.Kind.IMPROVE, "章节题型页每次进入都会刷新进度，已经做完的轮次会及时消失"),
+            NoteItem(NoteItem.Kind.IMPROVE, "扫描 PDF 采用单渲染器、多路 OCR、按页号顺序落盘；4 路在旗舰机上约比 1 路快一倍，但内存与发热开销更高"),
+            NoteItem(NoteItem.Kind.IMPROVE, "安装包继续精简资源并保留 OCR、PDF、公式与字体所需能力，正式 Release 包更小"),
+            NoteItem(NoteItem.Kind.FIX, "修复 AI 导入每段都返回空结果后无限循环、始终无法解析出题目的问题"),
+            NoteItem(NoteItem.Kind.FIX, "修复离线解析在最后一段卡住、无法正常完成的问题"),
+            NoteItem(NoteItem.Kind.FIX, "修复标准做题模式最后一题答完后无法进入完成页，并同步覆盖速刷、背题、随机和本轮错题模式"),
+            NoteItem(NoteItem.Kind.FIX, "修复重新进入答题后旧作答结果消失、轮次进度错乱，以及已做完轮次仍显示旧进度的问题"),
+            NoteItem(NoteItem.Kind.FIX, "修复题号超过三位数时题号圆圈换行、数字与题干错位的问题"),
+            NoteItem(NoteItem.Kind.FIX, "修复 RapidOCR 导入意外闪退后，重新进入任务仍会再次闪退的问题；异常退出后下次会自动切回 1 路并提示"),
+            NoteItem(NoteItem.Kind.FIX, "修复“下一题 / 请先作答”文字跑到左上角、按钮未常驻，以及滑动时控件跳动的问题"),
+            NoteItem(NoteItem.Kind.FIX, "修复问 AI 再次输入时输入法遮挡、旧回答覆盖新对话，以及切换题目后历史丢失的问题"),
+            NoteItem(NoteItem.Kind.FIX, "修复 AI 实时解析只显示最开始一行、后续流式输出看不到的问题"),
+        )
+    ),
+    ReleaseNote(
         version = "1.2.0",
         date = "2026-11-14",
-        current = true,
+        current = false,
         items = listOf(
             NoteItem(NoteItem.Kind.NEW, "新增题库组、题库合并与撤销合并，支持自定义名称、备注和装饰色"),
             NoteItem(NoteItem.Kind.NEW, "新增错题 PDF 导出，支持题库/章节、题后或文末解析、深度/极简/仅答案及无答案模式"),

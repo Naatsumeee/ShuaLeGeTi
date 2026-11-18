@@ -1,6 +1,6 @@
 ﻿# AGENTS.md — 刷了个题 (ShuaGeLeTi) 项目记忆
 
-> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-18（**v1.2.0 后 A/B/C/D 真机验证批次**：导入 warm-up + 固定 worker 池、当前轮次作答恢复、每题问 AI 持久化、RapidOCR 1-4 路、流式预览串行写、DB v17）。
+> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-18（**v1.3.0 发布批次**：A/B/C/D 全量合入，导入固定并发池、当前轮次恢复、每题问 AI 持久化、RapidOCR 1-4 路、流式预览稳定化、DB v17）。
 >
 > **文档分工**（别把三份混在一起）：
 > - `AGENTS.md`（本文件，**入库**）—— 项目的长期公共记忆：架构、决策、踩过的坑、待办。所有 Agent 都该读。
@@ -82,6 +82,16 @@ Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）�
 - 崩溃守卫用 PID 标记活跃的多路任务。进程异常退出后，下一次多路任务会通过 `RapidOcrRuntimeGuard` 自动降为 1 路并在设置页提示，避免反复闪退。`markStarted()` 必须同步 `commit()`，否则 native SIGABRT 前可能来不及落盘。
 - 小米 2410DPN6CC（SM8750、约 16GB RAM）实测 4 路处理 124 页：约 84 页时 Total PSS `4,479,718 kB`、Native Heap `3,025,740 kB`、Swap PSS `1,362,537 kB`；约 105 页时 PSS `4,504,174 kB`、Native `3,003,000 kB`、Swap `1,405,285 kB`。即使旗舰机也属于高开销，低端机不应默认开启。
 
+### RapidOCR 后续提速优先级（2026-11-18 分析）
+
+- 用户体感 4 路比 1 路约快一倍，不是接近四倍；尚无同文件严格 benchmark。继续堆到 8 路会放大 ONNX 会话内存、Swap 和线程竞争，不应增加。
+- **第一优先（低风险）**：去掉无用的框选调试图链路。当前 native 每页会克隆整图、画文本框、再做一次全页 Bitmap/JNI 转换，但业务只消费 `textBlocks` 和文字；预计整体 `10%-20%` 收益，并降低多路内存压力。
+- **第二优先（低风险）**：PDF 渲染页方向固定，可只对 PDF 关闭 AngleNet，单张照片继续保留；预计 `5%-20%`，取决于每页文字行数。
+- **第三优先（实测调参）**：比较 3 路×每路 2 OCR 线程、4 路×每路 2 线程和当前 4 路×每路 1 线程。4×1 没吃满 8 核；3×2 可能因减少 Swap 而接近甚至优于 4×2。
+- **第二阶段**：DB 检测长边从 1920 试降到 1600。识别 crop 仍来自 1400 宽渲染图，主要减少检测耗时；预计 `5%-15%`，需抽样检查小字漏检。
+- **计算级优化**：INT8 量化 OCR 模型可能再快 `30%-50%`，但必须用现有题库做准确率回归；NNAPI/GPU 或跨 native 实例共享模型权重属于大改，不应和普通发版混做。
+- 任何提速都必须用同一份文件强制重新 OCR，至少 3 次比较总耗时、PSS/Swap、OCR 字符量、题数和答案覆盖率；体感不能替代 benchmark。
+
 ## 公式与 Markdown 渲染（`ui/theme/Latex.kt` + `ui/theme/Markdown.kt`，v1.0.6）
 
 - 两套渲染器**都是自研、零第三方依赖**。调研过 `ru.noties:jlatexmath-android`（GPL+CE、只出 AndroidView）与 `io.github.huarangmeng:latex-renderer`（MIT 但要求 compileSdk 36），都不合用。
@@ -160,17 +170,21 @@ GH_TOKEN=$TOKEN gh release list                    # GitHub API 操作
 
 > 2026-11-14 起，`C:\Users\xutia\AppData\Local\Android\Sdk\platform-tools` 已加入当前用户 PATH；新开的终端可直接调用 `adb`。
 
-### 发版流程（v1.1.0 走通的顺序）
+### 发版流程（v1.3.0 起统一走这套）
 
-1. `app/build.gradle.kts` 只改 `versionName`；`versionCode = 1000 + git rev-list --count HEAD` 自动生成，同一提交重复构建保持一致
-2. `ui/settings/Changelog.kt` 顶部插一条 ReleaseNote：上一条 `current = false`，新条 `current = true`；
-   文案面向用户（写"能感知到什么"，不写实现）。**「共 N 个版本」是 `RELEASE_NOTES.size` 自动算的，不用改。**
-3. 全量单测通过 → `./gradlew assembleRelease`
-4. `apksigner verify --print-certs` 确认签名 DN 是 `CN=ShuaGeLeTi`（不是 `CN=Android Debug`）
-5. `aapt dump badging` 确认 versionCode / versionName；GitHub Release 说明**第一行必须写 `versionCode: N`**，N 与 APK 一致
-6. commit → push main
-7. `git tag -a vX.Y.Z -m "..."` + push tag → `gh release create vX.Y.Z --verify-tag --title ... --notes-file ... <apk>`
-   （`--target <短SHA>` 会被 GitHub 拒绝为 `target_commitish is invalid`，所以先推 tag 再 `--verify-tag`）
+1. 从 `main` 拉 `codex/<release-name>` 分支；`app/build.gradle.kts` 只改 `versionName`，`versionCode = 1000 + git rev-list --count HEAD` 自动生成。
+2. `ui/settings/Changelog.kt` 顶部新增 ReleaseNote：上一条 `current = false`，新条 `current = true`。文案按 **新增 / 优化 / 修复** 三段顺序写，面向用户可感知的结果；「共 N 个版本」自动计算。
+3. 同步 README 下载文件名，更新 AGENTS/MEMORY 与本轮验证记录；全量单测、Release + R8 + `shrinkResources` 构建通过。
+4. 提交并推送分支，创建或更新 PR；PR 必须用 **merge commit 或 rebase merge**，不能 squash。`versionCode` 依赖提交数，squash 会让新包小于已安装版本而无法覆盖升级。
+5. PR 合入 `main` 后 fetch，切到最终 merge commit，重新执行 `git rev-list --count HEAD` 得到实际 `N = 1000 + count`。Release APK 必须从这个最终 commit 构建，不能沿用 PR 分支上的预构建包。
+6. 正式构建后必须核验：`apksigner verify --print-certs` 是 `CN=ShuaGeLeTi`；`aapt dump badging` 的 versionName 与上方 `N` 正确；记录 APK 大小与 SHA256；R8 mapping 保留 OCR JNI 契约类。
+7. 在最终 build commit 上创建 `vX.Y.Z` tag 并推送。GitHub Release 说明第一行必须是 `versionCode: N`，正文按 **新增 / 优化 / 修复** 三段写；先推 tag，再 `gh release create --verify-tag`。
+8. 用 `scripts/publish-gitee-release.ps1` 在 `Naatsumeee/ShuaLeGeTi-release` 创建同名 Gitee Release 并上传同一 APK。脚本使用 `curl.exe`，兼容 Windows PowerShell 5.1。
+9. 用 `scripts/generate-update-json.ps1` 写入刚构建 APK 的实际 `versionName/versionCode/SHA256`、GitHub/Gitee 下载地址与三段式摘要；提交 `update.json` 到 `main` 并推送。
+10. 用 `scripts/sync-gitee-manifest.ps1` 把同一 `update.json` 同步到 Gitee 小仓库 `master`，确保 Gitee Raw、jsDelivr、GitHub Raw 三源一致。
+11. 端到端复核：GitHub/Gitee 资产可下载且 SHA256 与 `update.json` 一致；GitHub Release `draft=false` 且 latest 指向新版本；三个 raw manifest 都返回新 `versionCode`。
+
+> `update.json` 的 SHA 只有在 APK 构建后才能确定，因此通常会在 tag 后多一个“清单收尾”提交。tag/Release 仍固定在实际构建的那个 merge commit；清单提交只发布元数据，不重新构建 APK。
 
 **重发同名版本时还有四步**（v1.1.0 第二次发版走通过）：
 
@@ -298,7 +312,7 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - GitHub API 的 403 已实测为未认证 IP 限流（`X-RateLimit-Remaining: 0`）；Gitee OpenAPI 同样观测到 60 次/小时额度，所以 App 检查更新走 Gitee Raw，不依赖 Gitee API。
 - App 当前解析 `versionName/versionCode/notes/downloads/releaseUrl`；`publishedAt` 和 `sha256` 只是清单元数据，**App 内没有校验 APK SHA256**。安装时仍由 Android 校验 APK 签名必须与已安装包一致。
 - 更新检查采用**首个成功且可解析的清单**，不会继续比较其他源是否有更高版本。发版后必须及时同步 Gitee `update.json`，否则旧清单会遮住 jsDelivr/GitHub 新版本。
-- `scripts/publish-gitee-release.ps1` 使用 PowerShell 7 的 `Invoke-RestMethod -Form`；本机没有 `pwsh` 时不能直接运行，`sync-gitee-manifest.ps1` 已兼容 Windows PowerShell 5.1。
+- `scripts/publish-gitee-release.ps1` 用 `Invoke-RestMethod` 创建 Release，再用系统自带 `curl.exe -F` 上传附件，兼容 Windows PowerShell 5.1；`sync-gitee-manifest.ps1` 同样兼容 PS5.1。
 
 ## AI 解析流式预览（`ImportPipelineWorker` + `ImportScreen.kt`，v1.0.11）
 

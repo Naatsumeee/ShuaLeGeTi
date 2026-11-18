@@ -4,7 +4,7 @@
 >
 > 先看 **[快速上手.md](快速上手.md)** —— 从申请 DeepSeek API Key、导入题库，到刷题、错题重刷、换机迁移，一份文档走完全流程，含截图级的界面路径说明与常见问题。
 >
-> 只想下载安装：直接去 [Releases](https://github.com/Naatsumeee/ShuaLeGeTi/releases) 拿 `Shualegeti-arm64-v8a-1.2.0.apk`。
+> 只想下载安装：直接去 [Releases](https://github.com/Naatsumeee/ShuaLeGeTi/releases) 拿 `Shualegeti-arm64-v8a-1.3.0.apk`。
 
 [![Release](https://img.shields.io/github/v/release/Naatsumeee/ShuaLeGeTi)](https://github.com/Naatsumeee/ShuaLeGeTi/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen.svg)](LICENSE)
@@ -20,14 +20,14 @@
 ### 题库导入
 - **多源导入**：docx / 文字型 PDF / 扫描型 PDF / 拍照 / 粘贴文本 / **Markdown 题库** / 标准题库 JSON
 - **让 AI 帮你整理题库**：复制内置格式化提示词给任意 AI，让它直接产出可一键导入的 `.json`
-- **双 OCR 引擎**（均完全离线）：ML Kit 中文（轻量快速）+ RapidOCR **PP-OCRv5**（高精度，符号与密集小字更准），导入时可任选
+- **双 OCR 引擎**（均完全离线）：ML Kit 中文（轻量快速）+ RapidOCR **PP-OCRv5**（高精度，符号与密集小字更准），导入时可任选；RapidOCR 支持 1/2/3/4 路实验并发并带崩溃自动降级
 - **先看版面再认字**：PP-DocLayout-S 按标题 / 正文 / 表格 / 公式分区，页眉页脚与页码自动跳过
 - **双栏重排**：由文字行块的垂直投影算出真实中缝，左右双栏扫描试卷按栏读完，不会整段串行
 - **AI 结构化解析**：题目、选项、答案、章节、页码、题型全部分类；支持医学 **A1/A2/A3/B 型题**分组（共用题干、共用选项自动聚合）；章末集中答案表按题号回填；OCR 错字按"只修不改"原则纠正
 - **判断题自动成型**：原文没给「正确 / 错误」两个选项也会自动补齐，答案写成「对 / 错 / √ / × / T / F」都能识别，不会因为缺选项就答不了
 - **答案表精确回填**：题号按「章 + 题型分组」各自编号对应，扫描件的章末集中答案不再整章错位或丢失
 - **轻量、便宜、可控**：同一提示词前缀命中缓存（DeepSeek 命中价仅为未命中 1/50）；解析默认不启用思考模式（结构化抽取用不上，白白烧掉输出预算）；分块 6000 字为实测最优（再放大反而会截断丢题）
-- **后台流水线**：WorkManager 前台服务运行，切应用 / 锁屏不中断；分块并行、断点续传，中断后只补失败段不重复计费；**OCR 阶段逐页落盘**，一本扫描件跑到一半被杀掉也不用从头再来
+- **后台流水线**：WorkManager 前台服务运行，切应用 / 锁屏不中断；首段优先返回，后续固定并发池连续接力，分块断点续传；**OCR 阶段逐页落盘**，一本扫描件跑到一半被杀掉也不用从头再来
 
 ### 刷题模式
 | 模式 | 说明 |
@@ -79,7 +79,7 @@
 |---|---|---|
 | `Shualegeti-arm64-v8a-<版本>.apk` | arm64-v8a | 绝大多数主流手机（**当前只发这一种**） |
 
-- 命名规则：`Shualegeti-<架构>-<版本号>.apk`，例如 `Shualegeti-arm64-v8a-1.2.0.apk`
+- 命名规则：`Shualegeti-<架构>-<版本号>.apk`，例如 `Shualegeti-arm64-v8a-1.3.0.apk`
 - 系统：Android 8.0（API 26）及以上；原生库全部按 **16KB 页对齐**构建，兼容新设备
 - AI 功能需在「设置」配置任意 OpenAI 兼容模型；不配置也可正常离线刷题
 - 从 **v1.1.0 起使用正式签名**。此前所有版本都是调试签名，两者证书不同，
