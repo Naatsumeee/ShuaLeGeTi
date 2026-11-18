@@ -181,6 +181,10 @@ object JsonCodec {
                 runCatching { json.decodeFromString<ParsedLine>(line) }.getOrNull()
             }
         }.getOrDefault(emptyList())
+
+    /** 编码中间 JSONL；不能直接写 data class 的 toString()，否则恢复时全部被跳过。 */
+    fun encodeParsedLines(lines: List<ParsedLine>): String =
+        lines.joinToString("\n", postfix = "\n") { json.encodeToString(it) }
 }
 
 fun ParsedLine.toParsedQuestion(): ParsedQuestion = ParsedQuestion(

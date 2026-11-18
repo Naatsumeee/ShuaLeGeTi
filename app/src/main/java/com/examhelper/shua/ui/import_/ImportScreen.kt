@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -70,6 +71,9 @@ import com.examhelper.shua.ui.theme.safeTopPadding
 import com.examhelper.shua.ui.theme.serifTitle
 import com.examhelper.shua.ui.theme.shuaColors
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun ImportScreen(
@@ -288,6 +292,32 @@ fun ImportScreen(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.outline
                             )
+                                    when {
+                                        state.checkingOcrCache -> Row(
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            CircularProgressIndicator(
+                                                Modifier.size(14.dp),
+                                                strokeWidth = 2.dp,
+                                                color = extra.terracotta
+                                            )
+                                            Spacer(Modifier.width(7.dp))
+                                            Text(
+                                                "正在检查该文件是否有可复用的 OCR 结果…",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.outline
+                                            )
+                                        }
+                                        state.reuseCachedOcr && state.cachedOcrAt != null -> {
+                                            val cachedAt = state.cachedOcrAt
+                                            Text(
+                                                "将跳过 OCR，复用 ${formatCacheTime(cachedAt!!)} 的" +
+                                                    " ${if (state.ocrEngine == "mlkit") "ML Kit" else "RapidOCR"} 结果。",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = extra.terracottaDeep
+                                            )
+                                        }
+                                    }
                         }
                     }
                 } else {
@@ -297,7 +327,13 @@ fun ImportScreen(
                         color = MaterialTheme.colorScheme.outline
                     )
                 }
-                PrimaryAction("AI 智能解析（推荐 · 后台运行）", extra.terracotta) { vm.startPipeline("ai") }
+                val cacheDecisionPending =
+                    state.checkingOcrCache || (state.cachedOcrAt != null && !state.ocrChoiceResolved)
+                PrimaryAction(
+                    "AI 智能解析（推荐 · 后台运行）",
+                    extra.terracotta,
+                    enabled = !cacheDecisionPending
+                ) { vm.startPipeline("ai") }
                 Text(
                     if (state.providersReady)
                         "主模型解析，${state.concurrency} 路并行，可切出应用。支持 A1/A2/A3/B 型题分组识别。"
@@ -306,7 +342,11 @@ fun ImportScreen(
                     style = MaterialTheme.typography.labelSmall,
                     color = if (state.providersReady) MaterialTheme.colorScheme.outline else extra.sage
                 )
-                SecondaryAction("离线快解析（规整文本）", Modifier.fillMaxWidth()) { vm.startPipeline("offline") }
+                SecondaryAction(
+                    "离线快解析（规整文本）",
+                    Modifier.fillMaxWidth(),
+                    enabled = !cacheDecisionPending
+                ) { vm.startPipeline("offline") }
                 TextButton(onClick = vm::cancelChoosing, modifier = Modifier.fillMaxWidth()) {
                     Text("返回重选", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -419,7 +459,7 @@ fun ImportScreen(
                     // 生成过程预览：模型正在写什么，一眼能看到。
                     // 固定高度 + 内部滚动，不铺满整页，也不让下方「已解析」列表跟着抖。
                     val tail = job?.streamTail
-                    if (!tail.isNullOrBlank() && job?.stage == "PARSE") {
+                    if (!tail.isNullOrBlank() && job?.stage in setOf("PARSE", "FAILED")) {
                         StreamPreviewCard(tail)
                     }
                     if (state.log.isNotEmpty()) {
@@ -551,6 +591,31 @@ fun ImportScreen(
             }
         }
     }
+
+    val cachedAt = state.cachedOcrAt
+    if (cachedAt != null && !state.ocrChoiceResolved) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("发现已有 OCR 结果") },
+            text = {
+                Text(
+                    "该文件在 ${formatCacheTime(cachedAt)} 使用 " +
+                        "${if (state.ocrEngine == "mlkit") "ML Kit" else "RapidOCR"} 识别过。\n\n" +
+                        "使用缓存可跳过耗时的 OCR，但仍会重新进行 AI 或离线结构解析。"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.resolveOcrCache(true) }) {
+                    Text("使用已有 OCR")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { vm.resolveOcrCache(false) }) {
+                    Text("重新 OCR")
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -672,15 +737,24 @@ private fun PrimaryAction(text: String, color: androidx.compose.ui.graphics.Colo
 }
 
 @Composable
-private fun SecondaryAction(text: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun SecondaryAction(
+    text: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
     OutlinedButton(
         onClick = onClick,
+        enabled = enabled,
         modifier = modifier.heightIn(min = 48.dp),
         shape = RoundedCornerShape(15.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, shuaColors.creamLine),
         colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
     ) { Text(text, style = MaterialTheme.typography.labelLarge, maxLines = 1) }
 }
+
+private fun formatCacheTime(timestamp: Long): String =
+    SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(timestamp))
 
 @Composable
 private fun EngineTab(text: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {

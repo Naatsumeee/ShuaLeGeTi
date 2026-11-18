@@ -9,6 +9,8 @@ import com.examhelper.shua.data.model.QuestionOption
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
+internal class IncompleteModelResponseException(message: String) : IllegalStateException(message)
+
 /**
  * LLM 题库结构化解析器：
  * 输入 OCR / 复制得到的杂乱文本，输出结构化题目列表。
@@ -165,14 +167,42 @@ class LlmQuestionParser(
         val parsed = decodeQuestions(result.content)
         recordUsage(result.usage)
         if (parsed.isNotEmpty()) return parsed
-        // 这一块没产出任何题目（多半是输出预算不够、JSON 被从中间截断）。
-        // 直接把整块判失败会让这一段的题目全部消失 —— 也就是用户反馈的
-        // 「首批次导入极易失败」：第一块题量最大，最容易撞上预算上限。
-        // 这里把该块二分后交给下一层分别解析，局部失败不再连坐整块。
-        if (depth >= MAX_SPLIT_DEPTH || chunk.length < MIN_SPLIT_CHARS) return emptyList()
-        val halves = ChunkPlanner.plan(chunk, chunk.length / 2)
-        if (halves.size < 2) return emptyList()
-        return halves.flatMap { parseChunk(provider, it.text, depth + 1, onDelta) }
+        // 明确返回空数组可以进入离线兜底；只有残缺/非法 JSON 才值得重试。
+        // 早先把 `{"` 这种半截响应当正常空结果，外层不会再发起非流式请求，
+        // 用户就会看到每段都没有题目却继续推进。
+        if (isExplicitEmptyResponse(result.content)) return emptyList()
+        if (result.truncated && depth < MAX_SPLIT_DEPTH && chunk.length >= MIN_SPLIT_CHARS) {
+            val halves = ChunkPlanner.plan(chunk, chunk.length / 2)
+            if (halves.size >= 2) {
+                return halves.flatMap { parseChunk(provider, it.text, depth + 1, onDelta) }
+            }
+        }
+        val snippet = result.content.trim().replace(Regex("""\s+"""), " ").take(120)
+        throw IncompleteModelResponseException(
+            "模型输出不完整或不是题目 JSON（finish=${result.finishReason ?: "unknown"}）：$snippet"
+        )
+    }
+
+    /** 供回归测试锁住「残缺 JSON 不能被当成正常空结果」。 */
+    internal fun isIncompleteStructuredResponse(content: String): Boolean =
+        content.isNotBlank() && !isExplicitEmptyResponse(content)
+
+    internal fun isExplicitEmptyResponse(content: String): Boolean {
+        val cleaned = stripCodeFence(content)
+        val start = cleaned.indexOfFirst { it == '{' || it == '[' }
+        val end = maxOf(cleaned.lastIndexOf('}'), cleaned.lastIndexOf(']'))
+        if (start < 0 || end <= start) return false
+        val jsonText = cleaned.substring(start, end + 1)
+        val objectEmpty = runCatching { json.decodeFromString<ResponseDto>(jsonText) }
+            .getOrNull()
+            ?.questions
+            ?.all { it.stem.isBlank() }
+            ?: false
+        if (objectEmpty) return true
+        return runCatching { json.decodeFromString<List<QuestionDto>>(jsonText) }
+            .getOrNull()
+            ?.all { it.stem.isBlank() }
+            ?: false
     }
 
     private fun decodeQuestions(content: String): List<QuestionDto> {
@@ -467,6 +497,7 @@ class LlmQuestionParser(
          *    选项完全不同的两道题误合并成一道（那会丢题）。
          */
         private fun <T> findSame(
+            candidates: Iterable<Int>,
             list: List<T>,
             stem: String,
             options: List<QuestionOption>,
@@ -476,7 +507,7 @@ class LlmQuestionParser(
         ): Int {
             var best = -1
             var bestScore = 0.0
-            for (i in list.indices) {
+            for (i in candidates) {
                 if (sameIdentity != null && !sameIdentity(list[i])) continue
                 val sim = ChunkPlanner.similarity(stemOf(list[i]), stem)
                 if (sim < ChunkPlanner.SAME_QUESTION) continue
@@ -500,6 +531,12 @@ class LlmQuestionParser(
 
         private fun chapterKey(chapter: String?): String =
             HeadingClassifier.cleanChapter(chapter)?.filter { it.isLetterOrDigit() }.orEmpty()
+
+        /** 去重时只比较同章候选，避免整本题库 O(n²) 全表扫描。 */
+        private fun chapterBucket(chapter: String?): String {
+            val no = chapterNumberOf(chapter)
+            return if (no != null) "n:$no" else "b:${chapterKey(chapter)}"
+        }
 
         private fun leadingNumber(stem: String): Int? =
             leadingNumberRe.find(stem)?.groupValues?.get(1)?.toIntOrNull()
@@ -555,9 +592,11 @@ class LlmQuestionParser(
          */
         fun finalize(questions: List<ParsedQuestion>, rawText: String): List<ParsedQuestion> {
             val list = mutableListOf<ParsedQuestion>()
+            val buckets = mutableMapOf<String, MutableList<Int>>()
             for (q in questions) {
                 if (q.stem.isBlank()) continue
-                val hit = findSame(list, q.stem, q.options, { it.stem }, { it.options }) { prev ->
+                val candidates = buckets.getOrPut(chapterBucket(q.chapter)) { mutableListOf() }
+                val hit = findSame(candidates, list, q.stem, q.options, { it.stem }, { it.options }) { prev ->
                     // 块间重叠去重：题号是强身份。相邻题题干相似但题号不同，
                     // 不能合并；无题号时才退化为「同章节 + 题干相似」。
                     // 同一章节的多种写法（`第六章` / `第六章 线粒体遗传`）要视为同章；
@@ -572,6 +611,7 @@ class LlmQuestionParser(
                 }
                 if (hit < 0) {
                     list += q
+                    candidates += list.lastIndex
                 } else {
                     val prev = list[hit]
                     // 题干取更完整的那份：块首衔接窗口带进来的副本可能被 OCR 截短
@@ -624,9 +664,11 @@ class LlmQuestionParser(
         fun finalizeLines(lines: List<ParsedLine>, rawText: String): List<ParsedLine> {
             val ordered = lines.sortedBy { it.chunkIndex * 100000 + it.indexInChunk }
             val list = mutableListOf<ParsedLine>()
+            val buckets = mutableMapOf<String, MutableList<Int>>()
             for (l in ordered) {
                 if (l.stem.isBlank()) continue
-                val hit = findSame(list, l.stem, l.options, { it.stem }, { it.options }) { prev ->
+                val candidates = buckets.getOrPut(chapterBucket(l.chapter)) { mutableListOf() }
+                val hit = findSame(candidates, list, l.stem, l.options, { it.stem }, { it.options }) { prev ->
                     val sameChapter = chapterKey(prev.chapter) == chapterKey(l.chapter) ||
                         ChunkPlanner.resolveChapter(prev.chapter, l.chapter)?.let {
                             chapterKey(it) == chapterKey(prev.chapter)
@@ -637,6 +679,7 @@ class LlmQuestionParser(
                 }
                 if (hit < 0) {
                     list += l
+                    candidates += list.lastIndex
                 } else {
                     val prev = list[hit]
                     val keepStem = if (l.stem.length > prev.stem.length) l.stem else prev.stem

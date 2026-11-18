@@ -31,6 +31,10 @@ class DocumentIngestor(
     private val ocrEngine: com.examhelper.shua.data.ocr.OcrProvider = com.examhelper.shua.data.ocr.MlKitOcrEngine()
 ) {
 
+    /** Whether this ingest actually invoked OCR (as opposed to a text layer). */
+    var usedOcr: Boolean = false
+        private set
+
     /**
      * 每完成一页 OCR 就回调一次（页码从 1 起 + 当前累计文本）。
      *
@@ -270,6 +274,7 @@ class DocumentIngestor(
         onProgress(IngestProgress("ocr", current, total, "OCR 第 $current/$total 页"))
         if (renderer == null) return ""
         if (pageIndex - 1 >= renderer.pageCount) return ""
+        usedOcr = true
         return renderer.openPage(pageIndex - 1).use { page ->
             // 长边固定到 1400 左右：RapidOcrEngine 的检测长边上限是 1920，
             // 渲染再大只会多占内存、不会多识别出一个字。
@@ -337,6 +342,7 @@ class DocumentIngestor(
         onProgress(IngestProgress("ocr", 1, 1, "识别图片文字"))
         val bitmap = decodeImage(uri)
             ?: throw IllegalArgumentException("无法解码图片")
+        usedOcr = true
         val text = ocrEngine.recognize(bitmap).text
         bitmap.recycle()
         return text

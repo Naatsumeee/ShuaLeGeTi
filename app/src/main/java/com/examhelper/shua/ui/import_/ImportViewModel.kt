@@ -12,6 +12,7 @@ import com.examhelper.shua.data.model.ParsedLine
 import com.examhelper.shua.data.model.toParsedQuestion
 import com.examhelper.shua.data.parse.ParseReport
 import com.examhelper.shua.data.parse.OptionNormalizer
+import com.examhelper.shua.data.storage.OcrCache
 import com.examhelper.shua.data.db.QuestionType
 import com.examhelper.shua.data.model.QuestionOption
 import kotlinx.coroutines.Dispatchers
@@ -47,6 +48,11 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
         val concurrency: Int = 4,
         /** 本次导入使用的 OCR 引擎 */
         val ocrEngine: String = com.examhelper.shua.data.settings.OcrEngine.RAPID_OCR,
+        val ocrFingerprint: String? = null,
+        val cachedOcrAt: Long? = null,
+        val checkingOcrCache: Boolean = false,
+        val ocrChoiceResolved: Boolean = false,
+        val reuseCachedOcr: Boolean = false,
         /** 分析过程日志（最新在下） */
         val log: List<String> = emptyList()
     )
@@ -59,6 +65,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
     private val providerDao = container.database.providerDao()
     private val jobDao = container.database.importJobDao()
     private val settings = container.settings
+    private var ocrCacheCheckVersion = 0
 
     /** 活跃任务（题库页 banner 用） */
     val activeJobs = jobDao.observeAll()
@@ -104,7 +111,12 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                 targetBankName = job.targetBankId?.let { bankRepo.getBank(it)?.name }.orEmpty(),
                 sourceName = job.sourceName,
                 providerModel = resolveProviderModel(),
-                parseReport = ParseReport.decode(job.parseReportJson)
+                parseReport = ParseReport.decode(job.parseReportJson),
+                ocrFingerprint = null,
+                cachedOcrAt = null,
+                checkingOcrCache = false,
+                ocrChoiceResolved = true,
+                reuseCachedOcr = false
             )
             observeJob(jobId)
         }
@@ -121,10 +133,16 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
             stage = Stage.CHOOSING_PARSE,
             pendingUri = uri,
             sourceName = name,
+            ocrFingerprint = null,
+            cachedOcrAt = null,
+            checkingOcrCache = true,
+            ocrChoiceResolved = false,
+            reuseCachedOcr = false,
             bankName = _state.value.bankName.ifBlank {
                 _state.value.targetBankName.ifBlank { name.substringBeforeLast('.') }
             }
         )
+        refreshOcrCache(uri, _state.value.ocrEngine)
     }
 
     /** 从首页「继续添加题目」进入时，记住追加目标。 */
@@ -155,13 +173,22 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
             ocrEngine = _state.value.ocrEngine,
             targetBankId = _state.value.targetBankId,
             targetBankName = _state.value.targetBankName,
-            bankName = _state.value.targetBankName
+            bankName = _state.value.targetBankName,
+            ocrFingerprint = null,
+            cachedOcrAt = null,
+            checkingOcrCache = false,
+            ocrChoiceResolved = true,
+            reuseCachedOcr = false
         )
     }
 
     /** 启动后台流水线 */
     fun startPipeline(parseMode: String, ocrEngine: String = _state.value.ocrEngine) {
         val uri = _state.value.pendingUri ?: return
+        val current = _state.value
+        if (current.checkingOcrCache ||
+            (current.cachedOcrAt != null && !current.ocrChoiceResolved)
+        ) return
         val jobId = UUID.randomUUID().toString().take(18)
         val s = _state.value
         viewModelScope.launch {
@@ -184,7 +211,9 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                 parseMode = parseMode,
                 providerId = provider?.id,
                 concurrency = s.concurrency,
-                ocrEngine = ocrEngine
+                ocrEngine = ocrEngine,
+                ocrFingerprint = s.ocrFingerprint,
+                reuseCachedOcr = s.reuseCachedOcr && s.cachedOcrAt != null
             )
             _state.value = _state.value.copy(
                 stage = Stage.RUNNING,
@@ -199,7 +228,40 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setOcrEngine(v: String) {
-        _state.value = _state.value.copy(ocrEngine = v)
+        _state.value = _state.value.copy(
+            ocrEngine = v,
+            cachedOcrAt = null,
+            checkingOcrCache = _state.value.pendingUri != null,
+            ocrChoiceResolved = false,
+            reuseCachedOcr = false
+        )
+        _state.value.pendingUri?.let { refreshOcrCache(it, v) }
+    }
+
+    fun resolveOcrCache(reuse: Boolean) {
+        _state.value = _state.value.copy(
+            ocrChoiceResolved = true,
+            reuseCachedOcr = reuse && _state.value.cachedOcrAt != null
+        )
+    }
+
+    private fun refreshOcrCache(uri: Uri, engine: String) {
+        val version = ++ocrCacheCheckVersion
+        viewModelScope.launch {
+            val fingerprint = withContext(Dispatchers.IO) { OcrCache.fingerprint(getApplication(), uri) }
+            val cachedAt = withContext(Dispatchers.IO) {
+                OcrCache.find(getApplication(), fingerprint, engine)?.createdAt
+            }
+            if (version != ocrCacheCheckVersion || _state.value.pendingUri != uri) return@launch
+            val hit = fingerprint != null && cachedAt != null
+            _state.value = _state.value.copy(
+                ocrFingerprint = fingerprint,
+                cachedOcrAt = cachedAt,
+                checkingOcrCache = false,
+                ocrChoiceResolved = !hit,
+                reuseCachedOcr = false
+            )
+        }
     }
 
     private fun observeJob(jobId: String) {

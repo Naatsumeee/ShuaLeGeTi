@@ -22,6 +22,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.gestures.Orientation
@@ -558,6 +559,7 @@ fun StudyScreen(
                         // 暖褐色投影，比纯黑柔和；暗黑模式下用纯黑以免发灰
                         val shadowTint = if (MaterialTheme.colorScheme.background.luminance() > 0.5f)
                             Color(0x38281F17) else Color(0x66000000)
+                        val currentScroll = remember(q?.id) { ScrollState(0) }
                         Column(
                             Modifier
                                 .fillMaxSize()
@@ -573,7 +575,7 @@ fun StudyScreen(
                                     spotShadowColor = shadowTint
                                 }
                                 .background(MaterialTheme.colorScheme.background)
-                                .verticalScroll(rememberScrollState())
+                                .verticalScroll(currentScroll)
                                 .padding(horizontal = 14.dp)
                                 .padding(top = 2.dp, bottom = 6.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -732,10 +734,11 @@ private fun PeekPage(
     }
     // 修饰符顺序与真卡严格一致：先 verticalScroll 再 padding（内边距属于滚动内容），
     // 这样两张卡的可用宽度、首行基线与行距完全相同，滑入落地时不会"缩一下再长开"。
+    val scroll = remember(q.id) { ScrollState(0) }
     Column(
         Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(scroll)
             .padding(horizontal = 14.dp)
             .padding(top = 2.dp, bottom = 6.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -965,7 +968,9 @@ private fun AnswerCard(
                     )
                     AiDisclaimer()
                 }
-                if (interactive) DeepSolveRow(state = state, q = q, vm = vm)
+                if (!interactive || state.answered) {
+                    DeepSolveRow(state = state, q = q, vm = vm, interactive = interactive)
+                }
             }
         }
         return
@@ -1068,7 +1073,9 @@ private fun AnswerCard(
             }
 
             // 深度解题 + 追问：两个 AI 入口（无参考答案的分支里也复用同一个组件）
-            if (interactive) DeepSolveRow(state = state, q = q, vm = vm)
+            if (!interactive || state.answered) {
+                DeepSolveRow(state = state, q = q, vm = vm, interactive = interactive)
+            }
 
             val dissents = JsonCodec.decodeDissent(q.dissentJson)
             if (interactive && dissents.isNotEmpty()) {
@@ -1127,7 +1134,12 @@ private fun AnswerCard(
 }
 
 @Composable
-private fun DeepSolveRow(state: StudyUiState, q: Question, vm: StudyViewModel) {
+private fun DeepSolveRow(
+    state: StudyUiState,
+    q: Question,
+    vm: StudyViewModel,
+    interactive: Boolean
+) {
     val extra = shuaColors
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         // 流式输出区：模型逐字吐出的内容实时显示在这里。
@@ -1194,7 +1206,7 @@ private fun DeepSolveRow(state: StudyUiState, q: Question, vm: StudyViewModel) {
                     Modifier
                         .clip(RoundedCornerShape(10.dp))
                         .background(extra.terracottaSoft)
-                        .clickable { vm.deepSolve() }
+                        .clickable(enabled = interactive) { vm.deepSolve() }
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -1217,7 +1229,7 @@ private fun DeepSolveRow(state: StudyUiState, q: Question, vm: StudyViewModel) {
                     Modifier
                         .clip(RoundedCornerShape(10.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                        .clickable {
+                        .clickable(enabled = interactive) {
                             com.examhelper.shua.ui.sound.Haptics.tap()
                             vm.toggleAsk()
                         }
@@ -1493,6 +1505,7 @@ private fun BottomControls(
                         }
                         AnimatedContent(
                             targetState = label,
+                            modifier = Modifier.align(Alignment.Center),
                             transitionSpec = {
                                 fadeIn(tween(150)) togetherWith fadeOut(tween(90))
                             },

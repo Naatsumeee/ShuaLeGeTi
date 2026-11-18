@@ -72,16 +72,22 @@ object TextQuestionParser {
 
         // 块间重叠会产生同一道题的副本：保留题干更完整的一份，补齐答案/解析/选项。
         val unique = mutableListOf<ParsedQuestion>()
+        val buckets = mutableMapOf<String, MutableList<Int>>()
         merged.forEach { q ->
-            val hit = unique.indexOfFirst { prev ->
+            val candidates = buckets.getOrPut(chapterBucket(q.chapter)) { mutableListOf() }
+            val hit = candidates.firstOrNull { i ->
+                val prev = unique[i]
                 // 去重只针对「块间重叠」：必须同章同题号，或至少题干高度相同且
                 // 两边都没有题号可区分。相邻题题干可能高度相似（如第3章第1题
                 // 与第4章第1题），只按题干去重会把真实的题吞掉。
                 sameQuestionIdentity(prev, q) &&
                     ChunkPlanner.similarity(prev.stem, q.stem) >= ChunkPlanner.SAME_QUESTION &&
                     optionsCompatible(prev, q)
-            }
-            if (hit < 0) unique += q else {
+            } ?: -1
+            if (hit < 0) {
+                unique += q
+                candidates += unique.lastIndex
+            } else {
                 val prev = unique[hit]
                 unique[hit] = prev.copy(
                     stem = if (q.stem.length > prev.stem.length) q.stem else prev.stem,
@@ -116,6 +122,11 @@ object TextQuestionParser {
 
     private fun chunkChapterKey(chapter: String?): String =
         HeadingClassifier.cleanChapter(chapter)?.filter { it.isLetterOrDigit() }.orEmpty()
+
+    private fun chapterBucket(chapter: String?): String {
+        val no = chapterNumber(chapter.orEmpty())
+        return if (no != null) "n:$no" else "b:${chunkChapterKey(chapter)}"
+    }
 
     private fun optionsCompatible(a: ParsedQuestion, b: ParsedQuestion): Boolean {
         if (a.options.size < 2 || b.options.size < 2) return true
