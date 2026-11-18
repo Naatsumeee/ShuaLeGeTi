@@ -1,6 +1,6 @@
 ﻿# AGENTS.md — 刷了个题 (ShuaGeLeTi) 项目记忆
 
-> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-18（**v1.3.0 发布批次**：A/B/C/D 全量合入，导入固定并发池、当前轮次恢复、每题问 AI 持久化、RapidOCR 1-4 路、流式预览稳定化、DB v17）。
+> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-18（**v1.3.0 已发布**：A/B/C/D 全量合入，导入固定并发池、当前轮次恢复、每题问 AI 持久化、RapidOCR 1-4 路、流式预览稳定化、DB v17；Gitee 更新检查与下载已由用户确认正常）。
 >
 > **文档分工**（别把三份混在一起）：
 > - `AGENTS.md`（本文件，**入库**）—— 项目的长期公共记忆：架构、决策、踩过的坑、待办。所有 Agent 都该读。
@@ -14,7 +14,7 @@
 Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）：导入 docx/PDF/扫描件/照片题库 → OCR → LLM 结构化解析 → 四种刷题模式 + 测试模式，支持多模型交叉验证（"三省六部"）、斩题、错题本、统计热力图。
 
 - 仓库：https://github.com/Naatsumeee/ShuaLeGeTi （公开；曾用名 1023-exam-helper）
-- 主分支 `main`，直接推送（单人项目，无 PR 流程）
+- 主分支 `main`。v1.3.0 起发版统一走 `codex/<release-name>` PR，必须用 merge commit 或 rebase merge，禁止 squash，确保 Git 提交数驱动的 versionCode 单调递增。
 - 用户 Windows 机器，Git Bash 环境，中文交流
 
 ## 开发环境（本机已装好）
@@ -27,7 +27,7 @@ Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）�
 | 构建 | `./gradlew assembleDebug`（依赖走阿里云镜像 + google/mavenCentral，见 settings.gradle.kts） |
 | 模拟器 | AVD `shua_test`（Pixel6/API35），启动脚本 `启动模拟器.bat`（幂等：已在跑则直接装根目录 APK；按设备 ABI 自动选包） |
 | 手机 | adb 设备 `e87a3fe4` |
-| 凭据 | GitHub 账号 Naatsumeee（Windows 凭据管理器存 PAT，`git credential fill` 可取；gh CLI 已装，`GH_TOKEN=<token> gh ...` 可用） |
+| 凭据 | GitHub 账号 Naatsumeee（Windows 凭据管理器存 PAT，`git credential fill` 可取；gh CLI 已装。当前 PAT 只有 `repo/workflow/gist` scope，`gh pr edit` 可能因缺 `read:org` 失败，PR 操作改用 GitHub REST） |
 
 ## 技术栈与关键决策
 
@@ -71,6 +71,7 @@ Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）�
 - 成功页/进度页：标准、速刷、背题、随机及“刷本轮错题”共用最后一题完成逻辑；章节题型页订阅 Room Flow，完成或删除的轮次实时消失。
 - 当前验证：全量 **337 项单测通过**；Release + R8 + `shrinkResources` 构建成功。v1.3.0 正式签名 arm64 包为 **71,178,667 B / 67.88 MiB**、`versionCode 1123`。
 - 真机确认：生成过程卡片已能持续显示流式内容；4 路 RapidOCR 完整处理 124 页扫描 PDF 未崩溃，随后完成 22 段 AI 解析并得到 1000 题。严格同文件的 1/2/3/4 路耗时对比尚未做，不能宣称可信加速倍数。
+- 更新检查：用户已确认 Gitee 清单检查更新和 APK 下载正常；Gitee 完整下载后的 SHA256 与 `update.json` 一致。本轮没有 adb 安装 v1.3.0，DB v16→v17 真机迁移与交互回归仍待用户确认。
 - 尚未完成：其余 A/B/C 交互回归仍需用户按实际使用继续确认；照片和短文档上的多路开销也未单独测。
 
 ## RapidOCR 多路并发（D，实验）
@@ -138,7 +139,8 @@ RapidOCR 识别一页分两步：**先版面分析，再识别文字**。模型�
 - **R8 + PDF 资源瘦身（2026-11-16）**：release 已开启 `isMinifyEnabled=true` 与 `isShrinkResources=true`，并只从 BouncyCastle 排除 5 个 PQC 属性文件（`lowmc.properties`、`sike/p434|p503|p610|p751.properties`），`x509` 资源保留。`app/proguard-rules.pro` 只补 PDFBox 可选 JP2 后端的 `-dontwarn`，不要改成整包 `-keep`。当时 `versionCode 1098` 的 arm64 APK 为 **67.77 MiB / 71,061,151 B**，`apkanalyzer` 下载估算 44.9 MiB；全量 298 项单测通过，修复包已覆盖安装到真机并冷启动 25 秒无崩溃。实际 PDF 导入仍需用户回归。R8 后 `mapping.txt` 是崩溃定位必需产物（`app/build/outputs/mapping/release/`），必须随版本保存。
 - **A/B/C release 验证（2026-11-18）**：分支提交 `f188619` 构建的正式签名 arm64 APK 为 **67.87 MiB / 71,162,283 B**，`versionCode 1118`，SHA-256 `8508B00A5ED0F63505144EB996358DB58E42EFD7B73EEC333D7DA26DFFFF0654`，签名证书 `CN=ShuaGeLeTi`。包内已确认仅 arm64 原生库、PP-OCRv5/版面模型保留、5 个 PQC 属性文件不存在、X.509 资源保留；`mapping.txt` 中 `OcrResult`、`Point`、`TextBlock` 均保持原名。该包已覆盖安装到真机 `e87a3fe4`，手机版本从 `1098` 升到 `1118`，冷启动 18 秒无崩溃。构建用的临时 keystore 副本已删除，未提交。
 - **D/流式预览验证（2026-11-18）**：`versionCode 1120` 的正式签名 arm64 APK 为 **71,178,667 B / 67.88 MiB**，SHA-256 `F7CDE9150D86395F9F8C00FE18C87EFD264BE8E4D798C1BA9D52C15F04F5B397`。已覆盖安装真机并完成 4 路 124 页扫描件；用户确认生成过程卡片能显示实际流式内容。
-- **v1.3.0 正式发布（2026-11-18）**：从 `main` merge commit `cff6d259c3d3d65f1c4c6e7d471da5601daea741` 构建，正式签名 arm64 APK 为 **71,178,667 B / 67.88 MiB**、`versionName 1.3.0`、`versionCode 1123`，SHA-256 `6E62FBCDB878923BD197AF8FD22F9D3F3EFB9B3B83762A1CA3576BDE816973C0`。核验证书 `CN=ShuaGeLeTi`，仅含 arm64 ABI，OCR/版面模型保留，5 个 PQC 资源不存在且 X.509 保留，R8 mapping 中五个 JNI 契约类均保持原名。按用户要求本轮未执行 adb 安装或手机推送，更新检查由用户自行测试。
+- **v1.3.0 正式发布（2026-11-18）**：从 `main` merge commit `cff6d259c3d3d65f1c4c6e7d471da5601daea741` 构建，正式签名 arm64 APK 为 **71,178,667 B / 67.88 MiB**、`versionName 1.3.0`、`versionCode 1123`，SHA-256 `6E62FBCDB878923BD197AF8FD22F9D3F3EFB9B3B83762A1CA3576BDE816973C0`。核验证书 `CN=ShuaGeLeTi`，仅含 arm64 ABI，OCR/版面模型保留，5 个 PQC 资源不存在且 X.509 保留，R8 mapping 中五个 JNI 契约类均保持原名。按用户要求本轮未执行 adb 安装或手机推送；用户已确认 Gitee 更新检查与 APK 下载正常。
+- **v1.3.0 发布收尾**：PR #4 合入 A/B/C/D（`cff6d25`，tag 固定于此），PR #5 合入 `update.json`/验证记录，PR #6/#7 补充“多源检查更新”和“安装包体积优化”的静态描述，最终 `origin/main = b3b96c4`。按用户要求，这两项只改 `update.json` 与 Release 描述，不修改 App 内 `Changelog.kt`，下一版再写入。
 - **R8 的 JNI 契约类必须 keep**：RapidOCR native 侧用 `FindClass/NewObject` 创建 `OcrResult`、`Point`、`TextBlock`，Java 侧通过 `OcrEngine`/`LayoutEngine` 的 native 方法创建和释放 handle，已在该模块 `consumer-rules.pro` 保留这五个类及成员。删掉会让 OCR 直接 `ClassNotFoundException` 或 JNI 符号找不到并以 SIGABRT 闪退；R8 后看 `mapping.txt` 应仍有原名映射。
 - **最后一题完成页（2026-11-16 修）**：标准/速刷/背题/随机以及“刷本轮错题”子会话共用 `StudyScreen`，不能再用 `nextQuestion != null` 作为唯一前进条件。最后一题答完或背题已揭晓时必须允许 `vm.next()` 推进到 `finished`；`StudyNavigationTest` 锁住这四种模式。测试模式走独立 `ExamScreen`，最后一题本来就是“交卷”，不受此 bug 影响。
 - **只发 arm64-v8a**（v1.0.11 之后，`app/build.gradle.kts` 的 `splits.abi.include` 默认 `listOf("arm64-v8a")`）：v7a 是 2017 年前 32 位老机、x86_64 只有模拟器/Chromebook，真实手机用户接近 0，却让 Release 多 156MB。**要给模拟器或老机出包时用命令行覆盖，不要改代码**：`./gradlew assembleDebug -PabiOverride=arm64-v8a,x86_64`（逗号分隔）。**Release 产物统一命名为 `Shualegeti-<abi>-<version>.apk`**（如 `Shualegeti-arm64-v8a-1.1.0.apk`），由 `app/build.gradle.kts` 末尾的 `applicationVariants.configureEach` 设置 `outputFileName`。**debug 包名保持 `app-<abi>-debug.apk` 不变** —— `启动模拟器.bat` 按这个名字找包装机。根目录同步放同名 release 包；模拟器需先带 override 构建 x86_64 包。
@@ -183,7 +185,7 @@ GH_TOKEN=$TOKEN gh release list                    # GitHub API 操作
 8. 用 `scripts/publish-gitee-release.ps1` 在 `Naatsumeee/ShuaLeGeTi-release` 创建同名 Gitee Release 并上传同一 APK。脚本使用 `curl.exe`，兼容 Windows PowerShell 5.1。
 9. 用 `scripts/generate-update-json.ps1` 写入刚构建 APK 的实际 `versionName/versionCode/SHA256`、GitHub/Gitee 下载地址与三段式摘要；提交 `update.json` 到 `main` 并推送。
 10. 用 `scripts/sync-gitee-manifest.ps1` 把同一 `update.json` 同步到 Gitee 小仓库 `master`，确保 Gitee Raw、jsDelivr、GitHub Raw 三源一致。
-11. 端到端复核：GitHub/Gitee 资产可下载且 SHA256 与 `update.json` 一致；GitHub Release `draft=false` 且 latest 指向新版本；三个 raw manifest 都返回新 `versionCode`。
+11. 端到端复核：GitHub/Gitee 资产可下载且 SHA256 与 `update.json` 一致；GitHub Release `draft=false` 且 latest 指向新版本；Gitee/GitHub raw manifest 必须返回新 `versionCode`。jsDelivr `@main` 可能短时命中旧边缘缓存，应 purge 并用提交哈希确认源文件，Gitee 是 App 首选源。
 
 > `update.json` 的 SHA 只有在 APK 构建后才能确定，因此通常会在 tag 后多一个“清单收尾”提交。tag/Release 仍固定在实际构建的那个 merge commit；清单提交只发布元数据，不重新构建 APK。
 
@@ -309,7 +311,7 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - `scripts/generate-update-json.ps1`：根据版本号、APK、Gitee/GitHub 下载链接和发布说明生成 `update.json`，同时计算 SHA256。
 - `scripts/sync-gitee-manifest.ps1`：用 `GITEE_TOKEN` 把仓库根目录 `update.json` 直接同步到 Gitee `master`。
 - 发布顺序：GitHub Release → Gitee Release 附件 → 更新 `update.json` → 同时推 GitHub `main` 与 Gitee 小仓库 `master`。
-- 2026-11-16 已实测：Gitee 仓库公开、默认分支 `master`、Raw `update.json` 可匿名读取；`v1.2.0` APK 附件 100,374,621 B，SHA256 与 GitHub 正式包一致；Gitee 下载不支持 Range/断点续传。
+- 2026-11-18 已实测：Gitee 仓库公开、默认分支 `master`、Raw `update.json` 可匿名读取；`v1.3.0` APK 完整下载后 SHA256 `6E62FBCDB878923BD197AF8FD22F9D3F3EFB9B3B83762A1CA3576BDE816973C0` 与 `update.json`/GitHub 正式包一致；用户已确认 App 内 Gitee 检查更新与下载正常。Gitee 下载不支持 Range/断点续传。
 - GitHub API 的 403 已实测为未认证 IP 限流（`X-RateLimit-Remaining: 0`）；Gitee OpenAPI 同样观测到 60 次/小时额度，所以 App 检查更新走 Gitee Raw，不依赖 Gitee API。
 - App 当前解析 `versionName/versionCode/notes/downloads/releaseUrl`；`publishedAt` 和 `sha256` 只是清单元数据，**App 内没有校验 APK SHA256**。安装时仍由 Android 校验 APK 签名必须与已安装包一致。
 - 更新检查采用**首个成功且可解析的清单**，不会继续比较其他源是否有更高版本。发版后必须及时同步 Gitee `update.json`，否则旧清单会遮住 jsDelivr/GitHub 新版本。
