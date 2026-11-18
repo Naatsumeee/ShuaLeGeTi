@@ -3,10 +3,11 @@ package com.benjaminwan.ocrlibrary
 import android.content.Context
 import android.content.res.AssetManager
 import android.graphics.Bitmap
+import java.io.Closeable
 
-class OcrEngine(context: Context) {
+class OcrEngine(context: Context, threads: Int = DEFAULT_THREADS) : Closeable {
     companion object {
-        const val numThread: Int = 4
+        const val DEFAULT_THREADS: Int = 4
 
         /**
          * 内置模型（PP-OCRv5 mobile）。
@@ -21,16 +22,18 @@ class OcrEngine(context: Context) {
         private const val KEYS_FILE = "ppocrv5_dict.txt"
     }
 
+    private var handle: Long
+
     init {
         System.loadLibrary("RapidOcr")
-        val ret = init(
-            context.assets, numThread,
+        handle = nativeCreate(
+            context.assets, threads.coerceAtLeast(1),
             DET_MODEL,
             CLS_MODEL,
             REC_MODEL,
             KEYS_FILE
         )
-        if (!ret) throw IllegalArgumentException()
+        if (handle == 0L) throw IllegalArgumentException("RapidOCR 初始化失败")
     }
 
     var padding: Int = 50
@@ -40,25 +43,34 @@ class OcrEngine(context: Context) {
     var doAngle: Boolean = true
     var mostAngle: Boolean = true
 
-    fun detect(input: Bitmap, output: Bitmap, maxSideLen: Int) =
-        detect(
-            input, output, padding, maxSideLen,
+    fun detect(input: Bitmap, output: Bitmap, maxSideLen: Int): OcrResult {
+        check(handle != 0L) { "RapidOCR 已释放" }
+        return nativeDetect(
+            handle, input, output, padding, maxSideLen,
             boxScoreThresh, boxThresh,
             unClipRatio, doAngle, mostAngle
         )
+    }
 
-    external fun init(
+    private external fun nativeCreate(
         assetManager: AssetManager,
         numThread: Int, detName: String,
         clsName: String, recName: String, keysName: String
-    ): Boolean
+    ): Long
 
-    external fun detect(
+    private external fun nativeDetect(
+        handle: Long,
         input: Bitmap, output: Bitmap, padding: Int, maxSideLen: Int,
         boxScoreThresh: Float, boxThresh: Float,
         unClipRatio: Float, doAngle: Boolean, mostAngle: Boolean
     ): OcrResult
 
-    external fun benchmark(input: Bitmap, loop: Int): Double
+    private external fun nativeBenchmark(handle: Long, input: Bitmap, loop: Int): Double
+    private external fun nativeRelease(handle: Long)
 
+    override fun close() {
+        if (handle == 0L) return
+        nativeRelease(handle)
+        handle = 0L
+    }
 }

@@ -7,11 +7,14 @@ import android.net.Uri
 import com.examhelper.shua.data.ocr.MlKitOcrEngine
 import com.examhelper.shua.data.parse.MarkdownToText
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
-import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.InputStream
 import kotlin.math.max
 
 /** 提取进度回调 */
@@ -21,6 +24,32 @@ data class IngestProgress(
     val total: Int,
     val message: String
 )
+
+internal class OrderedPageAccumulator(firstPage: Int, prefix: String) {
+    private val pending = HashMap<Int, String>()
+    private var nextPage = firstPage
+    private val text = StringBuilder(prefix)
+
+    /** 返回本次连续推进到的最后一页；没有填上缺口时返回 null。 */
+    fun put(page: Int, pageText: String): Int? {
+        pending[page] = pageText
+        var flushed: Int? = null
+        while (pending.containsKey(nextPage)) {
+            val current = pending.remove(nextPage).orEmpty()
+            if (text.isNotEmpty() && text.last() != '\n') text.appendLine()
+            text.appendLine("[[PG:$nextPage]]")
+            text.appendLine(current)
+            flushed = nextPage
+            nextPage++
+        }
+        return flushed
+    }
+
+    fun snapshot(): String = text.toString()
+}
+
+private data class RenderedPdfPage(val page: Int, val bitmap: Bitmap)
+private data class RecognizedPdfPage(val page: Int, val text: String)
 
 /**
  * 统一文档入口：根据 Uri 与扩展名分流到 docx / PDF / Markdown / 纯文本 / 图片五条路径，
@@ -161,7 +190,6 @@ class DocumentIngestor(
     private suspend fun ingestPdf(uri: Uri, onProgress: suspend (IngestProgress) -> Unit): String {
         PDFBoxResourceLoader.init(context.applicationContext)
         val file = cachePdf(uri)
-        val result = StringBuilder()
 
         // 临时 PDF 必须保证删除：中途 OCR 抛异常时也要落到 finally，否则缓存会一直涨
         try {
@@ -177,48 +205,77 @@ class DocumentIngestor(
                     file.delete()
                     throw IllegalArgumentException("无法打开 PDF：${it.message}")
                 }
-            val usablePages = textByPage.count { it.value.isNotBlank() }
-            val mostlyScanned = usablePages * 2 < total
-
-            // 续跑：把已落盘的页原样接回去，从断点页继续
-            if (resumePrefix.isNotBlank()) result.append(resumePrefix)
             val startPage = resumeFrom.coerceIn(1, total + 1)
+            val accumulator = OrderedPageAccumulator(startPage, resumePrefix)
+            val pagesToOcr = mutableListOf<Int>()
+            var lastFlushed: Int? = null
 
-            // 渲染器在整个循环里复用：一页一建等于把整份 PDF 的索引重建 total 遍。
-            val renderer = try {
-                PdfRendererHolder.acquire(file)
-            } catch (e: Throwable) {
-                null
-            }
-            try {
-                for (i in startPage..total) {
-                    val pageText = textByPage[i].orEmpty().trim()
-                    // 两个条件都要过：长度够（不是几乎空白的扫描页），且不是乱码。
-                    // 嵌入式字体缺 ToUnicode CMap 时 PDFBox 会抽出成片 U+FFFD 或私有区字符，
-                    // 长度能过阈值但内容全是垃圾——这类页必须走 OCR，否则垃圾会直接进题库。
-                    if (pageText.length >= 20 && !TextDecoder.looksGarbled(pageText)) {
-                        onProgress(IngestProgress("extract", i, total, "读取第 $i/$total 页"))
-                        result.appendLine("[[PG:$i]]")
-                        result.appendLine(pageText)
-                    } else {
-                        // 文字过少或乱码 → 判定为扫描页，走 OCR
-                        result.appendLine("[[PG:$i]]")
-                        result.appendLine(
-                            ocrPdfPage(renderer, i, onProgress, i, total)
-                        )
-                        // 每页 OCR 完立刻落一次盘：47 页扫描件在低端机上要跑十几分钟，
-                        // 中途被系统杀掉时，已识别的页不该跟着白干。见 [resumeFrom]。
-                        onPageDone?.invoke(i, result.toString())
-                    }
+            // 先把能用文字层读出的页放入有序缓冲。它们即使排在后段，也会等前面的
+            // OCR 页补齐后才真正落盘，断点文件永远不会出现中间缺页。
+            for (i in startPage..total) {
+                val pageText = textByPage[i].orEmpty().trim()
+                if (pageText.length >= 20 && !TextDecoder.looksGarbled(pageText)) {
+                    onProgress(IngestProgress("extract", i, total, "读取第 $i/$total 页"))
+                    accumulator.put(i, pageText)?.let { lastFlushed = it }
+                } else {
+                    pagesToOcr += i
                 }
-            } finally {
-                PdfRendererHolder.release(file)
             }
+            fun persistContiguous() {
+                lastFlushed?.let { page ->
+                    onPageDone?.invoke(page, accumulator.snapshot())
+                    lastFlushed = null
+                }
+            }
+            persistContiguous()
+
+            if (pagesToOcr.isNotEmpty()) {
+                usedOcr = true
+                onProgress(
+                    IngestProgress(
+                        "ocr", 0, total,
+                        if (ocrEngine.concurrency > 1) {
+                            "RapidOCR 已启动 ${ocrEngine.concurrency} 路并行识别"
+                        } else {
+                            "准备识别扫描页"
+                        }
+                    )
+                )
+                val pfd = android.os.ParcelFileDescriptor.open(
+                    file, android.os.ParcelFileDescriptor.MODE_READ_ONLY
+                ) ?: throw IllegalArgumentException("无法打开 PDF 渲染器")
+                try {
+                    val renderer = try {
+                        PdfRenderer(pfd)
+                    } catch (t: Throwable) {
+                        pfd.close()
+                        throw IllegalArgumentException("无法打开 PDF：${t.message}", t)
+                    }
+                    try {
+                        ocrPdfPages(
+                            renderer = renderer,
+                            pages = pagesToOcr,
+                            startPage = startPage,
+                            total = total,
+                            accumulator = accumulator,
+                            onProgress = onProgress,
+                            onFlushed = { page ->
+                                onPageDone?.invoke(page, accumulator.snapshot())
+                            }
+                        )
+                    } finally {
+                        renderer.close()
+                    }
+                } finally {
+                    pfd.close()
+                }
+            }
+            val result = accumulator.snapshot()
+            if (result.isBlank()) throw IllegalArgumentException("PDF 中没有可识别的内容")
+            return result
         } finally {
             file.delete()
         }
-        if (result.isBlank()) throw IllegalArgumentException("PDF 中没有可识别的内容")
-        return result.toString()
     }
 
     /**
@@ -257,84 +314,97 @@ class DocumentIngestor(
     }
 
     /**
-     * 渲染 + OCR 单页。
+     * 单 PdfRenderer 负责顺序渲染，固定数量 worker 负责并行 OCR。
      *
-     * `PdfRenderer` 的开销在**构造**（要解析 xref、建立页索引），不在打开单页。
-     * 早期实现每页都 `ParcelFileDescriptor.open + PdfRenderer(...)`，47 页就是把
-     * 同一份 45MB 扫描件的索引重建 47 次 —— 这是扫描件导入慢到「看起来没反应」
-     * 的第二个来源。现在渲染器由 [ingestPdf] 跨页复用，这里只负责开页、渲染、回收。
+     * 页面通道容量为 0：渲染线程只有在有空闲 OCR worker 时才创建下一张位图，
+     * 不会为了追求并发先把整本 PDF 渲成位图塞进内存。结果通道由单一 writer
+     * 消费，并只在连续页都完成时推进 raw 与断点侧车。
      */
-    private suspend fun ocrPdfPage(
-        renderer: PdfRenderer?,
-        pageIndex: Int,
+    private suspend fun ocrPdfPages(
+        renderer: PdfRenderer,
+        pages: List<Int>,
+        startPage: Int,
+        total: Int,
+        accumulator: OrderedPageAccumulator,
         onProgress: suspend (IngestProgress) -> Unit,
-        current: Int,
-        total: Int
-    ): String {
-        onProgress(IngestProgress("ocr", current, total, "OCR 第 $current/$total 页"))
-        if (renderer == null) return ""
-        if (pageIndex - 1 >= renderer.pageCount) return ""
-        usedOcr = true
-        return renderer.openPage(pageIndex - 1).use { page ->
-            // 长边固定到 1400 左右：RapidOcrEngine 的检测长边上限是 1920，
-            // 渲染再大只会多占内存、不会多识别出一个字。
+        onFlushed: (Int) -> Unit
+    ) = coroutineScope {
+        val lanes = ocrEngine.concurrency.coerceIn(1, pages.size.coerceAtLeast(1))
+        val rendered = Channel<RenderedPdfPage>(Channel.RENDEZVOUS)
+        val recognized = Channel<RecognizedPdfPage>(lanes)
+
+        val writer = launch {
+            for (result in recognized) {
+                accumulator.put(result.page, result.text)?.let { flushed ->
+                    onProgress(
+                        IngestProgress(
+                            "ocr",
+                            (flushed - startPage + 1).coerceAtLeast(1),
+                            total,
+                            if (lanes > 1) {
+                                "RapidOCR 已完成 ${flushed - startPage + 1}/$total 页（$lanes 路）"
+                            } else {
+                                "OCR 第 $flushed/$total 页"
+                            }
+                        )
+                    )
+                    onFlushed(flushed)
+                }
+            }
+        }
+
+        val workers = List(lanes) {
+            launch(Dispatchers.Default) {
+                for (page in rendered) {
+                    try {
+                        val text = try {
+                            ocrEngine.recognize(page.bitmap).text
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (t: Throwable) {
+                            val hint = if (lanes > 1) {
+                                "RapidOCR 并行识别失败，请到设置把 OCR 并发调回 1 路后重试"
+                            } else {
+                                "OCR 识别失败"
+                            }
+                            throw IllegalStateException("$hint：${t.message ?: t.javaClass.simpleName}", t)
+                        }
+                        recognized.send(RecognizedPdfPage(page.page, text))
+                    } finally {
+                        page.bitmap.recycle()
+                    }
+                }
+            }
+        }
+
+        try {
+            for (pageIndex in pages) {
+                if (pageIndex - 1 >= renderer.pageCount) {
+                    throw IllegalStateException("PDF 页数不一致：无法渲染第 $pageIndex 页")
+                }
+                rendered.send(RenderedPdfPage(pageIndex, renderPdfPage(renderer, pageIndex)))
+            }
+            rendered.close()
+            workers.joinAll()
+        } finally {
+            rendered.close()
+            recognized.close()
+        }
+        writer.join()
+    }
+
+    private fun renderPdfPage(renderer: PdfRenderer, pageIndex: Int): Bitmap =
+        renderer.openPage(pageIndex - 1).use { page ->
+            // RapidOcrEngine 的检测长边上限是 1920，渲染再大只会多占内存。
             val scale = max(2f, 1400f / page.width)
-            val bitmap = Bitmap.createBitmap(
+            Bitmap.createBitmap(
                 (page.width * scale).toInt(), (page.height * scale).toInt(),
                 Bitmap.Config.ARGB_8888
-            )
-            try {
+            ).also { bitmap ->
                 bitmap.eraseColor(android.graphics.Color.WHITE)
                 page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                runCatching { ocrEngine.recognize(bitmap).text }.getOrDefault("")
-            } finally {
-                // 早先只在成功路径 recycle，OCR 抛异常时这张十几 MB 的位图会漏掉，
-                // 后面几页在内存吃紧时被系统拖慢甚至 OOM
-                bitmap.recycle()
             }
         }
-    }
-    /**
-     * 进程内复用的 [PdfRenderer]。
-     *
-     * `PdfRenderer` 必须与它打开的 `ParcelFileDescriptor` 同生共死，且不能并发使用，
-     * 所以按文件路径缓存并在用完后 release。
-     */
-    private object PdfRendererHolder {
-        private var holder: Pair<String, Pair<android.os.ParcelFileDescriptor, PdfRenderer>>? = null
-
-        @Synchronized
-        fun acquire(file: java.io.File): PdfRenderer? {
-            val key = file.absolutePath
-            holder?.let { (k, v) -> if (k == key) return v.second }
-            // 换文件：先把上一份的渲染器与 fd 收掉，再开新的
-            closeHolder()
-            val pfd = android.os.ParcelFileDescriptor.open(
-                file, android.os.ParcelFileDescriptor.MODE_READ_ONLY
-            ) ?: return null
-            val renderer = runCatching { PdfRenderer(pfd) }.getOrElse {
-                runCatching { pfd.close() }
-                return null
-            }
-            holder = key to (pfd to renderer)
-            return renderer
-        }
-
-        @Synchronized
-        fun release(file: java.io.File) {
-            val (k, _) = holder ?: return
-            if (k != file.absolutePath) return
-            closeHolder()
-        }
-
-        private fun closeHolder() {
-            holder?.let { (_, v) ->
-                runCatching { v.second.close() }
-                runCatching { v.first.close() }
-            }
-            holder = null
-        }
-    }
 
     // ---------- 图片 ----------
 

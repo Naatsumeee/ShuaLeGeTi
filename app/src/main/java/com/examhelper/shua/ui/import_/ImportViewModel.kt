@@ -48,6 +48,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
         val concurrency: Int = 4,
         /** 本次导入使用的 OCR 引擎 */
         val ocrEngine: String = com.examhelper.shua.data.settings.OcrEngine.RAPID_OCR,
+        val rapidOcrConcurrency: Int = 1,
         val ocrFingerprint: String? = null,
         val cachedOcrAt: Long? = null,
         val checkingOcrCache: Boolean = false,
@@ -79,6 +80,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                 concurrency = prefs.parseConcurrency,
                 // 尊重设置页选的引擎，别把用户的选择覆盖成默认值
                 ocrEngine = prefs.ocrEngine,
+                rapidOcrConcurrency = prefs.rapidOcrConcurrency,
                 providersReady = providers.any { it.enabled }
             )
             // 自动恢复进行中的任务（切走/重开后回来自动续上）
@@ -171,6 +173,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
             providersReady = _state.value.providersReady,
             concurrency = _state.value.concurrency,
             ocrEngine = _state.value.ocrEngine,
+            rapidOcrConcurrency = _state.value.rapidOcrConcurrency,
             targetBankId = _state.value.targetBankId,
             targetBankName = _state.value.targetBankName,
             bankName = _state.value.targetBankName,
@@ -212,6 +215,9 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                 providerId = provider?.id,
                 concurrency = s.concurrency,
                 ocrEngine = ocrEngine,
+                ocrConcurrency = if (ocrEngine == com.examhelper.shua.data.settings.OcrEngine.RAPID_OCR) {
+                    s.rapidOcrConcurrency
+                } else 1,
                 ocrFingerprint = s.ocrFingerprint,
                 reuseCachedOcr = s.reuseCachedOcr && s.cachedOcrAt != null
             )
@@ -328,7 +334,8 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
             _state.value = UiState(
                 providersReady = _state.value.providersReady,
                 concurrency = _state.value.concurrency,
-                ocrEngine = _state.value.ocrEngine
+                ocrEngine = _state.value.ocrEngine,
+                rapidOcrConcurrency = _state.value.rapidOcrConcurrency
             )
             onCanceled?.invoke()
         }

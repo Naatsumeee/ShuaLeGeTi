@@ -35,8 +35,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.encodeToString
 import java.io.File
 import java.util.UUID
@@ -61,6 +64,7 @@ class ImportPipelineWorker(
         const val KEY_PROVIDER_ID = "providerId"
         const val KEY_CONCURRENCY = "concurrency"
         const val KEY_OCR_ENGINE = "ocrEngine" // "mlkit" / "rapidocr"
+        const val KEY_OCR_CONCURRENCY = "ocrConcurrency"
         const val KEY_OCR_FINGERPRINT = "ocrFingerprint"
         const val KEY_REUSE_CACHED_OCR = "reuseCachedOcr"
         const val CHANNEL_ID = "import_pipeline"
@@ -84,6 +88,7 @@ class ImportPipelineWorker(
             providerId: Long?,
             concurrency: Int,
             ocrEngine: String = "mlkit",
+            ocrConcurrency: Int = 1,
             ocrFingerprint: String? = null,
             reuseCachedOcr: Boolean = false
         ): UUID {
@@ -98,6 +103,7 @@ class ImportPipelineWorker(
                         KEY_PROVIDER_ID to providerId,
                         KEY_CONCURRENCY to concurrency,
                         KEY_OCR_ENGINE to ocrEngine,
+                        KEY_OCR_CONCURRENCY to ocrConcurrency.coerceIn(1, 4),
                         KEY_OCR_FINGERPRINT to (ocrFingerprint ?: ""),
                         KEY_REUSE_CACHED_OCR to reuseCachedOcr
                     )
@@ -169,6 +175,7 @@ class ImportPipelineWorker(
 
     private fun rawFile(jobId: String) = com.examhelper.shua.data.storage.AppStorage.importRawFile(applicationContext, jobId)
     private fun parsedFile(jobId: String) = com.examhelper.shua.data.storage.AppStorage.importParsedFile(applicationContext, jobId)
+    private val jobWriteLock = Mutex()
 
     override suspend fun doWork(): Result {
         val jobId = inputData.getString(KEY_JOB_ID) ?: return Result.failure()
@@ -178,8 +185,24 @@ class ImportPipelineWorker(
         val providerId = inputData.getLong(KEY_PROVIDER_ID, -1L)
         val concurrency = inputData.getInt(KEY_CONCURRENCY, 4).coerceIn(1, 8)
         val ocrEngine = inputData.getString(KEY_OCR_ENGINE) ?: "rapidocr"
+        val requestedOcrConcurrency = inputData.getInt(KEY_OCR_CONCURRENCY, 1).coerceIn(1, 4)
+        val rapidOcrConcurrency = if (
+            ocrEngine != "mlkit" &&
+            requestedOcrConcurrency > 1 &&
+            com.examhelper.shua.data.ocr.RapidOcrRuntimeGuard
+                .consumeInterrupted(applicationContext)
+        ) {
+            runCatching { container.settings.setRapidOcrConcurrency(1) }
+            updateJob(jobId) {
+                it.copy(message = "上次多路 RapidOCR 未正常结束，本次已自动切回 1 路")
+            }
+            1
+        } else {
+            requestedOcrConcurrency
+        }
         val ocrFingerprint = inputData.getString(KEY_OCR_FINGERPRINT).orEmpty()
         val reuseCachedOcr = inputData.getBoolean(KEY_REUSE_CACHED_OCR, false)
+        var streamTailScope: CoroutineScope? = null
 
         try {
             // 首次进入前台服务。失败通常意味着应用已经不在前台、系统拒绝拉起
@@ -216,47 +239,67 @@ class ImportPipelineWorker(
                     val ocr = if (ocrEngine == "mlkit") {
                         com.examhelper.shua.data.ocr.MlKitOcrEngine()
                     } else {
-                        com.examhelper.shua.data.ocr.RapidOcrEngine(applicationContext)
+                        com.examhelper.shua.data.ocr.RapidOcrEngine(
+                            applicationContext,
+                            rapidOcrConcurrency
+                        )
                     }
-                    // 逐页落盘：47 页扫描件要跑十几分钟，进程被杀时不该整段作废。
-                    // 续跑依据是 raw 文件里的「已完成页数」侧车文件（见 ocrProgressFile）。
-                    val ingestor = DocumentIngestor(applicationContext, ocr)
-                    val progressFile = com.examhelper.shua.data.storage.AppStorage
-                        .importOcrProgressFile(applicationContext, jobId)
-                    val donePages = runCatching { progressFile.readText().trim().toInt() }.getOrDefault(0)
-                    if (donePages > 0 && raw.exists()) {
-                        // 已落盘的页直接用，从下一页继续
-                        ingestor.resumeFrom = donePages + 1
-                        ingestor.resumePrefix = raw.readText()
+                    val guardStarted = ocrEngine != "mlkit" && ocr.concurrency > 1
+                    var ocrSucceeded = false
+                    if (guardStarted) {
+                        com.examhelper.shua.data.ocr.RapidOcrRuntimeGuard
+                            .markStarted(applicationContext)
                     }
-                    ingestor.onPageDone = { page, partial ->
-                        runCatching {
-                            raw.writeText(partial)
-                            progressFile.writeText(page.toString())
+                    try {
+                        // 逐页落盘：47 页扫描件要跑十几分钟，进程被杀时不该整段作废。
+                        // 续跑依据是 raw 文件里的「已完成页数」侧车文件（见 ocrProgressFile）。
+                        val ingestor = DocumentIngestor(applicationContext, ocr)
+                        val progressFile = com.examhelper.shua.data.storage.AppStorage
+                            .importOcrProgressFile(applicationContext, jobId)
+                        val donePages = runCatching {
+                            progressFile.readText().trim().toInt()
+                        }.getOrDefault(0)
+                        if (donePages > 0 && raw.exists()) {
+                            // 已落盘的页直接用，从下一页继续
+                            ingestor.resumeFrom = donePages + 1
+                            ingestor.resumePrefix = raw.readText()
                         }
-                    }
-                    val freshText = ingestor.ingest(Uri.parse(uriStr)) { p ->
-                        // OCR / 逐页读取阶段也要把进度写回数据库：
-                        // 早先只更新前台通知，用户切回应用内看到的进度条一直停在 0
-                        // （stage=INGEST 时 totalUnits 恒为 0），这就是「界面内看不到导入进度」的根因。
-                        runCatching {
-                            updateJob(jobId) {
-                                it.copy(
-                                    stage = "INGEST",
-                                    message = p.message,
-                                    totalUnits = p.total,
-                                    doneUnits = p.current
-                                )
+                        ingestor.onPageDone = { page, partial ->
+                            runCatching {
+                                raw.writeText(partial)
+                                progressFile.writeText(page.toString())
                             }
                         }
-                        runCatching {
-                            setForeground(foregroundInfo(p.message, p.current, p.total))
+                        val freshText = ingestor.ingest(Uri.parse(uriStr)) { p ->
+                            // OCR / 逐页读取阶段也要把进度写回数据库：
+                            // 早先只更新前台通知，用户切回应用内看到的进度条一直停在 0
+                            // （stage=INGEST 时 totalUnits 恒为 0），这就是「界面内看不到导入进度」的根因。
+                            runCatching {
+                                updateJob(jobId) {
+                                    it.copy(
+                                        stage = "INGEST",
+                                        message = p.message,
+                                        totalUnits = p.total,
+                                        doneUnits = p.current
+                                    )
+                                }
+                            }
+                            runCatching {
+                                setForeground(foregroundInfo(p.message, p.current, p.total))
+                            }
+                        }
+                        if (ingestor.usedOcr && ocrFingerprint.isNotBlank()) {
+                            OcrCache.write(applicationContext, ocrFingerprint, ocrEngine, freshText)
+                        }
+                        ocrSucceeded = true
+                        freshText
+                    } finally {
+                        ocr.close()
+                        if (guardStarted) {
+                            com.examhelper.shua.data.ocr.RapidOcrRuntimeGuard
+                                .markFinished(applicationContext, ocrSucceeded)
                         }
                     }
-                    if (ingestor.usedOcr && ocrFingerprint.isNotBlank()) {
-                        OcrCache.write(applicationContext, ocrFingerprint, ocrEngine, freshText)
-                    }
-                    freshText
                 }
                 if (text.length > MAX_RAW_TEXT_CHARS) {
                     // 500 万字符约 10MB 中文文本，已远超合理题库规模；继续解析只会
@@ -391,7 +434,8 @@ class ImportPipelineWorker(
                 it.copy(
                     stage = "PARSE", message = "AI 解析（${provider.name}）",
                     totalUnits = chunks.size, doneUnits = doneChunks.size,
-                    rawTextPath = raw.absolutePath, parsedPath = parsed.absolutePath
+                    rawTextPath = raw.absolutePath, parsedPath = parsed.absolutePath,
+                    streamTail = null
                 )
             }
             runCatching { setForeground(foregroundInfo("AI 解析中 ${doneChunks.size}/${chunks.size}", doneChunks.size, chunks.size)) }
@@ -407,19 +451,36 @@ class ImportPipelineWorker(
             var parsedSoFar = JsonCodec.readParsedLines(parsed).size
             val failedChunks = mutableListOf<FailedChunk>()
 
-            // 实时输出尾巴：多段并发同时吐字，这里按「最后写入者」拼接展示，
-            // 只保留末尾 STREAM_TAIL_CHARS 字符（数据库字段不该被几十万字撑爆）。
-            // 回调是同步的（流式 onDelta 在 IO 线程里调用），且 doWork 是 suspend
-            // 但没有可直接 launch 的作用域，所以用独立 scope + 时间戳节流落库。
-            val tailBuffer = StringBuilder()
+            // 实时输出按分块分别保存再合成预览。多段并发时不能往同一个 StringBuilder
+            // 里乱塞 token，否则第 1、3 段的半句话会交错成不可读的 JSON。
+            val tailByChunk = Array(chunks.size) { StringBuilder() }
+            val activeChunks = sortedSetOf<Int>()
             val tailLock = Any()
             val tailLastFlush = java.util.concurrent.atomic.AtomicLong(0)
             val tailScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-            val pushTail: (String) -> Unit = { delta ->
+            streamTailScope = tailScope
+            val tailWrites = Channel<String?>(Channel.CONFLATED)
+            val tailWriter = tailScope.launch {
+                for (snapshot in tailWrites) {
+                    updateJob(jobId) { it.copy(streamTail = snapshot) }
+                }
+            }
+
+            fun tailSnapshot(): String? = synchronized(tailLock) {
+                val active = tailByChunk.indices.filter { tailByChunk[it].isNotEmpty() }
+                if (active.isEmpty()) return@synchronized null
+                val perChunk = (STREAM_TAIL_CHARS / active.size).coerceAtLeast(180)
+                active.joinToString("\n\n") { index ->
+                    "分段 ${index + 1}\n${tailByChunk[index].takeLast(perChunk)}"
+                }.takeLast(STREAM_TAIL_CHARS)
+            }
+
+            fun pushTail(index: Int, delta: String) {
                 val snapshot: String? = synchronized(tailLock) {
-                    tailBuffer.append(delta)
-                    if (tailBuffer.length > STREAM_TAIL_CHARS * 2) {
-                        tailBuffer.delete(0, tailBuffer.length - STREAM_TAIL_CHARS)
+                    val buffer = tailByChunk[index]
+                    buffer.append(delta)
+                    if (buffer.length > STREAM_TAIL_CHARS * 2) {
+                        buffer.delete(0, buffer.length - STREAM_TAIL_CHARS)
                     }
                     val now = System.currentTimeMillis()
                     // 节流：模型吐字极快，逐字写 Room 会把 IO 打满
@@ -427,34 +488,67 @@ class ImportPipelineWorker(
                         null
                     } else {
                         tailLastFlush.set(now)
-                        tailBuffer.takeLast(STREAM_TAIL_CHARS).toString()
+                        val active = tailByChunk.indices.filter { tailByChunk[it].isNotEmpty() }
+                        val perChunk = (STREAM_TAIL_CHARS / active.size.coerceAtLeast(1))
+                            .coerceAtLeast(180)
+                        active.joinToString("\n\n") { i ->
+                            "分段 ${i + 1}\n${tailByChunk[i].takeLast(perChunk)}"
+                        }.takeLast(STREAM_TAIL_CHARS)
                     }
                 }
                 if (snapshot != null) {
-                    tailScope.launch { updateJob(jobId) { it.copy(streamTail = snapshot) } }
+                    tailWrites.trySend(snapshot)
+                }
+            }
+
+            fun clearTail(index: Int) {
+                synchronized(tailLock) {
+                    tailByChunk[index].clear()
+                }
+                tailWrites.trySend(tailSnapshot())
+            }
+
+            suspend fun drainTail() {
+                tailWrites.close()
+                tailWriter.join()
+                tailScope.cancel()
+            }
+
+            fun setChunkActive(index: Int, active: Boolean) {
+                val activeLabel = synchronized(tailLock) {
+                    if (active) activeChunks += index else activeChunks -= index
+                    activeChunks.joinToString("、") { "第 ${it + 1} 段" }
+                }
+                if (activeLabel.isNotBlank()) {
+                    tailScope.launch {
+                        updateJob(jobId) {
+                            it.copy(message = "AI 解析 ${provider.name}：正在生成 $activeLabel")
+                        }
+                    }
                 }
             }
 
             val warmupRequired = doneChunks.isEmpty()
-            val warmupIndex = pending.firstOrNull()
             runChunkScheduler(
                 indices = pending,
                 concurrency = concurrency,
                 warmupRequired = warmupRequired,
                 parse = { index ->
                     if (isStopped) throw kotlinx.coroutines.CancellationException("导入已取消")
-                    val parseResult = parseChunkWithRetry(
-                        parser,
-                        provider,
-                        chunks[index],
-                        if (warmupRequired && index == warmupIndex) pushTail else null
-                    )
-                    if (warmupRequired && index == warmupIndex) {
-                        val snapshot = synchronized(tailLock) {
-                            tailBuffer.takeLast(STREAM_TAIL_CHARS).toString()
-                        }
-                        if (snapshot.isNotBlank()) {
-                            updateJob(jobId) { it.copy(streamTail = snapshot) }
+                    setChunkActive(index, true)
+                    val parseResult = try {
+                        parseChunkWithRetry(
+                            parser,
+                            provider,
+                            chunks[index],
+                            onDelta = { delta -> pushTail(index, delta) },
+                            onStreamReset = { clearTail(index) }
+                        )
+                    } finally {
+                        setChunkActive(index, false)
+                        val snapshot = tailSnapshot()
+                        if (snapshot != null) {
+                            tailWrites.trySend(snapshot)
                         }
                     }
                     parseResult.fold(
@@ -550,11 +644,13 @@ class ImportPipelineWorker(
             )
 
             if (isStopped) {
+                drainTail()
                 updateJob(jobId) {
                     val u = parser.snapshotUsage()
                     it.copy(
                         stage = "CANCELED",
                         message = "已取消（可继续）",
+                        streamTail = null,
                         // 取消也要保住已花掉的用量，否则用户看不到这段消费
                         cacheHitTokens = baseHit + u.normalizedCacheHit().toLong(),
                         cacheMissTokens = baseMiss + u.cacheMissTokens.toLong(),
@@ -591,13 +687,12 @@ class ImportPipelineWorker(
                     JsonCodec.readParsedLines(parsed),
                     failedChunks
                 )
-                val streamSnapshot = synchronized(tailLock) {
-                    tailBuffer.takeLast(STREAM_TAIL_CHARS).toString().takeIf { it.isNotBlank() }
-                }
+                val streamSnapshot = tailSnapshot()
                 val detail = failedChunks.firstOrNull()?.reason
                     ?.take(240)
                     ?.takeIf { it.isNotBlank() }
                     ?: "模型返回不可解析内容"
+                drainTail()
                 updateJob(jobId) {
                     it.copy(
                         stage = "FAILED",
@@ -607,11 +702,10 @@ class ImportPipelineWorker(
                         streamTail = streamSnapshot
                     )
                 }
-                tailScope.cancel()
                 return fail(jobId, "AI 解析全部失败（$detail）")
             }
             if (finalLines.isEmpty()) {
-                tailScope.cancel()
+                drainTail()
                 return fail(jobId, "AI 解析未生成任何题目，请检查模型配置后重试")
             }
             val report = ParseReportBuilder.build(chunkList, text, finalLines, failedChunks)
@@ -632,7 +726,7 @@ class ImportPipelineWorker(
             }.getOrNull()
             // 收尾：停掉流式尾巴的落库协程，并把预览框的内容清空
             // （任务已 DONE，预览框要显示的是「已解析题目」，不是模型的原始 JSON）
-            tailScope.cancel()
+            drainTail()
             updateJob(jobId) {
                 val u = parser.snapshotUsage()
                 it.copy(
@@ -654,8 +748,11 @@ class ImportPipelineWorker(
             notifyDone(jobId, bankName, totalParsed)
             return Result.success()
         } catch (e: kotlinx.coroutines.CancellationException) {
+            streamTailScope?.cancel()
             updateJob(jobId) { it.copy(stage = "CANCELED", message = "已取消（进度已保存，可继续）") }
-            throw e        } catch (e: Exception) {
+            throw e
+        } catch (e: Exception) {
+            streamTailScope?.cancel()
             return fail(jobId, e.message ?: e.javaClass.simpleName)
         }
     }
@@ -676,7 +773,8 @@ class ImportPipelineWorker(
         parser: LlmQuestionParser,
         provider: com.examhelper.shua.data.db.LlmProvider,
         chunk: String,
-        onDelta: ((String) -> Unit)? = null
+        onDelta: ((String) -> Unit)? = null,
+        onStreamReset: (() -> Unit)? = null
     ): kotlin.Result<List<LlmQuestionParser.QuestionDto>> {
         val waits = longArrayOf(0L, 1200L, 3000L)
         var lastError: Throwable? = null
@@ -696,6 +794,7 @@ class ImportPipelineWorker(
                 // 部分中转的流式模式只回空数组，给非流式请求一次机会；
                 // 非流式仍为空时不再重复烧请求，直接交给离线兜底。
                 if (onDelta != null && wait == 0L) {
+                    onStreamReset?.invoke()
                     lastError = EmptyModelResultException()
                     continue
                 }
@@ -752,9 +851,13 @@ class ImportPipelineWorker(
     }
 
     private suspend fun updateJob(jobId: String, mutate: (ImportJob) -> ImportJob) {
-        runCatching {
-            val dao = jobDao()
-            dao.getById(jobId)?.let { dao.upsert(mutate(it).copy(updatedAt = System.currentTimeMillis())) }
+        jobWriteLock.withLock {
+            runCatching {
+                val dao = jobDao()
+                dao.getById(jobId)?.let {
+                    dao.upsert(mutate(it).copy(updatedAt = System.currentTimeMillis()))
+                }
+            }
         }
     }
 

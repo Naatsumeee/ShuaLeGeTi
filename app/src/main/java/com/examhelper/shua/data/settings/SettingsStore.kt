@@ -21,6 +21,8 @@ object OcrEngine {
 data class AppSettings(
     // 默认走 RapidOCR：中文题库基本是扫描件/照片，ML Kit 对双栏与生僻字明显更差
     val ocrEngine: String = OcrEngine.RAPID_OCR,
+    /** RapidOCR 页级并行数；默认 1，实验档 2..4。ML Kit 始终单路。 */
+    val rapidOcrConcurrency: Int = 1,
     val speedModeSeconds: Int = 2,
     val sanShengLiuBu: Boolean = false, // 三省六部模式开关
     val parseConcurrency: Int = 4,      // AI 解析分块并发数
@@ -53,6 +55,7 @@ data class AppSettings(
 class SettingsStore(private val context: Context) {
     private object Keys {
         val OCR_ENGINE = stringPreferencesKey("ocr_engine")
+        val RAPID_OCR_CONCURRENCY = intPreferencesKey("rapid_ocr_concurrency")
         val SPEED_SECONDS = intPreferencesKey("speed_seconds")
         val SAN_SHENG = booleanPreferencesKey("san_sheng_liu_bu")
         val PARSE_CONCURRENCY = intPreferencesKey("parse_concurrency")
@@ -70,6 +73,7 @@ class SettingsStore(private val context: Context) {
     val settings: Flow<AppSettings> = context.dataStore.data.map { p ->
         AppSettings(
             ocrEngine = p[Keys.OCR_ENGINE] ?: OcrEngine.RAPID_OCR,
+            rapidOcrConcurrency = (p[Keys.RAPID_OCR_CONCURRENCY] ?: 1).coerceIn(1, 4),
             speedModeSeconds = (p[Keys.SPEED_SECONDS] ?: 2).coerceIn(1, 10),
             sanShengLiuBu = p[Keys.SAN_SHENG] ?: false,
             parseConcurrency = (p[Keys.PARSE_CONCURRENCY] ?: 4).coerceIn(1, 8),
@@ -90,6 +94,8 @@ class SettingsStore(private val context: Context) {
     }
 
     suspend fun setOcrEngine(v: String) = context.dataStore.edit { it[Keys.OCR_ENGINE] = v }
+    suspend fun setRapidOcrConcurrency(v: Int) =
+        context.dataStore.edit { it[Keys.RAPID_OCR_CONCURRENCY] = v.coerceIn(1, 4) }
     suspend fun setSpeedSeconds(v: Int) = context.dataStore.edit { it[Keys.SPEED_SECONDS] = v.coerceIn(1, 10) }
     suspend fun setSanShengLiuBu(v: Boolean) = context.dataStore.edit { it[Keys.SAN_SHENG] = v }
     suspend fun setParseConcurrency(v: Int) = context.dataStore.edit { it[Keys.PARSE_CONCURRENCY] = v.coerceIn(1, 8) }

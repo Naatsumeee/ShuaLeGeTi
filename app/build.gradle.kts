@@ -39,8 +39,11 @@ android {
     //   storePassword=...
     //   keyAlias=shualegeti
     //   keyPassword=...
+    val keystorePropsFile = (project.findProperty("keystorePropertiesFile") as String?)
+        ?.let { file(it) }
+        ?: rootProject.file("keystore.properties")
     val keystoreProps = Properties().apply {
-        val f = rootProject.file("keystore.properties")
+        val f = keystorePropsFile
         if (f.exists()) f.inputStream().use { load(it) }
     }
     val hasReleaseKey = keystoreProps.getProperty("storePassword").isNullOrBlank().not()
@@ -67,7 +70,7 @@ android {
     signingConfigs {
         if (hasReleaseKey) {
             create("release") {
-                storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
+                storeFile = keystorePropsFile.parentFile.resolve(keystoreProps.getProperty("storeFile"))
                 storePassword = keystoreProps.getProperty("storePassword")
                 keyAlias = keystoreProps.getProperty("keyAlias")
                 keyPassword = keystoreProps.getProperty("keyPassword")

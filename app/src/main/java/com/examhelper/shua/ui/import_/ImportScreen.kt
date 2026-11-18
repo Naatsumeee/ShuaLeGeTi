@@ -278,7 +278,11 @@ fun ImportScreen(
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 Text("OCR 引擎", style = serifTitle(15.sp, FontWeight.Medium), modifier = Modifier.weight(1f))
-                                SemanticChip(if (state.ocrEngine == "mlkit") "ML Kit" else "RapidOCR", ChipTone.Brand)
+                                SemanticChip(
+                                    if (state.ocrEngine == "mlkit") "ML Kit" else
+                                        "RapidOCR · ${state.rapidOcrConcurrency} 路",
+                                    ChipTone.Brand
+                                )
                             }
                             Row(
                                 Modifier.fillMaxWidth(),
@@ -292,6 +296,13 @@ fun ImportScreen(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.outline
                             )
+                            if (state.ocrEngine != "mlkit" && state.rapidOcrConcurrency > 1) {
+                                Text(
+                                    "实验性 ${state.rapidOcrConcurrency} 路并发，性能开销较大；如闪退请到设置切回 1 路",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
                                     when {
                                         state.checkingOcrCache -> Row(
                                             verticalAlignment = Alignment.CenterVertically

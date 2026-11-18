@@ -1,6 +1,6 @@
 ﻿# AGENTS.md — 刷了个题 (ShuaGeLeTi) 项目记忆
 
-> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-18（**v1.2.0 后 A/B/C 待真机批次**：导入 warm-up + 固定 worker 池、当前轮次作答恢复、每题问 AI 持久化、DB v17）。
+> 本文件是项目的完整上下文记忆，供任何模型/Agent 无缝接手开发。最后更新：2026-11-18（**v1.2.0 后 A/B/C/D 真机验证批次**：导入 warm-up + 固定 worker 池、当前轮次作答恢复、每题问 AI 持久化、RapidOCR 1-4 路、流式预览串行写、DB v17）。
 >
 > **文档分工**（别把三份混在一起）：
 > - `AGENTS.md`（本文件，**入库**）—— 项目的长期公共记忆：架构、决策、踩过的坑、待办。所有 Agent 都该读。
@@ -33,7 +33,7 @@ Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）�
 
 - Kotlin + Jetpack Compose（BOM 2024.12.01）+ Material3；MVVM（ViewModel 用 @JvmOverloads/SavedStateHandle 构造，无 DI 框架，`ShuaApp.instance.container` 手工容器）
 - **Room v17**（`data/db/`：Entities/Daos/AppDatabase，迁移 1→2→…→17 全部注册在 `AppDatabase.addMigrations`）。`fallbackToDestructiveMigration` **仍在**，新增字段必须写正式迁移，否则老用户升级即丢库。各版本加了什么：v2 `subtype`/`sharedStem`/`sharedOptionsJson`/`attempt_records.runId`/`durationMs`/`study_progress.filterJson`；v3 `sourcePage`；v4 `originalAnswer`；v5 `aiAnswer`/`answerVerified`/`deepSolved`；v6 三个 token 字段；v7 余额快照（已废弃）；v8 `import_jobs.streamTail`/`banks.pinned`/`banks.archived`；v9 `wrong_records.flagged`（重点标记，与「已掌握」互相独立）；**v10 是数据迁移**（`MIGRATION_9_10` 用 `HeadingClassifier.cleanChapter` 把库里已有的脏章节名就地洗掉，不重导）；**v11 也是数据迁移**（再洗一次 + `unifyChapterNames` 归一）；v12 新增 `balance_snapshots` 表；**v13** 给 `banks` 新增组/颜色/备注/排序/合并快照字段；**v14** 新增 `ai_usage_records` 统一 AI 调用账本（`callId`/`taskId`/模型/token/时间戳）；**v15** 给 `questions` 新增 `minimalSolved`；**v16** 给 `import_jobs` 新增 `targetBankId`，让「继续添加题目」在进程重开后仍能追加到原题库；**v17** 给 `study_progress` 新增 `roundId`、`questions` 新增 `askChatJson`、`import_jobs` 新增 `parseReportJson`、`attempt_records` 新增 `correctKnown`，用于当前轮次恢复、每题问 AI 持久化、解析审计和无参考答案统计隔离
-- 双 OCR 引擎（`data/ocr/`）：**默认 RapidOCR**（PP-OCRv5 ONNX，v1.0.11 起）+ ML Kit 中文 bundled（备选，轻量）；OCR 后做**双栏阅读顺序重排**（`MlKitOcrEngine.rebuildReadingOrder`，扫描试卷是左右双栏）；RapidOCR 额外跑**版面分析**（见「版面分析」节）
+- 双 OCR 引擎（`data/ocr/`）：**默认 RapidOCR**（PP-OCRv5 ONNX，v1.0.11 起）+ ML Kit 中文 bundled（备选，轻量）；多页 PDF 的 RapidOCR 可配 1-4 路并发，ML Kit 固定单路；OCR 后做**双栏阅读顺序重排**（`MlKitOcrEngine.rebuildReadingOrder`，扫描试卷是左右双栏）；RapidOCR 额外跑**版面分析**（见「版面分析」节）
 - RapidOCR 为**源码模块** `rapidocr-src/OcrLibrary`（Apache-2.0，已入库 ~93MB）：NDK r27 + `ANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON` + onnxruntime **1.20**（16KB 页对齐，Maven 的 AAR 抽取）+ opencv-mobile 3.4.15（`src/sdk/`）。**16KB 页对齐是硬要求**（用户手机是 16KB 设备），换依赖时必须验证 PT_LOAD p_align=16384
 - 后台任务 = WorkManager 前台服务（dataSync 类型）：`ImportPipelineWorker`（导入/解析，断点续传按"已落盘分块"）与 `GenerateWorker`（AI 生成，断点续传按"已答即跳过"）；进度写 Room 表（import_jobs/generate_jobs），UI 观察 Flow。导入分段现在先单独跑第一段 warm-up，再启动不超过配置并发数的固定 worker 池；完成一段立即补下一段，JSONL 由单一 writer 串行追加，状态只报“已完成 X/Y 段”
 - LLM：`data/llm/LlmClient.kt`（OpenAI 兼容 chat/completions，jsonMode 失败自动降级重试，max_tokens 支持）；**系统提示词集中**在 `data/llm/Prompts.kt`（用户可在设置页覆盖，稳定前缀为命中 DeepSeek 前缀缓存——命中价是未命中 1/50）
@@ -63,15 +63,24 @@ Android 离线刷题应用「刷了个题」（包名 `com.examhelper.shua`）�
 - 深度解题失败会**带退避重试 3 次**（0 / 900 / 2200 ms），只对配置/鉴权/参数类错误立即放弃（`isRetryable`）；`max_tokens = 4096`（`DEEP_SOLVE_MAX_TOKENS`），`ChatResult.truncated`（finishReason=="length"）且正文为空时判失败重试，**绝不把半截解析写库**。
 - 问 AI 的 Sheet 只允许一个 IME inset 来源，内部不再叠加 `imePadding`；输入区用 `BringIntoViewRequester` 保证键盘弹出时可见。新消息完成时动画滚到底，流式输出按约 80 字符节流 `scrollToItem`，不能按每次 token 重启滚动动画；按钮、下滑和关闭共用同一个受保护的关闭 Job。
 
-## A/B/C 批次（2026-11-18，DB v17，待真机）
+## A/B/C/D 批次（2026-11-18，DB v17，实验功能）
 
 - 导入：`ChunkParseScheduler` 先 warm-up，再固定 worker 数并发；快段完成后立即接队列下一段。持久化顺序按 `chunkIndex * 100000 + indexInChunk` 读取，完成顺序不会打乱题序。全部新分块失败时任务失败；单段失败进入解析问题报告但不阻塞其余段。
 - 做题：`StudyProgress.roundId` 是当前轮次唯一标识，学习记录复用 `AttemptRecord.runId`。每次作答先更新 UI，再立即写库；上一题/下一题/答题卡跳转先等待待写记录。恢复时按 `answeredAt DESC, id DESC` 取每题最新记录，因此切屏、重进和进程重启都能恢复当前轮。
 - 无参考答案：作答仍保存，但 `correctKnown=false`，`correct=false` 只作为存储占位；这类记录不进退错题、不计正确数、不进正确率分母。开始新一轮和随机重开必须生成新 `roundId`，不能继续显示上一轮作答。
 - 成功页/进度页：标准、速刷、背题、随机及“刷本轮错题”共用最后一题完成逻辑；章节题型页订阅 Room Flow，完成或删除的轮次实时消失。
-- 当前验证：全量 **327 项单测通过**；Release + R8 + `shrinkResources` 构建成功。正式签名的 arm64 验证包为 **71,162,283 B / 67.87 MiB**、`versionCode 1118`，已通过 `adb install -r` 覆盖安装到真机 `e87a3fe4`；冷启动 18 秒进程存活，无 Room/SQLite 或 `AndroidRuntime` 崩溃。
-- 尚未完成：真实文档 warm-up/并发导入、四位数题号视觉、强停后轮次恢复、已答解析滑动连续性、键盘/Sheet 动画回归。冷启动只能证明 v17 迁移没有立即崩溃，仍需用户确认原有题库/作答/错题完整。
-- RapidOCR 2/3/4 路并发仍是后续 D 模块，尚未实现。A/B/C 合入并由用户接受前不要混入 native 实例池与实验开关。
+- 当前验证：全量 **337 项单测通过**；Release + R8 + `shrinkResources` 构建成功。当前正式签名 arm64 包为 **71,178,667 B / 67.88 MiB**、`versionCode 1120`，已通过 `adb install -r` 覆盖安装到真机 `e87a3fe4`，原数据保留。
+- 真机确认：生成过程卡片已能持续显示流式内容；4 路 RapidOCR 完整处理 124 页扫描 PDF 未崩溃，随后完成 22 段 AI 解析并得到 1000 题。严格同文件的 1/2/3/4 路耗时对比尚未做，不能宣称可信加速倍数。
+- 尚未完成：其余 A/B/C 交互回归仍需用户按实际使用继续确认；照片和短文档上的多路开销也未单独测。
+
+## RapidOCR 多路并发（D，实验）
+
+- 设置页只允许 RapidOCR 选择 **1/2/3/4 路**，没有 8 路入口；`RapidOcrConcurrency.MAX = 4`。2 路以上必须弹性能警告，4 路警告更强。该设置只影响多页 PDF 扫描件，单张照片和 ML Kit 始终单路。
+- `OcrEngine` 与 `LayoutEngine` 已从 JNI 进程级单例改为每个 Java 实例持有独立 native handle。每路都会加载自己的 OCR/版面 ONNX 会话，CPU、内存和发热按路数明显增加。
+- PDF 渲染仍由**单个 `PdfRenderer` 顺序执行**，因为渲染器不能并发使用；页面通道容量为 0，只有空闲 OCR worker 才渲染下一张位图。识别结果由单一 writer 消费，按页号进入 `OrderedPageAccumulator`，只有连续页完成才写 raw 和断点侧车，避免断点文件出现中间空洞。
+- 每路线程预算：1 路为 OCR 4 + layout 2；2 路为每路 OCR 2 + layout 2；3/4 路为每路 OCR 1 + layout 1。位图在识别后立即 `recycle()`。
+- 崩溃守卫用 PID 标记活跃的多路任务。进程异常退出后，下一次多路任务会通过 `RapidOcrRuntimeGuard` 自动降为 1 路并在设置页提示，避免反复闪退。`markStarted()` 必须同步 `commit()`，否则 native SIGABRT 前可能来不及落盘。
+- 小米 2410DPN6CC（SM8750、约 16GB RAM）实测 4 路处理 124 页：约 84 页时 Total PSS `4,479,718 kB`、Native Heap `3,025,740 kB`、Swap PSS `1,362,537 kB`；约 105 页时 PSS `4,504,174 kB`、Native `3,003,000 kB`、Swap `1,405,285 kB`。即使旗舰机也属于高开销，低端机不应默认开启。
 
 ## 公式与 Markdown 渲染（`ui/theme/Latex.kt` + `ui/theme/Markdown.kt`，v1.0.6）
 
@@ -118,7 +127,8 @@ RapidOCR 识别一页分两步：**先版面分析，再识别文字**。模型�
 - APK 体积（实测 v1.1.0）：**release arm64-v8a ≈ 81MB**、debug arm64-v8a ≈ 93MB（内置 PP-OCRv5 + PP-DocLayout-S 模型与 onnxruntime/opencv 原生库是大头）。v1.0.0 起启用 **ABI splits**，release 自 v1.1.0 起用**正式签名**（根目录 `release.jks` + `keystore.properties`，均在 .gitignore；密码表缺失时构建会优雅回退 debug 签名）
 - **R8 + PDF 资源瘦身（2026-11-16）**：release 已开启 `isMinifyEnabled=true` 与 `isShrinkResources=true`，并只从 BouncyCastle 排除 5 个 PQC 属性文件（`lowmc.properties`、`sike/p434|p503|p610|p751.properties`），`x509` 资源保留。`app/proguard-rules.pro` 只补 PDFBox 可选 JP2 后端的 `-dontwarn`，不要改成整包 `-keep`。当时 `versionCode 1098` 的 arm64 APK 为 **67.77 MiB / 71,061,151 B**，`apkanalyzer` 下载估算 44.9 MiB；全量 298 项单测通过，修复包已覆盖安装到真机并冷启动 25 秒无崩溃。实际 PDF 导入仍需用户回归。R8 后 `mapping.txt` 是崩溃定位必需产物（`app/build/outputs/mapping/release/`），必须随版本保存。
 - **A/B/C release 验证（2026-11-18）**：分支提交 `f188619` 构建的正式签名 arm64 APK 为 **67.87 MiB / 71,162,283 B**，`versionCode 1118`，SHA-256 `8508B00A5ED0F63505144EB996358DB58E42EFD7B73EEC333D7DA26DFFFF0654`，签名证书 `CN=ShuaGeLeTi`。包内已确认仅 arm64 原生库、PP-OCRv5/版面模型保留、5 个 PQC 属性文件不存在、X.509 资源保留；`mapping.txt` 中 `OcrResult`、`Point`、`TextBlock` 均保持原名。该包已覆盖安装到真机 `e87a3fe4`，手机版本从 `1098` 升到 `1118`，冷启动 18 秒无崩溃。构建用的临时 keystore 副本已删除，未提交。
-- **R8 的 JNI 契约类必须 keep**：RapidOCR native 侧用 `FindClass/NewObject` 创建 `OcrResult`、`Point`、`TextBlock`，已在 `rapidocr-src/OcrLibrary/consumer-rules.pro` 保留这三个类及成员。删掉会让 OCR 直接 `ClassNotFoundException: com.benjaminwan.ocrlibrary.Point` 并以 SIGABRT 闪退；R8 后看 `mapping.txt` 应仍有原名映射。
+- **D/流式预览验证（2026-11-18）**：`versionCode 1120` 的正式签名 arm64 APK 为 **71,178,667 B / 67.88 MiB**，SHA-256 `F7CDE9150D86395F9F8C00FE18C87EFD264BE8E4D798C1BA9D52C15F04F5B397`。已覆盖安装真机并完成 4 路 124 页扫描件；用户确认生成过程卡片能显示实际流式内容。
+- **R8 的 JNI 契约类必须 keep**：RapidOCR native 侧用 `FindClass/NewObject` 创建 `OcrResult`、`Point`、`TextBlock`，Java 侧通过 `OcrEngine`/`LayoutEngine` 的 native 方法创建和释放 handle，已在该模块 `consumer-rules.pro` 保留这五个类及成员。删掉会让 OCR 直接 `ClassNotFoundException` 或 JNI 符号找不到并以 SIGABRT 闪退；R8 后看 `mapping.txt` 应仍有原名映射。
 - **最后一题完成页（2026-11-16 修）**：标准/速刷/背题/随机以及“刷本轮错题”子会话共用 `StudyScreen`，不能再用 `nextQuestion != null` 作为唯一前进条件。最后一题答完或背题已揭晓时必须允许 `vm.next()` 推进到 `finished`；`StudyNavigationTest` 锁住这四种模式。测试模式走独立 `ExamScreen`，最后一题本来就是“交卷”，不受此 bug 影响。
 - **只发 arm64-v8a**（v1.0.11 之后，`app/build.gradle.kts` 的 `splits.abi.include` 默认 `listOf("arm64-v8a")`）：v7a 是 2017 年前 32 位老机、x86_64 只有模拟器/Chromebook，真实手机用户接近 0，却让 Release 多 156MB。**要给模拟器或老机出包时用命令行覆盖，不要改代码**：`./gradlew assembleDebug -PabiOverride=arm64-v8a,x86_64`（逗号分隔）。**Release 产物统一命名为 `Shualegeti-<abi>-<version>.apk`**（如 `Shualegeti-arm64-v8a-1.1.0.apk`），由 `app/build.gradle.kts` 末尾的 `applicationVariants.configureEach` 设置 `outputFileName`。**debug 包名保持 `app-<abi>-debug.apk` 不变** —— `启动模拟器.bat` 按这个名字找包装机。根目录同步放同名 release 包；模拟器需先带 override 构建 x86_64 包。
 - **APK 一律不入库**（v1.0.4 起）：`/app-*.apk` 已被 `.gitignore` 忽略，正式分发走 GitHub Releases + Gitee Release 镜像；但 `启动模拟器.bat` 仍读根目录 APK，所以本地构建后要手动 `cp app/build/outputs/apk/debug/app-<abi>-debug.apk .`
@@ -139,7 +149,7 @@ RapidOCR 识别一页分两步：**先版面分析，再识别文字**。模型�
 
 ```bash
 export JAVA_HOME="/c/Program Files/Microsoft/jdk-17.0.20.101-hotspot"; export PATH="$JAVA_HOME/bin:$PATH"
-./gradlew assembleDebug testDebugUnitTest          # 构建 + 单测（当前 298 项）
+./gradlew assembleDebug testDebugUnitTest          # 构建 + 单测（当前 337 项）
 ./gradlew assembleRelease                          # → app/build/outputs/apk/release/Shualegeti-arm64-v8a-<版本>.apk
 ADB="/c/Users/xutia/AppData/Local/Android/Sdk/platform-tools/adb.exe"
 "$ADB" -s e87a3fe4 install -r app-arm64-v8a-debug.apk   # 模拟器/debug 签名机；手机若是正式签名包会拒绝
@@ -261,7 +271,7 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - **AI 用量账本**：所有导入/生成/问 AI/深度解题/极简解析调用统一写 `ai_usage_records`，本地估算按每次调用自己的时间戳和编号计算；DeepSeek 官方只有账号级余额接口，没有 API Key 级消费查询。
 - **设置/更新**：关于页使用矢量前景图标 + 绿色底，**不能把 adaptive-icon XML 直接传给 Compose `painterResource`（它只接受 `<vector>`，否则稳定崩溃）**；检查更新同时比较 versionName 与 Release 说明里的 `versionCode:N`，本机任一项更高都提示最新；网络失败显示 HTTP 状态码，连接失败明确显示无状态码。字体大小滑杆松手才应用、跨档震动；震动强度用振幅和脉冲密度共同表达。
 - **交互修复**：空题库首页不渲染编辑按钮；编辑模式未选项透明度 0.48、已选项恢复对比度；菜单/拖拽横条固定容器消除跳动；批量操作栏弹性上滑；问 AI 开关的颜色与震动即时响应。
-- **回归基线**：`./gradlew testDebugUnitTest --rerun-tasks` 当前 **298 项全绿**。真实《流行病学学习指导与习题集》148 页扫描件离线 OCR 后，用现有 728 题 AI 解析结果做“清空答案再回填”回归：新版规则回填 **660/719（91.8%）**，多数章节 100%，明显高于旧版约 61%。模拟器 UI 已验证空题库/PDF 新布局/维护状态恢复；关于页图标、Git versionCode、HTTP 错误提示已实测。真机完整重导该 PDF 仍需用户复测。
+- **回归基线**：`./gradlew testDebugUnitTest --rerun-tasks` 当前 **337 项全绿**。真实《流行病学学习指导与习题集》148 页扫描件离线 OCR 后，用现有 728 题 AI 解析结果做“清空答案再回填”回归：新版规则回填 **660/719（91.8%）**，多数章节 100%，明显高于旧版约 61%。模拟器 UI 已验证空题库/PDF 新布局/维护状态恢复；关于页图标、Git versionCode、HTTP 错误提示已实测。真机完整重导该 PDF 仍需用户复测。
 - **PDF 字体子集**：两套 Noto SC 字体只保留《通用规范汉字表》8105 字 + 常用拉丁/希腊/西里尔、数学运算符、补充数学/工程符号、箭头、几何、盲文与中文标点。原始 24.26MiB，子集后约 6.60MiB；release APK 压缩字体从约 14.96MB 降到约 4.18MB，APK 实测减少约 10.8MB。字体仍完整内嵌（PDFBox 默认按使用字形子集化），不依赖系统字体。重新生成命令和字表在 `scripts/subset_pdf_fonts.py`、`scripts/gb8105.txt`；原字体备份在本地 `.shots/font-originals/`（gitignore）。
 - 字体官方 OFL 文本已随 assets 打包为 `assets/pdf/OFL-NotoSansSC.txt` 和 `OFL-NotoSerifSC.txt`，不要删。
 - **字体缺字边界**：GB8105 或保留符号范围外的生僻字不会自动回退系统字体；PDFBox 抛出无字形错误，导出页会显示失败提示。修改范围时必须同步跑 `PdfFontSubsetCoverageTest` 和 `WrongBookPdfRendererTest`。
@@ -293,7 +303,9 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 ## AI 解析流式预览（`ImportPipelineWorker` + `ImportScreen.kt`，v1.0.11）
 
 - 解析时模型逐字输出写进 `import_jobs.streamTail`，UI 用 `StreamPreviewCard`（`PaperCard` + 132dp 高 `Monospace` 滚动框，自动滚到底）渲染，**不铺满整页**。
-- 关键节流参数：`STREAM_TAIL_CHARS = 1200`（只留尾巴，DB 写入量可控）、`STREAM_FLUSH_MS = 350L`（写库频率）。`tailScope` 是独立 `CoroutineScope(Dispatchers.IO + SupervisorJob())`，**DONE 时必须 `tailScope.cancel()` 并把 `streamTail` 置 null**，否则界面残留半截输出。
+- 关键节流参数：`STREAM_TAIL_CHARS = 1200`（只留尾巴，DB 写入量可控）、`STREAM_FLUSH_MS = 350L`（写库频率）。每段使用独立 `StringBuilder`，合成预览时标出“分段 N”；所有并发分块首次流式尝试都能调用 `onDelta`，不会只有 warm-up 段有输出。
+- 流式预览经 `Channel.CONFLATED` 交给单一 writer 串行写库；`ImportPipelineWorker.updateJob()` 还必须持有全局 `jobWriteLock`。否则两个 read-modify-upsert 并发时，旧预览或普通进度更新会覆盖新的 `streamTail`，表现为卡片只闪一行。
+- 结束、取消或失败前先 `drainTail()` 等 writer 收口，再写终态；DONE/取消把 `streamTail` 置 null，失败保留最后一段预览。空流式响应准备降级非流式重试时调用 `onStreamReset` 清尾巴。
 - `parseChunkWithRetry` 只在**首次尝试**（`wait == 0L`）传 `onDelta`：重试会把同样内容再吐一遍，预览会重复。
 
 ## 章节识别与答案表（`data/parse/`，v1.0.12 重做）
@@ -410,7 +422,7 @@ M0 环境/仓库 → M1 骨架+四模式 → M2 OCR 导入流水线 → M3 AI �
 - **`AnswerSheet` 的两个排版缺口**：① Java 的 `\s` **不含全角空格 U+3000**，`1.B　2.D` 这种最常见的中文分隔会被判「有实义残留」→ 落到主观题分支得到伪数据；② `A1型：1.B 2.D` 这类题型分组前缀会让整行不合格、整组答案全丢。两者都已修（`fillerRe` 补 `\u3000`、新增 `typeLabelRe` 剥前缀）。
 - **提示词必须要求模型输出题号**：`QuestionDto.number` 新增并写进 `PARSE_DEFAULT` 规则 2（「number 必填，原样照抄原文数字，不要改写成全书连续编号，题号不要留在 stem 里」）。这是绑定可靠的前提。
 - 实测：AI 链路答案覆盖 **31/336 → 281/336（83%）**，客观题绑定 205/211 且**零错填**；离线链路维持 345/346。护栏单测：`AnswerBinderTest.kt`（12 项）+ `AnswerCoverageRealFileTest.kt`（真实素材，客观题零错填 + 端到端覆盖率 ≥ 80%）。
-- **改这块必须 `--rerun-tasks` 跑全量**（现为 298 项）。
+- **改这块必须 `--rerun-tasks` 跑全量**（现为 337 项）。
 
 ### 11. AI 成本优化（已落地，全部实测）
 

@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -100,6 +101,7 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
     var confirmClearFav by remember { mutableStateOf(false) }
     var confirmResetProgress by remember { mutableStateOf(false) }
     var showPrompts by remember { mutableStateOf(false) }
+    var pendingRapidOcrConcurrency by remember { mutableStateOf<Int?>(null) }
     /** 用量情况的时间窗口：7 / 30 天 */
     var usageDays by remember { mutableIntStateOf(7) }
     var fontDraft by remember { mutableFloatStateOf(ui.fontScale) }
@@ -508,7 +510,7 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                         Text("OCR 引擎", style = serifTitle(15.sp, FontWeight.Medium))
                         OcrOption(
                             selected = ui.ocrEngine == OcrEngine.ML_KIT,
-                            title = "ML Kit（默认 · 轻量）",
+                            title = "ML Kit（轻量）",
                             desc = "离线免费，速度快，印刷体效果好",
                             onClick = { vm.setOcrEngine(OcrEngine.ML_KIT) }
                         )
@@ -518,6 +520,58 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                             desc = "PP-OCRv5 离线模型，扫描件/双栏识别更准",
                             onClick = { vm.setOcrEngine(OcrEngine.RAPID_OCR) }
                         )
+                        if (ui.ocrEngine == OcrEngine.RAPID_OCR) {
+                            DividerLine()
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        "RapidOCR 扫描页并发",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Text(
+                                        "仅影响多页 PDF 扫描件；单张照片和 ML Kit 始终单路",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                MonoText("${ui.rapidOcrConcurrency} 路", color = extra.terracotta)
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                                (1..4).forEach { lanes ->
+                                    FilterChip(
+                                        selected = ui.rapidOcrConcurrency == lanes,
+                                        onClick = {
+                                            if (lanes == 1) {
+                                                vm.setRapidOcrConcurrency(1)
+                                                vm.clearRapidOcrInterrupted()
+                                            } else {
+                                                pendingRapidOcrConcurrency = lanes
+                                            }
+                                        },
+                                        label = { Text("$lanes 路") }
+                                    )
+                                }
+                            }
+                            Text(
+                                "实验功能。多路会同时加载多份 ONNX 会话，CPU、内存和发热都会明显增加。",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                            if (ui.rapidOcrInterrupted) {
+                                Text(
+                                    "上次 RapidOCR 多路任务未正常结束（可能发生闪退），建议切回 1 路。",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = extra.sage
+                                )
+                                TextButton(onClick = {
+                                    vm.setRapidOcrConcurrency(1)
+                                    vm.clearRapidOcrInterrupted()
+                                }) {
+                                    Text("切回 1 路", color = extra.sage)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -692,6 +746,23 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
             onConfirm = {
                 confirmResetProgress = false
                 vm.resetStudyProgress()
+            }
+        )
+    }
+    pendingRapidOcrConcurrency?.let { lanes ->
+        ConfirmDialog(
+            title = "启用 RapidOCR $lanes 路并发",
+            text = if (lanes >= 4) {
+                "4 路会同时加载 4 套 OCR 与版面模型，低端机可能明显卡顿、内存不足或闪退。建议只在旗舰机上试用；若发生闪退，请回到这里切回 1 路。"
+            } else {
+                "多路会并行占用更多 CPU 与内存，老旧机型可能卡顿或闪退。建议先用较短扫描件测试；若发生闪退，请回到这里切回 1 路。"
+            },
+            confirmText = "仍要启用",
+            onDismiss = { pendingRapidOcrConcurrency = null },
+            onConfirm = {
+                vm.setRapidOcrConcurrency(lanes)
+                vm.clearRapidOcrInterrupted()
+                pendingRapidOcrConcurrency = null
             }
         )
     }

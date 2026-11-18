@@ -134,6 +134,7 @@ object AppStorage {
     /** 删除导入任务的全部中间产物（任务结束或被用户丢弃时调用） */
     fun deleteImportArtifacts(context: Context, jobId: String) {
         runCatching { importRawFile(context, jobId).delete() }
+        runCatching { importOcrProgressFile(context, jobId).delete() }
         runCatching { importParsedFile(context, jobId).delete() }
     }
 
