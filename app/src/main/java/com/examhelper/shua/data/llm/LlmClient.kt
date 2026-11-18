@@ -378,11 +378,25 @@ class LlmClient(
                 throw LlmException("HTTP ${resp.code}: ${resp.body?.string().orEmpty().take(300)}")
             }
             val source = resp.body?.source() ?: throw LlmException("响应为空")
-            val first = source.readUtf8Line()
-                ?: throw LlmException("模型未返回内容")
+            // SSE 可以在 data 帧前带空行、心跳注释或 event 字段。不能只看
+            // 物理第一行，否则合法的事件流会被误当成整包 JSON。
+            var first = source.readUtf8Line()
+            while (first != null) {
+                val trimmed = first.trimStart('\uFEFF', ' ', '\t')
+                if (trimmed.isNotEmpty() &&
+                    !trimmed.startsWith(":") &&
+                    !trimmed.startsWith("event:") &&
+                    !trimmed.startsWith("id:") &&
+                    !trimmed.startsWith("retry:")
+                ) {
+                    break
+                }
+                first = source.readUtf8Line()
+            }
+            first ?: throw LlmException("模型未返回内容")
 
             // 非 SSE：端点不支持流式，整包 JSON 一次到达 → 一次性回调，语义与流式一致
-            if (!first.trimStart().startsWith("data:")) {
+            if (!first.trimStart('\uFEFF', ' ', '\t').startsWith("data:")) {
                 val whole = first + "\n" + source.readString(Charsets.UTF_8)
                 val parsed = runCatching { json.decodeFromString<ChatCompletionResponse>(whole) }
                     .getOrElse { throw LlmException("响应解析失败: ${whole.take(200)}", it) }

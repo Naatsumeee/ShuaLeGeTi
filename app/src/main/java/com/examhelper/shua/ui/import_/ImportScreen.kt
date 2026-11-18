@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -53,11 +54,15 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.examhelper.shua.data.db.QuestionType
 import com.examhelper.shua.data.llm.Prompts
 import com.examhelper.shua.data.model.ParsedLine
+import com.examhelper.shua.data.parse.FailedChunk
+import com.examhelper.shua.data.parse.MissingAnswer
+import com.examhelper.shua.data.parse.ParseReport
 import com.examhelper.shua.ui.bank.typeLabel
 import com.examhelper.shua.ui.theme.ChipTone
 import com.examhelper.shua.ui.theme.CompactTopBar
 import com.examhelper.shua.ui.theme.GlassSurface
 import com.examhelper.shua.ui.theme.PaperCard
+import com.examhelper.shua.ui.theme.QuestionNumberBadge
 import com.examhelper.shua.ui.theme.SectionLabel
 import com.examhelper.shua.ui.theme.SemanticChip
 import com.examhelper.shua.ui.theme.isCompactWidth
@@ -66,6 +71,9 @@ import com.examhelper.shua.ui.theme.safeTopPadding
 import com.examhelper.shua.ui.theme.serifTitle
 import com.examhelper.shua.ui.theme.shuaColors
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun ImportScreen(
@@ -82,6 +90,7 @@ fun ImportScreen(
     // 电脑端整理题库的路线说明默认收起：它是「少数人才需要」的长文本，
     // 常驻展开会把首屏的选择文件按钮挤出屏幕。
     var showPcGuide by remember { mutableStateOf(false) }
+    var reportExpanded by remember(state.jobId, state.parseReport) { mutableStateOf(false) }
     LaunchedEffect(promptCopied) {
         if (promptCopied) {
             kotlinx.coroutines.delay(4000)
@@ -269,7 +278,11 @@ fun ImportScreen(
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 Text("OCR 引擎", style = serifTitle(15.sp, FontWeight.Medium), modifier = Modifier.weight(1f))
-                                SemanticChip(if (state.ocrEngine == "mlkit") "ML Kit" else "RapidOCR", ChipTone.Brand)
+                                SemanticChip(
+                                    if (state.ocrEngine == "mlkit") "ML Kit" else
+                                        "RapidOCR · ${state.rapidOcrConcurrency} 路",
+                                    ChipTone.Brand
+                                )
                             }
                             Row(
                                 Modifier.fillMaxWidth(),
@@ -283,6 +296,39 @@ fun ImportScreen(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.outline
                             )
+                            if (state.ocrEngine != "mlkit" && state.rapidOcrConcurrency > 1) {
+                                Text(
+                                    "实验性 ${state.rapidOcrConcurrency} 路并发，性能开销较大；如闪退请到设置切回 1 路",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                                    when {
+                                        state.checkingOcrCache -> Row(
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            CircularProgressIndicator(
+                                                Modifier.size(14.dp),
+                                                strokeWidth = 2.dp,
+                                                color = extra.terracotta
+                                            )
+                                            Spacer(Modifier.width(7.dp))
+                                            Text(
+                                                "正在检查该文件是否有可复用的 OCR 结果…",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.outline
+                                            )
+                                        }
+                                        state.reuseCachedOcr && state.cachedOcrAt != null -> {
+                                            val cachedAt = state.cachedOcrAt
+                                            Text(
+                                                "将跳过 OCR，复用 ${formatCacheTime(cachedAt!!)} 的" +
+                                                    " ${if (state.ocrEngine == "mlkit") "ML Kit" else "RapidOCR"} 结果。",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = extra.terracottaDeep
+                                            )
+                                        }
+                                    }
                         }
                     }
                 } else {
@@ -292,7 +338,13 @@ fun ImportScreen(
                         color = MaterialTheme.colorScheme.outline
                     )
                 }
-                PrimaryAction("AI 智能解析（推荐 · 后台运行）", extra.terracotta) { vm.startPipeline("ai") }
+                val cacheDecisionPending =
+                    state.checkingOcrCache || (state.cachedOcrAt != null && !state.ocrChoiceResolved)
+                PrimaryAction(
+                    "AI 智能解析（推荐 · 后台运行）",
+                    extra.terracotta,
+                    enabled = !cacheDecisionPending
+                ) { vm.startPipeline("ai") }
                 Text(
                     if (state.providersReady)
                         "主模型解析，${state.concurrency} 路并行，可切出应用。支持 A1/A2/A3/B 型题分组识别。"
@@ -301,7 +353,11 @@ fun ImportScreen(
                     style = MaterialTheme.typography.labelSmall,
                     color = if (state.providersReady) MaterialTheme.colorScheme.outline else extra.sage
                 )
-                SecondaryAction("离线快解析（规整文本）", Modifier.fillMaxWidth()) { vm.startPipeline("offline") }
+                SecondaryAction(
+                    "离线快解析（规整文本）",
+                    Modifier.fillMaxWidth(),
+                    enabled = !cacheDecisionPending
+                ) { vm.startPipeline("offline") }
                 TextButton(onClick = vm::cancelChoosing, modifier = Modifier.fillMaxWidth()) {
                     Text("返回重选", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -414,7 +470,7 @@ fun ImportScreen(
                     // 生成过程预览：模型正在写什么，一眼能看到。
                     // 固定高度 + 内部滚动，不铺满整页，也不让下方「已解析」列表跟着抖。
                     val tail = job?.streamTail
-                    if (!tail.isNullOrBlank() && job?.stage == "PARSE") {
+                    if (!tail.isNullOrBlank() && job?.stage in setOf("PARSE", "FAILED")) {
                         StreamPreviewCard(tail)
                     }
                     if (state.log.isNotEmpty()) {
@@ -469,11 +525,48 @@ fun ImportScreen(
                         TextButton(onClick = vm::resumeJob) { Text("补齐失败段", color = extra.terracotta) }
                     }
                 }
+                val report = state.parseReport?.takeIf {
+                    it.failedChunks.isNotEmpty() || it.missingAnswers.isNotEmpty()
+                }
+                val failedByChunk = report?.failedChunks?.groupBy { it.chunkIndex }.orEmpty()
+                val missingByChunk = report?.missingAnswers?.groupBy { it.chunkIndex }.orEmpty()
+                val reportChunkIndexes = (failedByChunk.keys + missingByChunk.keys).distinct().sorted()
                 LazyColumn(
                     Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(7.dp),
                     contentPadding = PaddingValues(bottom = 6.dp)
                 ) {
+                    if (report != null) {
+                        item(key = "parse-report-header") {
+                            ParseReportHeader(
+                                report = report,
+                                expanded = reportExpanded,
+                                onToggle = { reportExpanded = !reportExpanded }
+                            )
+                        }
+                        if (reportExpanded) {
+                            reportChunkIndexes.forEach { chunkIndex ->
+                                item(key = "report-chunk-$chunkIndex") {
+                                    Text(
+                                        "分段 ${chunkIndex + 1}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = extra.terracottaDeep,
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                    )
+                                }
+                                failedByChunk[chunkIndex].orEmpty().forEachIndexed { index, failed ->
+                                    item(key = "report-failed-$chunkIndex-$index") {
+                                        ParseFailedChunkRow(failed)
+                                    }
+                                }
+                                missingByChunk[chunkIndex].orEmpty().forEachIndexed { index, missing ->
+                                    item(key = "report-missing-$chunkIndex-$index") {
+                                        ParseMissingAnswerRow(missing)
+                                    }
+                                }
+                            }
+                        }
+                    }
                     itemsIndexed(state.preview) { i, q -> ParsedCard(i + 1, q) }
                 }
                 if (state.stage == ImportViewModel.Stage.SAVING) {
@@ -509,7 +602,139 @@ fun ImportScreen(
             }
         }
     }
+
+    val cachedAt = state.cachedOcrAt
+    if (cachedAt != null && !state.ocrChoiceResolved) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("发现已有 OCR 结果") },
+            text = {
+                Text(
+                    "该文件在 ${formatCacheTime(cachedAt)} 使用 " +
+                        "${if (state.ocrEngine == "mlkit") "ML Kit" else "RapidOCR"} 识别过。\n\n" +
+                        "使用缓存可跳过耗时的 OCR，但仍会重新进行 AI 或离线结构解析。"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.resolveOcrCache(true) }) {
+                    Text("使用已有 OCR")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { vm.resolveOcrCache(false) }) {
+                    Text("重新 OCR")
+                }
+            }
+        )
+    }
 }
+
+@Composable
+private fun ParseReportHeader(report: ParseReport, expanded: Boolean, onToggle: () -> Unit) {
+    val extra = shuaColors
+    PaperCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(15.dp)) {
+        Row(
+            Modifier.fillMaxWidth().clickableTab(onToggle).padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            SemanticChip("解析问题", ChipTone.Amber)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "失败 ${report.failedChunks.size} 段 · 缺答案 ${report.missingAnswers.size} 题",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                if (expanded) "收起" else "展开",
+                style = MaterialTheme.typography.labelSmall,
+                color = extra.terracottaDeep
+            )
+        }
+    }
+}
+
+@Composable
+private fun ParseFailedChunkRow(failed: FailedChunk) {
+    val extra = shuaColors
+    PaperCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                SemanticChip("失败段", ChipTone.Sage)
+                Text(
+                    pageRangeLabel(failed.pageFrom, failed.pageTo),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            }
+            Text(
+                failed.reason,
+                style = MaterialTheme.typography.labelSmall,
+                color = extra.sage,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun ParseMissingAnswerRow(missing: MissingAnswer) {
+    PaperCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (missing.number != null) {
+                    QuestionNumberBadge(missing.number, compact = true)
+                } else {
+                    SemanticChip("无题号", ChipTone.Neutral)
+                }
+                Text(
+                    pageListLabel(missing.pages),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            missing.chapter?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Text(
+                missing.stemPreview,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+private fun pageRangeLabel(from: Int?, to: Int?): String = when {
+    from == null && to == null -> "页码未知"
+    from == to || to == null -> "第 $from 页"
+    from == null -> "第 $to 页"
+    else -> "第 $from-$to 页"
+}
+
+private fun pageListLabel(pages: List<Int>): String =
+    if (pages.isEmpty()) "页码未知" else "第 ${pages.joinToString("、")} 页"
 
 @Composable
 private fun PrimaryAction(text: String, color: androidx.compose.ui.graphics.Color, enabled: Boolean = true, onClick: () -> Unit) {
@@ -523,15 +748,24 @@ private fun PrimaryAction(text: String, color: androidx.compose.ui.graphics.Colo
 }
 
 @Composable
-private fun SecondaryAction(text: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun SecondaryAction(
+    text: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
     OutlinedButton(
         onClick = onClick,
+        enabled = enabled,
         modifier = modifier.heightIn(min = 48.dp),
         shape = RoundedCornerShape(15.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, shuaColors.creamLine),
         colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
     ) { Text(text, style = MaterialTheme.typography.labelLarge, maxLines = 1) }
 }
+
+private fun formatCacheTime(timestamp: Long): String =
+    SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(timestamp))
 
 @Composable
 private fun EngineTab(text: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
@@ -620,15 +854,7 @@ private fun ParsedCard(index: Int, q: ParsedLine) {
                 horizontalArrangement = Arrangement.spacedBy(5.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    Modifier
-                        .size(21.dp)
-                        .clip(CircleShape)
-                        .background(extra.terracottaSoft),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("$index", style = MaterialTheme.typography.labelSmall, color = extra.terracotta)
-                }
+                QuestionNumberBadge(index, compact = true)
                 SemanticChip(
                     runCatching { typeLabel(QuestionType.valueOf(q.type)) }.getOrDefault("单选") +
                         (q.subtype?.let { "·$it" } ?: ""),

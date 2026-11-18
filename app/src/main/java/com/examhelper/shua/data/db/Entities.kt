@@ -106,7 +106,8 @@ data class Question(
     val agreement: String? = null,
     /** 各部分歧 JSON: [{"provider":"名","answer":"C","analysis":"..."}] */
     val dissentJson: String? = null,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val askChatJson: String? = null
 )
 
 /** 各模式学习进度（随机巩固的乱序队列持久化在此） */
@@ -122,7 +123,8 @@ data class StudyProgress(
     val randomCursor: Int = 0,
     /** 本次进度对应的筛选条件指纹（变更时自动重置进度） */
     val filterJson: String? = null,
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    val roundId: String? = null
 )
 
 /** 作答记录（判分、错题本、统计都基于它） */
@@ -143,7 +145,8 @@ data class AttemptRecord(
     val runId: String? = null,
     /** 本题作答用时毫秒 */
     val durationMs: Long? = null,
-    val answeredAt: Long = System.currentTimeMillis()
+    val answeredAt: Long = System.currentTimeMillis(),
+    val correctKnown: Boolean = true
 )
 
 /** 错题本 */
@@ -257,7 +260,8 @@ data class ImportJob(
     val streamTail: String? = null,
     val errorMessage: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    val parseReportJson: String? = null
 )
 
 /**

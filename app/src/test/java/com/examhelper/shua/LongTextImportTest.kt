@@ -2,6 +2,8 @@ package com.examhelper.shua
 
 import com.examhelper.shua.data.parse.ChunkPlanner
 import com.examhelper.shua.data.parse.TextQuestionParser
+import com.examhelper.shua.data.model.ParsedQuestion
+import com.examhelper.shua.data.db.QuestionType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -81,5 +83,21 @@ class LongTextImportTest {
         val tail = chunks[0].text.takeLast(600)
         val nextHead = chunks[1].text.take(600)
         assertEquals(tail, nextHead)
+    }
+
+    @Test(timeout = 10_000)
+    fun `数千题离线合并去重不会卡在最后一段`() {
+        val questions = (1..2400).map { n ->
+            ParsedQuestion(
+                chapter = "第${n / 100 + 1}章 测试章节",
+                type = QuestionType.SINGLE,
+                stem = "第 $n 道题的题干",
+                sourceNumber = n % 100 + 1
+            )
+        }
+
+        val merged = TextQuestionParser.mergeLongResults(questions + questions, "")
+
+        assertEquals(2400, merged.size)
     }
 }

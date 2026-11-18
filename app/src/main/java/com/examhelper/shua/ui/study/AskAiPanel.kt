@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package com.examhelper.shua.ui.study
 
 import androidx.compose.foundation.background
@@ -10,10 +12,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -39,17 +40,23 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.examhelper.shua.data.model.ChatTurn
 import com.examhelper.shua.ui.theme.Markdown
 import com.examhelper.shua.ui.theme.Latex
 import com.examhelper.shua.ui.theme.monoStyle
@@ -57,6 +64,7 @@ import com.examhelper.shua.ui.theme.safeBottomPadding
 import com.examhelper.shua.ui.theme.serifTitle
 import com.examhelper.shua.ui.theme.shuaColors
 import com.examhelper.shua.ui.sound.Haptics
+import kotlinx.coroutines.launch
 
 /**
  * 做题页顶栏常驻的「问 AI」按钮。
@@ -121,11 +129,17 @@ data class AskAiState(
     val placeholder: String = "追问这道题…"
 )
 
+internal fun shouldAnimateToNewMessage(
+    oldCount: Int,
+    newCount: Int,
+    asking: Boolean
+): Boolean = newCount > oldCount && !asking
+
 /**
  * 追问面板（底部弹层）。
  *
- * 深度解题之后这里就是"继续问"的入口，也可以不深度解题直接问。对话只属于当前题目，
- * 切题即清空（由 ViewModel 的 reload 负责），避免把上一题的上下文带进来聊错。
+ * 深度解题之后这里就是"继续问"的入口，也可以不深度解题直接问。对话按题目持久化，
+ * 切题时只切换当前题目的历史，不会把上一题的上下文带进来聊错。
  */
 @Composable
 fun AskAiPanel(
@@ -137,11 +151,22 @@ fun AskAiPanel(
     val extra = shuaColors
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val inputBringIntoView = remember { BringIntoViewRequester() }
+    var previousChatCount by remember { mutableIntStateOf(state.chat.size) }
 
-    // 新消息进来滚到底部，跟聊天软件一致；流式输出期间也要持续跟随
-    LaunchedEffect(state.chat.size, state.asking, state.askStream.length) {
-        val last = state.chat.size + if (state.asking) 1 else 0
-        if (last > 0) listState.animateScrollToItem((last - 1).coerceAtLeast(0))
+    // 完整消息只触发一次滚动；流式输出另走节流，避免每个 token 重启动画。
+    LaunchedEffect(state.chat.size, state.asking) {
+        val shouldAnimate = shouldAnimateToNewMessage(previousChatCount, state.chat.size, state.asking)
+        previousChatCount = state.chat.size
+        if (shouldAnimate) {
+            listState.animateScrollToItem(state.chat.lastIndex)
+        }
+    }
+    LaunchedEffect(state.asking, state.askStream.length / 80) {
+        if (state.asking && state.askStream.isNotBlank()) {
+            listState.scrollToItem(state.chat.size.coerceAtLeast(0))
+        }
     }
 
     val send = {
@@ -152,17 +177,14 @@ fun AskAiPanel(
         }
     }
 
-    // 外层是 ModalBottomSheet：它自己会跟随 IME 上移（Sheet 的容器已经吃掉了键盘高度）。
-    // 这里再补一份 ime inset，就会在「关闭」下面多出一块和键盘等高的空白，
-    // 把整个 Column 撑到屏幕最大高度 —— 视觉上就是「输入框被一片空白压住」。
-    // 所以键盘可见时只留一点点呼吸位，键盘收起时才需要给手势条让位。
-    val imeBottom = WindowInsets.ime.asPaddingValues().calculateBottomPadding()
+    // IME 高度由外层 ModalBottomSheet 统一消费；这里只补导航条间距。
     val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    val bottomInset = if (imeBottom > 0.dp) 8.dp else maxOf(navBottom, 10.dp)
+    val bottomInset = maxOf(navBottom, 10.dp)
 
     Column(
         Modifier
             .fillMaxWidth()
+            .fillMaxHeight()
             .padding(horizontal = 16.dp)
             .padding(bottom = bottomInset)
             // ModalBottomSheet 自带跟手阻尼与速度吸附；面板只负责内容。
@@ -182,7 +204,7 @@ fun AskAiPanel(
                 modifier = Modifier.weight(1f, fill = false)
             )
             Spacer(Modifier.weight(1f))
-            if (state.chat.isNotEmpty()) {
+            if (state.chat.isNotEmpty() && !state.asking) {
                 Box(
                     Modifier
                         .clip(CircleShape)
@@ -280,11 +302,18 @@ fun AskAiPanel(
 
         Spacer(Modifier.padding(top = 10.dp))
         // ---- 输入区 ----
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.bringIntoViewRequester(inputBringIntoView)
+        ) {
             OutlinedTextField(
                 value = input,
                 onValueChange = { input = it.take(500) },
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .onFocusChanged {
+                        if (it.isFocused) scope.launch { inputBringIntoView.bringIntoView() }
+                    },
                 placeholder = {
                     Text(state.placeholder, style = MaterialTheme.typography.bodySmall)
                 },

@@ -4,56 +4,61 @@
 #include "OcrUtils.h"
 #include "LayoutNet.h"
 
-static OcrLite *ocrLite;
-static LayoutNet *layoutNet;
-
-JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
-    ocrLite = new OcrLite();
-    layoutNet = new LayoutNet();
-    return JNI_VERSION_1_4;
-}
-
-JNIEXPORT void JNI_OnUnload(JavaVM *vm, void *reserved) {
-    LOGI("Goodbye OcrLite!");
-    delete ocrLite;
-    delete layoutNet;
-}
-
-extern "C" JNIEXPORT jboolean JNICALL
-Java_com_benjaminwan_ocrlibrary_OcrEngine_init(JNIEnv *env, jobject thiz, jobject assetManager,
-                                               jint numThread, jstring detName, jstring clsName,
-                                               jstring recName, jstring keysName) {
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_benjaminwan_ocrlibrary_OcrEngine_nativeCreate(JNIEnv *env, jobject thiz,
+                                                       jobject assetManager, jint numThread,
+                                                       jstring detName, jstring clsName,
+                                                       jstring recName, jstring keysName) {
     std::string modelDetName = jstringTostring(env, detName);
     std::string modelClsName = jstringTostring(env, clsName);
     std::string modelRecName = jstringTostring(env, recName);
     std::string modelKeysName = jstringTostring(env, keysName);
-    ocrLite->init(env, assetManager, numThread, modelDetName, modelClsName, modelRecName, modelKeysName);
-    //ocrLite->initLogger(false);
-    return JNI_TRUE;
+    auto *engine = new OcrLite();
+    engine->init(env, assetManager, numThread, modelDetName, modelClsName, modelRecName,
+                 modelKeysName);
+    return reinterpret_cast<jlong>(engine);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_benjaminwan_ocrlibrary_OcrEngine_nativeRelease(JNIEnv *env, jobject thiz, jlong handle) {
+    delete reinterpret_cast<OcrLite *>(handle);
 }
 
 /**
  * 版面分析模型单独初始化：它是可选能力，模型缺失时返回 false，
  * 调用方降级到「不做版面分析」，不能因为一个可选模型把 OCR 整个拖垮。
  */
-extern "C" JNIEXPORT jboolean JNICALL
-Java_com_benjaminwan_ocrlibrary_LayoutEngine_init(JNIEnv *env, jobject thiz, jobject assetManager,
-                                                  jint numThread, jstring modelName) {
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_benjaminwan_ocrlibrary_LayoutEngine_nativeCreate(JNIEnv *env, jobject thiz,
+                                                          jobject assetManager, jint numThread,
+                                                          jstring modelName) {
     std::string name = jstringTostring(env, modelName);
     AAssetManager *mgr = AAssetManager_fromJava(env, assetManager);
     if (mgr == NULL) {
         LOGE(" %s", "AAssetManager==NULL");
-        return JNI_FALSE;
+        return 0;
     }
-    layoutNet->setNumThread(numThread);
-    bool ok = layoutNet->initModel(mgr, name);
-    return ok ? JNI_TRUE : JNI_FALSE;
+    auto *layout = new LayoutNet();
+    layout->setNumThread(numThread);
+    if (!layout->initModel(mgr, name)) {
+        delete layout;
+        return 0;
+    }
+    return reinterpret_cast<jlong>(layout);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_benjaminwan_ocrlibrary_LayoutEngine_nativeRelease(JNIEnv *env, jobject thiz,
+                                                           jlong handle) {
+    delete reinterpret_cast<LayoutNet *>(handle);
 }
 
 /** 返回 float[6] 数组的数组：[labelId, score, x1, y1, x2, y2]，坐标为原图尺度。 */
 extern "C" JNIEXPORT jobjectArray JNICALL
-Java_com_benjaminwan_ocrlibrary_LayoutEngine_nativeDetect(JNIEnv *env, jobject thiz, jobject input,
-                                                          jfloat scoreThresh) {
+Java_com_benjaminwan_ocrlibrary_LayoutEngine_nativeDetect(JNIEnv *env, jobject thiz, jlong handle,
+                                                          jobject input, jfloat scoreThresh) {
+    auto *layout = reinterpret_cast<LayoutNet *>(handle);
+    if (layout == nullptr) return nullptr;
     jclass floatArrayClass = env->FindClass("[F");
     if (floatArrayClass == NULL) return NULL;
 
@@ -61,7 +66,7 @@ Java_com_benjaminwan_ocrlibrary_LayoutEngine_nativeDetect(JNIEnv *env, jobject t
     cv::Mat imgRGBA, imgBGR;
     bitmapToMat(env, input, imgRGBA);
     cv::cvtColor(imgRGBA, imgBGR, cv::COLOR_RGBA2BGR);
-    boxes = layoutNet->detect(imgBGR, scoreThresh);
+    boxes = layout->detect(imgBGR, scoreThresh);
 
     jobjectArray result = env->NewObjectArray((jsize) boxes.size(), floatArrayClass, NULL);
     for (jsize i = 0; i < (jsize) boxes.size(); ++i) {
@@ -88,9 +93,13 @@ cv::Mat makePadding(cv::Mat &src, const int padding) {
 
 extern "C"
 JNIEXPORT jobject JNICALL
-Java_com_benjaminwan_ocrlibrary_OcrEngine_detect(JNIEnv *env, jobject thiz, jobject input, jobject output,
-                                                 jint padding, jint maxSideLen, jfloat boxScoreThresh, jfloat boxThresh,
-                                                 jfloat unClipRatio, jboolean doAngle, jboolean mostAngle) {
+Java_com_benjaminwan_ocrlibrary_OcrEngine_nativeDetect(JNIEnv *env, jobject thiz, jlong handle,
+                                                       jobject input, jobject output, jint padding,
+                                                       jint maxSideLen, jfloat boxScoreThresh,
+                                                       jfloat boxThresh, jfloat unClipRatio,
+                                                       jboolean doAngle, jboolean mostAngle) {
+    auto *engine = reinterpret_cast<OcrLite *>(handle);
+    if (engine == nullptr) return nullptr;
     Logger("padding(%d),maxSideLen(%d),boxScoreThresh(%f),boxThresh(%f),unClipRatio(%f),doAngle(%d),mostAngle(%d)",
            padding, maxSideLen, boxScoreThresh, boxThresh, unClipRatio, doAngle, mostAngle);
     cv::Mat imgRGBA, imgBGR, imgOut;
@@ -108,8 +117,8 @@ Java_com_benjaminwan_ocrlibrary_OcrEngine_detect(JNIEnv *env, jobject thiz, jobj
     cv::Mat paddingSrc = makePadding(imgBGR, padding);
     //按比例缩小图像，减少文字分割时间
     ScaleParam s = getScaleParam(paddingSrc, resize);//例：按长或宽缩放 src.cols=不缩放，src.cols/2=长度缩小一半
-    OcrResult ocrResult = ocrLite->detect(paddingSrc, paddingRect, s, boxScoreThresh, boxThresh,
-                                          unClipRatio, doAngle, mostAngle);
+    OcrResult ocrResult = engine->detect(paddingSrc, paddingRect, s, boxScoreThresh, boxThresh,
+                                         unClipRatio, doAngle, mostAngle);
 
     cv::cvtColor(ocrResult.boxImg, imgOut, cv::COLOR_BGR2RGBA);
     matToBitmap(env, imgOut, output);
@@ -118,8 +127,10 @@ Java_com_benjaminwan_ocrlibrary_OcrEngine_detect(JNIEnv *env, jobject thiz, jobj
 }
 
 extern "C" JNIEXPORT jdouble JNICALL
-Java_com_benjaminwan_ocrlibrary_OcrEngine_benchmark(JNIEnv *env, jobject thiz, jobject input,
-                                                    jint loop) {
+Java_com_benjaminwan_ocrlibrary_OcrEngine_nativeBenchmark(JNIEnv *env, jobject thiz, jlong handle,
+                                                          jobject input, jint loop) {
+    auto *engine = reinterpret_cast<OcrLite *>(handle);
+    if (engine == nullptr) return 0;
     int padding = 50;
     int paddingRect= 0;
     float boxScoreThresh = 0.6;
@@ -138,16 +149,16 @@ Java_com_benjaminwan_ocrlibrary_OcrEngine_benchmark(JNIEnv *env, jobject thiz, j
     ScaleParam s = getScaleParam(src, src.cols);//例：按长或宽缩放 src.cols=不缩放，src.cols/2=长度缩小一半
 
     LOGI("=====warmup=====");
-    OcrResult result = ocrLite->detect(src, originRect, s, boxScoreThresh, boxThresh,
-                                       unClipRatio, doAngle, mostAngle);
+    OcrResult result = engine->detect(src, originRect, s, boxScoreThresh, boxThresh,
+                                      unClipRatio, doAngle, mostAngle);
     LOGI("dbNetTime(%f) detectTime(%f)\n", result.dbNetTime, result.detectTime);
     double dbTime = 0.0f;
     double detectTime = 0.0f;
     int loopCount = loop;
     for (int i = 0; i < loopCount; ++i) {
         LOGI("=====loop:%d=====", i + 1);
-        OcrResult ocrResult = ocrLite->detect(src, originRect, s, boxScoreThresh, boxThresh,
-                                              unClipRatio, doAngle, mostAngle);
+        OcrResult ocrResult = engine->detect(src, originRect, s, boxScoreThresh, boxThresh,
+                                             unClipRatio, doAngle, mostAngle);
         LOGI("dbNetTime(%f) detectTime(%f)\n", ocrResult.dbNetTime, ocrResult.detectTime);
         dbTime += ocrResult.dbNetTime;
         detectTime += ocrResult.detectTime;

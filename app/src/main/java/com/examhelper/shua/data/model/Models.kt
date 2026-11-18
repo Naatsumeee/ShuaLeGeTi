@@ -4,6 +4,7 @@ import com.examhelper.shua.data.db.QuestionType
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.util.UUID
 
 /** 题目选项 */
 @Serializable
@@ -126,6 +127,16 @@ data class DissentEntry(
     val selfConfidence: Int? = null
 )
 
+@Serializable
+data class ChatTurn(
+    val role: String,
+    val text: String,
+    val id: String = UUID.randomUUID().toString(),
+    val createdAt: Long = System.currentTimeMillis()
+) {
+    val isUser: Boolean get() = role == "user"
+}
+
 object JsonCodec {
     val json: Json = Json {
         ignoreUnknownKeys = true
@@ -150,6 +161,12 @@ object JsonCodec {
         runCatching { json.decodeFromString<List<Long>>(raw ?: return emptyList()) }
             .getOrDefault(emptyList())
 
+    fun encodeChat(turns: List<ChatTurn>): String = json.encodeToString(turns)
+
+    fun decodeChat(raw: String?): List<ChatTurn> =
+        runCatching { json.decodeFromString<List<ChatTurn>>(raw ?: return emptyList()) }
+            .getOrDefault(emptyList())
+
     fun encodeStringList(items: List<String>): String? =
         if (items.isEmpty()) null else json.encodeToString(items)
 
@@ -164,6 +181,10 @@ object JsonCodec {
                 runCatching { json.decodeFromString<ParsedLine>(line) }.getOrNull()
             }
         }.getOrDefault(emptyList())
+
+    /** 编码中间 JSONL；不能直接写 data class 的 toString()，否则恢复时全部被跳过。 */
+    fun encodeParsedLines(lines: List<ParsedLine>): String =
+        lines.joinToString("\n", postfix = "\n") { json.encodeToString(it) }
 }
 
 fun ParsedLine.toParsedQuestion(): ParsedQuestion = ParsedQuestion(

@@ -23,21 +23,28 @@ import com.examhelper.shua.data.ingest.DocumentIngestor
 import com.examhelper.shua.data.model.JsonCodec
 import com.examhelper.shua.data.model.ParsedLine
 import com.examhelper.shua.data.parse.ChunkPlanner
+import com.examhelper.shua.data.parse.ChunkWorkResult
+import com.examhelper.shua.data.parse.FailedChunk
+import com.examhelper.shua.data.parse.IncompleteModelResponseException
 import com.examhelper.shua.data.parse.LlmQuestionParser
+import com.examhelper.shua.data.parse.ParseReportBuilder
 import com.examhelper.shua.data.parse.TextQuestionParser
+import com.examhelper.shua.data.parse.runChunkScheduler
+import com.examhelper.shua.data.storage.OcrCache
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.encodeToString
 import java.io.File
 import java.util.UUID
+
+private class EmptyModelResultException : IllegalStateException("模型未返回题目")
 
 /**
  * 后台导入流水线：文件 →（docx/PDF/OCR）→ 原文 → 分块并行 AI/离线解析 → JSONL 落盘。
@@ -57,12 +64,16 @@ class ImportPipelineWorker(
         const val KEY_PROVIDER_ID = "providerId"
         const val KEY_CONCURRENCY = "concurrency"
         const val KEY_OCR_ENGINE = "ocrEngine" // "mlkit" / "rapidocr"
+        const val KEY_OCR_CONCURRENCY = "ocrConcurrency"
+        const val KEY_OCR_FINGERPRINT = "ocrFingerprint"
+        const val KEY_REUSE_CACHED_OCR = "reuseCachedOcr"
         const val CHANNEL_ID = "import_pipeline"
 
         /** 预览框里保留的模型输出尾巴长度（字符） */
         private const val STREAM_TAIL_CHARS = 1200
         /** 流式尾巴落库的最小间隔：模型吐字极快，逐字写 Room 会把 IO 打满 */
         private const val STREAM_FLUSH_MS = 350L
+        private val PAGE_MARKER = Regex("""\[\[PG:(\d+)]]""")
 
         /** 单份原始文本上限：超过后明确拒绝，避免“长时间无响应” */
         private const val MAX_RAW_TEXT_CHARS = 5_000_000
@@ -76,7 +87,10 @@ class ImportPipelineWorker(
             parseMode: String,
             providerId: Long?,
             concurrency: Int,
-            ocrEngine: String = "mlkit"
+            ocrEngine: String = "mlkit",
+            ocrConcurrency: Int = 1,
+            ocrFingerprint: String? = null,
+            reuseCachedOcr: Boolean = false
         ): UUID {
             val request = OneTimeWorkRequestBuilder<ImportPipelineWorker>()
                 .setInputData(
@@ -88,7 +102,10 @@ class ImportPipelineWorker(
                         KEY_PARSE_MODE to parseMode,
                         KEY_PROVIDER_ID to providerId,
                         KEY_CONCURRENCY to concurrency,
-                        KEY_OCR_ENGINE to ocrEngine
+                        KEY_OCR_ENGINE to ocrEngine,
+                        KEY_OCR_CONCURRENCY to ocrConcurrency.coerceIn(1, 4),
+                        KEY_OCR_FINGERPRINT to (ocrFingerprint ?: ""),
+                        KEY_REUSE_CACHED_OCR to reuseCachedOcr
                     )
                 )
                 .setConstraints(Constraints.NONE)
@@ -158,6 +175,7 @@ class ImportPipelineWorker(
 
     private fun rawFile(jobId: String) = com.examhelper.shua.data.storage.AppStorage.importRawFile(applicationContext, jobId)
     private fun parsedFile(jobId: String) = com.examhelper.shua.data.storage.AppStorage.importParsedFile(applicationContext, jobId)
+    private val jobWriteLock = Mutex()
 
     override suspend fun doWork(): Result {
         val jobId = inputData.getString(KEY_JOB_ID) ?: return Result.failure()
@@ -166,6 +184,25 @@ class ImportPipelineWorker(
         val parseMode = inputData.getString(KEY_PARSE_MODE) ?: "ai"
         val providerId = inputData.getLong(KEY_PROVIDER_ID, -1L)
         val concurrency = inputData.getInt(KEY_CONCURRENCY, 4).coerceIn(1, 8)
+        val ocrEngine = inputData.getString(KEY_OCR_ENGINE) ?: "rapidocr"
+        val requestedOcrConcurrency = inputData.getInt(KEY_OCR_CONCURRENCY, 1).coerceIn(1, 4)
+        val rapidOcrConcurrency = if (
+            ocrEngine != "mlkit" &&
+            requestedOcrConcurrency > 1 &&
+            com.examhelper.shua.data.ocr.RapidOcrRuntimeGuard
+                .consumeInterrupted(applicationContext)
+        ) {
+            runCatching { container.settings.setRapidOcrConcurrency(1) }
+            updateJob(jobId) {
+                it.copy(message = "上次多路 RapidOCR 未正常结束，本次已自动切回 1 路")
+            }
+            1
+        } else {
+            requestedOcrConcurrency
+        }
+        val ocrFingerprint = inputData.getString(KEY_OCR_FINGERPRINT).orEmpty()
+        val reuseCachedOcr = inputData.getBoolean(KEY_REUSE_CACHED_OCR, false)
+        var streamTailScope: CoroutineScope? = null
 
         try {
             // 首次进入前台服务。失败通常意味着应用已经不在前台、系统拒绝拉起
@@ -184,46 +221,84 @@ class ImportPipelineWorker(
                 updateJob(jobId) {
                     it.copy(stage = "INGEST", message = "正在识别文件内容", totalUnits = 0, doneUnits = 0)
                 }
-                // 只有显式选了 mlkit 才走 ML Kit；缺省（含旧版本遗留任务）一律 RapidOCR，
-                // 与设置页的默认值保持一致。
-                val ocr = if (inputData.getString(KEY_OCR_ENGINE) == "mlkit") {
-                    com.examhelper.shua.data.ocr.MlKitOcrEngine()
+                val cachedText = if (reuseCachedOcr && ocrFingerprint.isNotBlank()) {
+                    OcrCache.read(applicationContext, ocrFingerprint, ocrEngine)
                 } else {
-                    com.examhelper.shua.data.ocr.RapidOcrEngine(applicationContext)
+                    null
                 }
-                // 逐页落盘：47 页扫描件要跑十几分钟，进程被杀时不该整段作废。
-                // 续跑依据是 raw 文件里的「已完成页数」侧车文件（见 ocrProgressFile）。
-                val ingestor = DocumentIngestor(applicationContext, ocr)
-                val progressFile = com.examhelper.shua.data.storage.AppStorage
-                    .importOcrProgressFile(applicationContext, jobId)
-                val donePages = runCatching { progressFile.readText().trim().toInt() }.getOrDefault(0)
-                if (donePages > 0 && raw.exists()) {
-                    // 已落盘的页直接用，从下一页继续
-                    ingestor.resumeFrom = donePages + 1
-                    ingestor.resumePrefix = raw.readText()
-                }
-                ingestor.onPageDone = { page, partial ->
-                    runCatching {
-                        raw.writeText(partial)
-                        progressFile.writeText(page.toString())
+                val text = if (cachedText != null) {
+                    updateJob(jobId) {
+                        it.copy(
+                            message = "已复用 ${engineLabel(ocrEngine)} OCR 结果，跳过重复识别"
+                        )
                     }
-                }
-                val text = ingestor.ingest(Uri.parse(uriStr)) { p ->
-                    // OCR / 逐页读取阶段也要把进度写回数据库：
-                    // 早先只更新前台通知，用户切回应用内看到的进度条一直停在 0
-                    // （stage=INGEST 时 totalUnits 恒为 0），这就是「界面内看不到导入进度」的根因。
-                    runCatching {
-                        updateJob(jobId) {
-                            it.copy(
-                                stage = "INGEST",
-                                message = p.message,
-                                totalUnits = p.total,
-                                doneUnits = p.current
-                            )
+                    cachedText
+                } else {
+                    // 只有显式选了 mlkit 才走 ML Kit；缺省（含旧版本遗留任务）一律 RapidOCR，
+                    // 与设置页的默认值保持一致。
+                    val ocr = if (ocrEngine == "mlkit") {
+                        com.examhelper.shua.data.ocr.MlKitOcrEngine()
+                    } else {
+                        com.examhelper.shua.data.ocr.RapidOcrEngine(
+                            applicationContext,
+                            rapidOcrConcurrency
+                        )
+                    }
+                    val guardStarted = ocrEngine != "mlkit" && ocr.concurrency > 1
+                    var ocrSucceeded = false
+                    if (guardStarted) {
+                        com.examhelper.shua.data.ocr.RapidOcrRuntimeGuard
+                            .markStarted(applicationContext)
+                    }
+                    try {
+                        // 逐页落盘：47 页扫描件要跑十几分钟，进程被杀时不该整段作废。
+                        // 续跑依据是 raw 文件里的「已完成页数」侧车文件（见 ocrProgressFile）。
+                        val ingestor = DocumentIngestor(applicationContext, ocr)
+                        val progressFile = com.examhelper.shua.data.storage.AppStorage
+                            .importOcrProgressFile(applicationContext, jobId)
+                        val donePages = runCatching {
+                            progressFile.readText().trim().toInt()
+                        }.getOrDefault(0)
+                        if (donePages > 0 && raw.exists()) {
+                            // 已落盘的页直接用，从下一页继续
+                            ingestor.resumeFrom = donePages + 1
+                            ingestor.resumePrefix = raw.readText()
                         }
-                    }
-                    runCatching {
-                        setForeground(foregroundInfo(p.message, p.current, p.total))
+                        ingestor.onPageDone = { page, partial ->
+                            runCatching {
+                                raw.writeText(partial)
+                                progressFile.writeText(page.toString())
+                            }
+                        }
+                        val freshText = ingestor.ingest(Uri.parse(uriStr)) { p ->
+                            // OCR / 逐页读取阶段也要把进度写回数据库：
+                            // 早先只更新前台通知，用户切回应用内看到的进度条一直停在 0
+                            // （stage=INGEST 时 totalUnits 恒为 0），这就是「界面内看不到导入进度」的根因。
+                            runCatching {
+                                updateJob(jobId) {
+                                    it.copy(
+                                        stage = "INGEST",
+                                        message = p.message,
+                                        totalUnits = p.total,
+                                        doneUnits = p.current
+                                    )
+                                }
+                            }
+                            runCatching {
+                                setForeground(foregroundInfo(p.message, p.current, p.total))
+                            }
+                        }
+                        if (ingestor.usedOcr && ocrFingerprint.isNotBlank()) {
+                            OcrCache.write(applicationContext, ocrFingerprint, ocrEngine, freshText)
+                        }
+                        ocrSucceeded = true
+                        freshText
+                    } finally {
+                        ocr.close()
+                        if (guardStarted) {
+                            com.examhelper.shua.data.ocr.RapidOcrRuntimeGuard
+                                .markFinished(applicationContext, ocrSucceeded)
+                        }
                     }
                 }
                 if (text.length > MAX_RAW_TEXT_CHARS) {
@@ -243,11 +318,12 @@ class ImportPipelineWorker(
                 // 避免 Worker 与解析器各维护一份规则。短文本内部会直接走 parse。
                 val offlineChunkList = ChunkPlanner.plan(text, TextQuestionParser.OFFLINE_CHUNK_SIZE, overlapLines = 18)
                 val offlineChunks = offlineChunkList.size
+                val offlineTotalUnits = offlineChunks + if (offlineChunks > 1) 1 else 0
                 updateJob(jobId) {
                     it.copy(
                         stage = "PARSE",
                         message = if (offlineChunks > 1) "离线解析中（$offlineChunks 段）" else "离线解析中",
-                        totalUnits = offlineChunks.coerceAtLeast(1),
+                        totalUnits = offlineTotalUnits.coerceAtLeast(1),
                         doneUnits = 0
                     )
                 }
@@ -261,16 +337,37 @@ class ImportPipelineWorker(
                         updateJob(jobId) {
                             it.copy(
                                 stage = "PARSE",
-                                message = "离线解析中（${i + 1}/$offlineChunks）",
-                                totalUnits = offlineChunks,
+                                message = "离线解析：已生成 ${i + 1}/$offlineChunks 段",
+                                totalUnits = offlineTotalUnits,
                                 doneUnits = i + 1
                             )
                         }
                         kotlinx.coroutines.yield()
                     }
+                    updateJob(jobId) {
+                        it.copy(
+                            stage = "PARSE",
+                            message = "离线解析：正在合并、去重并回填答案…",
+                            totalUnits = offlineTotalUnits,
+                            doneUnits = offlineChunks
+                        )
+                    }
                     TextQuestionParser.mergeLongResults(merged, text)
                 }
                 val questions = offlineParsed
+                if (questions.isEmpty()) {
+                    val reason = "离线解析未识别到题目，请检查文本排版或改用 AI 解析"
+                    updateJob(jobId) {
+                        it.copy(
+                            stage = "FAILED",
+                            doneUnits = 0,
+                            parsedCount = 0,
+                            errorMessage = reason,
+                            message = reason
+                        )
+                    }
+                    return fail(jobId, reason)
+                }
                 kotlinx.coroutines.yield()
                 parsed.writeText(
                     questions.mapIndexed { i, q ->
@@ -337,7 +434,8 @@ class ImportPipelineWorker(
                 it.copy(
                     stage = "PARSE", message = "AI 解析（${provider.name}）",
                     totalUnits = chunks.size, doneUnits = doneChunks.size,
-                    rawTextPath = raw.absolutePath, parsedPath = parsed.absolutePath
+                    rawTextPath = raw.absolutePath, parsedPath = parsed.absolutePath,
+                    streamTail = null
                 )
             }
             runCatching { setForeground(foregroundInfo("AI 解析中 ${doneChunks.size}/${chunks.size}", doneChunks.size, chunks.size)) }
@@ -351,20 +449,38 @@ class ImportPipelineWorker(
             var okCount = doneChunks.size
             var failCount = 0
             var parsedSoFar = JsonCodec.readParsedLines(parsed).size
+            val failedChunks = mutableListOf<FailedChunk>()
 
-            // 实时输出尾巴：多段并发同时吐字，这里按「最后写入者」拼接展示，
-            // 只保留末尾 STREAM_TAIL_CHARS 字符（数据库字段不该被几十万字撑爆）。
-            // 回调是同步的（流式 onDelta 在 IO 线程里调用），且 doWork 是 suspend
-            // 但没有可直接 launch 的作用域，所以用独立 scope + 时间戳节流落库。
-            val tailBuffer = StringBuilder()
+            // 实时输出按分块分别保存再合成预览。多段并发时不能往同一个 StringBuilder
+            // 里乱塞 token，否则第 1、3 段的半句话会交错成不可读的 JSON。
+            val tailByChunk = Array(chunks.size) { StringBuilder() }
+            val activeChunks = sortedSetOf<Int>()
             val tailLock = Any()
             val tailLastFlush = java.util.concurrent.atomic.AtomicLong(0)
             val tailScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-            val pushTail: (String) -> Unit = { delta ->
+            streamTailScope = tailScope
+            val tailWrites = Channel<String?>(Channel.CONFLATED)
+            val tailWriter = tailScope.launch {
+                for (snapshot in tailWrites) {
+                    updateJob(jobId) { it.copy(streamTail = snapshot) }
+                }
+            }
+
+            fun tailSnapshot(): String? = synchronized(tailLock) {
+                val active = tailByChunk.indices.filter { tailByChunk[it].isNotEmpty() }
+                if (active.isEmpty()) return@synchronized null
+                val perChunk = (STREAM_TAIL_CHARS / active.size).coerceAtLeast(180)
+                active.joinToString("\n\n") { index ->
+                    "分段 ${index + 1}\n${tailByChunk[index].takeLast(perChunk)}"
+                }.takeLast(STREAM_TAIL_CHARS)
+            }
+
+            fun pushTail(index: Int, delta: String) {
                 val snapshot: String? = synchronized(tailLock) {
-                    tailBuffer.append(delta)
-                    if (tailBuffer.length > STREAM_TAIL_CHARS * 2) {
-                        tailBuffer.delete(0, tailBuffer.length - STREAM_TAIL_CHARS)
+                    val buffer = tailByChunk[index]
+                    buffer.append(delta)
+                    if (buffer.length > STREAM_TAIL_CHARS * 2) {
+                        buffer.delete(0, buffer.length - STREAM_TAIL_CHARS)
                     }
                     val now = System.currentTimeMillis()
                     // 节流：模型吐字极快，逐字写 Room 会把 IO 打满
@@ -372,78 +488,169 @@ class ImportPipelineWorker(
                         null
                     } else {
                         tailLastFlush.set(now)
-                        tailBuffer.takeLast(STREAM_TAIL_CHARS).toString()
+                        val active = tailByChunk.indices.filter { tailByChunk[it].isNotEmpty() }
+                        val perChunk = (STREAM_TAIL_CHARS / active.size.coerceAtLeast(1))
+                            .coerceAtLeast(180)
+                        active.joinToString("\n\n") { i ->
+                            "分段 ${i + 1}\n${tailByChunk[i].takeLast(perChunk)}"
+                        }.takeLast(STREAM_TAIL_CHARS)
                     }
                 }
                 if (snapshot != null) {
-                    tailScope.launch { updateJob(jobId) { it.copy(streamTail = snapshot) } }
+                    tailWrites.trySend(snapshot)
                 }
             }
 
-            coroutineScope {
-                val semaphore = Semaphore(concurrency)
-                val deferred = pending.map { idx ->
-                    async {
-                        semaphore.withPermit {
-                            if (isStopped) null
-                            else idx to parseChunkWithRetry(parser, provider, chunks[idx], pushTail)
+            fun clearTail(index: Int) {
+                synchronized(tailLock) {
+                    tailByChunk[index].clear()
+                }
+                tailWrites.trySend(tailSnapshot())
+            }
+
+            suspend fun drainTail() {
+                tailWrites.close()
+                tailWriter.join()
+                tailScope.cancel()
+            }
+
+            fun setChunkActive(index: Int, active: Boolean) {
+                val activeLabel = synchronized(tailLock) {
+                    if (active) activeChunks += index else activeChunks -= index
+                    activeChunks.joinToString("、") { "第 ${it + 1} 段" }
+                }
+                if (activeLabel.isNotBlank()) {
+                    tailScope.launch {
+                        updateJob(jobId) {
+                            it.copy(message = "AI 解析 ${provider.name}：正在生成 $activeLabel")
                         }
                     }
                 }
-                deferred.forEach { d ->
-                    val outcome = d.await() ?: return@forEach
-                    val (idx, dtoList) = outcome
-                    val section = chunkList.getOrNull(idx)?.section
-                    val lines = dtoList.mapIndexed { i, dto ->
-                        JsonCodec.json.encodeToString(
-                            ParsedLine(
-                                chunkIndex = idx, indexInChunk = i,
-                                // 章节名以本块的原文标题为准，防止模型把「第 X 章」前缀吞掉
-                                chapter = ChunkPlanner.resolveChapter(section, dto.chapter),
-                                type = LlmQuestionParser.mapType(dto.type).name,
-                                subtype = dto.subtype, stem = dto.stem,
-                                // 原文题号：章末集中答案表按题号索引，没有它就只能按顺序猜，
-                                // 遇到答案表跳号会整列错位（答案覆盖率极低的根因之一）
-                                number = dto.number ?: com.examhelper.shua.data.parse.AnswerBinder
-                                    .leadingNumberOf(dto.stem),
-                                sharedStem = dto.sharedStem, sharedOptions = dto.sharedOptions,
-                                options = dto.options, answer = dto.answer, analysis = dto.analysis,
-                                page = dto.page
-                            )
+            }
+
+            val warmupRequired = doneChunks.isEmpty()
+            runChunkScheduler(
+                indices = pending,
+                concurrency = concurrency,
+                warmupRequired = warmupRequired,
+                parse = { index ->
+                    if (isStopped) throw kotlinx.coroutines.CancellationException("导入已取消")
+                    setChunkActive(index, true)
+                    val parseResult = try {
+                        parseChunkWithRetry(
+                            parser,
+                            provider,
+                            chunks[index],
+                            onDelta = { delta -> pushTail(index, delta) },
+                            onStreamReset = { clearTail(index) }
                         )
+                    } finally {
+                        setChunkActive(index, false)
+                        val snapshot = tailSnapshot()
+                        if (snapshot != null) {
+                            tailWrites.trySend(snapshot)
+                        }
                     }
-                    if (lines.isNotEmpty()) {
-                        parsed.appendText(lines.joinToString("\n", postfix = "\n"))
+                    parseResult.fold(
+                        onSuccess = { dtoList ->
+                            if (dtoList.isEmpty()) {
+                                ChunkWorkResult(index, null, "模型未返回题目")
+                            } else {
+                                val section = chunkList.getOrNull(index)?.section
+                                ChunkWorkResult(
+                                    index,
+                                    dtoList.mapIndexed { i, dto ->
+                                        ParsedLine(
+                                            chunkIndex = index,
+                                            indexInChunk = i,
+                                            // 章节名以本块的原文标题为准，防止模型把「第 X 章」前缀吞掉
+                                            chapter = ChunkPlanner.resolveChapter(section, dto.chapter),
+                                            type = LlmQuestionParser.mapType(dto.type).name,
+                                            subtype = dto.subtype,
+                                            stem = dto.stem,
+                                            // 原文题号：章末集中答案表按题号索引，没有它就只能按顺序猜，
+                                            // 遇到答案表跳号会整列错位（答案覆盖率极低的根因之一）
+                                            number = dto.number ?: com.examhelper.shua.data.parse.AnswerBinder
+                                                .leadingNumberOf(dto.stem),
+                                            sharedStem = dto.sharedStem,
+                                            sharedOptions = dto.sharedOptions,
+                                            options = dto.options,
+                                            answer = dto.answer,
+                                            analysis = dto.analysis,
+                                            page = dto.page
+                                        )
+                                    }
+                                )
+                            }
+                        },
+                        onFailure = { error ->
+                            if (error is kotlinx.coroutines.CancellationException) throw error
+                            if (error is EmptyModelResultException ||
+                                error is IncompleteModelResponseException
+                            ) {
+                                val offline = runCatching {
+                                    TextQuestionParser.parse(chunks[index])
+                                }.getOrDefault(emptyList())
+                                if (offline.isNotEmpty()) {
+                                    ChunkWorkResult(index, offlineLines(index, offline))
+                                } else {
+                                    ChunkWorkResult(
+                                        index,
+                                        null,
+                                        "模型未返回题目，离线兜底也未识别到题目"
+                                    )
+                                }
+                            } else {
+                                ChunkWorkResult(index, null, error.message ?: "解析失败")
+                            }
+                        }
+                    )
+                },
+                onResult = { result ->
+                    val lines = result.lines
+                    if (lines.isNullOrEmpty()) {
+                        val chunk = chunkList.getOrNull(result.index)
+                        val pages = chunk?.let { chunkPages(text, it) }.orEmpty()
+                        failedChunks += FailedChunk(
+                            chunkIndex = result.index,
+                            pageFrom = pages.firstOrNull(),
+                            pageTo = pages.lastOrNull(),
+                            reason = result.error ?: "该段未解析出题目"
+                        )
+                        failCount++
+                    } else {
+                        parsed.appendText(JsonCodec.encodeParsedLines(lines))
                         parsedSoFar += lines.size
                         okCount++
-                    } else {
-                        failCount++
                     }
+                    val completed = okCount + failCount
                     updateJob(jobId) {
                         val u = parser.snapshotUsage()
                         it.copy(
-                            doneUnits = okCount,
+                            doneUnits = completed,
                             parsedCount = parsedSoFar,
                             // base + 本轮增量：断点续传不会把之前累计的用量冲掉
                             cacheHitTokens = baseHit + u.normalizedCacheHit().toLong(),
                             cacheMissTokens = baseMiss + u.cacheMissTokens.toLong(),
                             outputTokens = baseOut + u.completionTokens.toLong(),
-                            message = "AI 解析 ${provider.name}：完成 $okCount/${chunks.size} 段" +
-                                if (failCount > 0) "（失败 $failCount 段）" else ""
+                            message = "AI 解析 ${provider.name}：已处理 $completed/${chunks.size} 段" +
+                                " · 成功 $okCount 段 · 失败 $failCount 段"
                         )
                     }
                     runCatching {
-                        setForeground(foregroundInfo("AI 解析 $okCount/${chunks.size} 段", okCount, chunks.size))
+                        setForeground(foregroundInfo("AI 解析已处理 $completed/${chunks.size} 段", completed, chunks.size))
                     }
                 }
-            }
+            )
 
             if (isStopped) {
+                drainTail()
                 updateJob(jobId) {
                     val u = parser.snapshotUsage()
                     it.copy(
                         stage = "CANCELED",
                         message = "已取消（可继续）",
+                        streamTail = null,
                         // 取消也要保住已花掉的用量，否则用户看不到这段消费
                         cacheHitTokens = baseHit + u.normalizedCacheHit().toLong(),
                         cacheMissTokens = baseMiss + u.cacheMissTokens.toLong(),
@@ -455,24 +662,53 @@ class ImportPipelineWorker(
 
             // 跨块收口：同一道题被相邻分段重复解析的合并成一条；原文答案集中
             // 给在文末的，按题号回填到前面缺答案的题目上。
-            var totalParsed = JsonCodec.readParsedLines(parsed).size
+            var finalLines = JsonCodec.readParsedLines(parsed)
+            var totalParsed = finalLines.size
             var coverage = com.examhelper.shua.data.parse.AnswerCoverage.audit(
-                JsonCodec.readParsedLines(parsed)
+                finalLines
             )
             if (okCount > 0) {
-                val before = JsonCodec.readParsedLines(parsed)
-                val after = LlmQuestionParser.finalizeLines(before, text)
-                if (after.size != before.size || after.indices.any { after[it] != before[it] }) {
+                val after = LlmQuestionParser.finalizeLines(finalLines, text)
+                if (after.size != finalLines.size || after.indices.any { after[it] != finalLines[it] }) {
                     runCatching {
                         parsed.writeText(after.joinToString("\n") { JsonCodec.json.encodeToString(it) } + "\n")
                     }
                     totalParsed = after.size
                 }
+                // finalizeLines 会丢掉空题干等无效行。后续校验必须看收口后的结果，
+                // 不能再看旧的 JSONL 文件，否则会留下「DONE 0 题」的假成功。
+                finalLines = after
                 coverage = com.examhelper.shua.data.parse.AnswerCoverage.audit(after)
             }
             if (okCount == 0 && chunks.isNotEmpty()) {
-                return fail(jobId, "AI 解析全部失败：${provider.name} 连接异常或返回不可解析")
+                val report = ParseReportBuilder.build(
+                    chunkList,
+                    text,
+                    JsonCodec.readParsedLines(parsed),
+                    failedChunks
+                )
+                val streamSnapshot = tailSnapshot()
+                val detail = failedChunks.firstOrNull()?.reason
+                    ?.take(240)
+                    ?.takeIf { it.isNotBlank() }
+                    ?: "模型返回不可解析内容"
+                drainTail()
+                updateJob(jobId) {
+                    it.copy(
+                        stage = "FAILED",
+                        errorMessage = "AI 解析全部失败（$detail）",
+                        parseReportJson = report.encode(),
+                        message = "AI 解析失败：成功 0 段 · 失败 $failCount 段",
+                        streamTail = streamSnapshot
+                    )
+                }
+                return fail(jobId, "AI 解析全部失败（$detail）")
             }
+            if (finalLines.isEmpty()) {
+                drainTail()
+                return fail(jobId, "AI 解析未生成任何题目，请检查模型配置后重试")
+            }
+            val report = ParseReportBuilder.build(chunkList, text, finalLines, failedChunks)
             // 收尾再采一次余额快照：这次采样意味着「任务结束时的余额」，
             // 供「用量情况」的窗口累计使用（任务级「实扣」已废弃，原因见 Cost.spentByBalance）
             runCatching {
@@ -490,16 +726,18 @@ class ImportPipelineWorker(
             }.getOrNull()
             // 收尾：停掉流式尾巴的落库协程，并把预览框的内容清空
             // （任务已 DONE，预览框要显示的是「已解析题目」，不是模型的原始 JSON）
-            tailScope.cancel()
+            drainTail()
             updateJob(jobId) {
                 val u = parser.snapshotUsage()
                 it.copy(
                     stage = "DONE", parsedCount = totalParsed,
                     streamTail = null,
+                    parseReportJson = report.encode(),
                     cacheHitTokens = baseHit + u.normalizedCacheHit().toLong(),
                     cacheMissTokens = baseMiss + u.cacheMissTokens.toLong(),
                     outputTokens = baseOut + u.completionTokens.toLong(),
-                    message = "解析完成：$totalParsed 题 · 答案 ${coverage.answered}/${coverage.total}" +
+                    message = "解析完成：成功 $okCount 段 · 失败 $failCount 段 · $totalParsed 题" +
+                        " · 答案 ${coverage.answered}/${coverage.total}" +
                         coverage.lowCoverageChapters.take(3).takeIf { it.isNotEmpty() }
                             ?.joinToString(prefix = " · 整章低覆盖：", separator = "、") { it }
                             .orEmpty() +
@@ -510,8 +748,11 @@ class ImportPipelineWorker(
             notifyDone(jobId, bankName, totalParsed)
             return Result.success()
         } catch (e: kotlinx.coroutines.CancellationException) {
+            streamTailScope?.cancel()
             updateJob(jobId) { it.copy(stage = "CANCELED", message = "已取消（进度已保存，可继续）") }
-            throw e        } catch (e: Exception) {
+            throw e
+        } catch (e: Exception) {
+            streamTailScope?.cancel()
             return fail(jobId, e.message ?: e.javaClass.simpleName)
         }
     }
@@ -524,20 +765,21 @@ class ImportPipelineWorker(
     /**
      * 单块解析重试。
      *
-     * 后台是并发跑多个分块的：网关偶发 5xx / 连接重置 / 读超时都会让某一块返回空，
-     * 早先一次失败这块的题目就永久丢了（重跑也得等整批结束再手动续传）。
-     * 这里对**空结果和异常**都做退避重试，只对配置/鉴权类错误立即放弃。
+     * 后台是并发跑多个分块的：网关偶发 5xx / 连接重置 / 读超时都会让某一块抛异常。
+     * 这里只对异常做退避重试，配置/鉴权类错误立即放弃。模型正常返回空列表时说明
+     * 该块没有可用结构化结果，直接交给调用方做离线兜底，避免重复请求和无效等待。
      */
     private suspend fun parseChunkWithRetry(
         parser: LlmQuestionParser,
         provider: com.examhelper.shua.data.db.LlmProvider,
         chunk: String,
-        onDelta: ((String) -> Unit)? = null
-    ): List<LlmQuestionParser.QuestionDto> {
+        onDelta: ((String) -> Unit)? = null,
+        onStreamReset: (() -> Unit)? = null
+    ): kotlin.Result<List<LlmQuestionParser.QuestionDto>> {
         val waits = longArrayOf(0L, 1200L, 3000L)
-        var last: List<LlmQuestionParser.QuestionDto> = emptyList()
+        var lastError: Throwable? = null
         for (wait in waits) {
-            if (isStopped) return last
+            if (isStopped) throw kotlinx.coroutines.CancellationException("导入已取消")
             if (wait > 0) kotlinx.coroutines.delay(wait)
             // 只在第一次尝试时接流式预览：重试会把同样的内容再吐一遍，
             // 预览框里会出现「同一段话重复两次」的观感。
@@ -545,21 +787,77 @@ class ImportPipelineWorker(
                 parser.parseChunkText(provider, chunk, if (wait == 0L) onDelta else null)
             }
             val list = r.getOrNull()
-            if (!list.isNullOrEmpty()) return list
-            val msg = r.exceptionOrNull()?.message.orEmpty()
+            if (!list.isNullOrEmpty()) {
+                return kotlin.Result.success(list)
+            }
+            if (list != null) {
+                // 部分中转的流式模式只回空数组，给非流式请求一次机会；
+                // 非流式仍为空时不再重复烧请求，直接交给离线兜底。
+                if (onDelta != null && wait == 0L) {
+                    onStreamReset?.invoke()
+                    lastError = EmptyModelResultException()
+                    continue
+                }
+                return kotlin.Result.failure(EmptyModelResultException())
+            } else {
+                val error = r.exceptionOrNull() ?: IllegalStateException("模型未返回题目")
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                lastError = error
+            }
+            val msg = lastError?.message.orEmpty()
             if (msg.contains("HTTP 401") || msg.contains("HTTP 403") ||
                 msg.contains("HTTP 400") || msg.contains("Insufficient Balance") ||
                 msg.contains("Unauthorized") || msg.contains("Authentication")
-            ) return last
-            last = list.orEmpty()
+            ) return kotlin.Result.failure(lastError ?: IllegalStateException("模型未返回题目"))
         }
-        return last
+        return kotlin.Result.failure(lastError ?: IllegalStateException("模型未返回题目"))
+    }
+
+    private fun offlineLines(
+        chunkIndex: Int,
+        questions: List<com.examhelper.shua.data.model.ParsedQuestion>
+    ): List<ParsedLine> = questions.mapIndexed { i, q ->
+        ParsedLine(
+            chunkIndex = chunkIndex,
+            indexInChunk = i,
+            chapter = q.chapter,
+            type = q.type.name,
+            subtype = q.subtype,
+            number = q.sourceNumber,
+            stem = q.stem,
+            sharedStem = q.sharedStem,
+            sharedOptions = q.sharedOptions,
+            options = q.options,
+            answer = q.answer,
+            analysis = q.analysis,
+            page = q.sourcePage
+        )
+    }
+
+    private fun engineLabel(engine: String): String =
+        if (engine.equals("mlkit", ignoreCase = true)) "ML Kit" else "RapidOCR"
+
+    private fun chunkPages(rawText: String, chunk: ChunkPlanner.Chunk): List<Int> {
+        val rawLines = rawText.lines()
+        if (rawLines.isEmpty()) return emptyList()
+        val from = chunk.startLine.coerceIn(0, rawLines.lastIndex)
+        val to = chunk.endLine.coerceIn(from, rawLines.lastIndex)
+        return rawLines.subList(from, to + 1)
+            .flatMap { line ->
+                PAGE_MARKER.findAll(line).mapNotNull { it.groupValues[1].toIntOrNull() }
+            }
+            .distinct()
+            .sorted()
     }
 
     private suspend fun updateJob(jobId: String, mutate: (ImportJob) -> ImportJob) {
-        runCatching {
-            val dao = jobDao()
-            dao.getById(jobId)?.let { dao.upsert(mutate(it).copy(updatedAt = System.currentTimeMillis())) }
+        jobWriteLock.withLock {
+            runCatching {
+                val dao = jobDao()
+                dao.getById(jobId)?.let {
+                    dao.upsert(mutate(it).copy(updatedAt = System.currentTimeMillis()))
+                }
+            }
         }
     }
 

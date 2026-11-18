@@ -22,6 +22,7 @@ import java.util.concurrent.TimeUnit
  * ```
  * cacheDir/
  *   import/        导入任务的中间产物（OCR 原文、分块 JSONL），支持断点续跑
+ *   ocr/           按源文件哈希复用的 OCR 文本，跨导入任务保留
  *   temp/          一次性临时文件（PDF 落地、OCR 中间图），用完即删
  *   temp/camera/   相机输出（唯一对 FileProvider 暴露的目录）
  *   sfx/           合成音效 wav
@@ -30,12 +31,14 @@ import java.util.concurrent.TimeUnit
 object AppStorage {
 
     private const val DIR_IMPORT = "import"
+    private const val DIR_OCR = "ocr"
     private const val DIR_TEMP = "temp"
     private const val DIR_CAMERA = "camera"
     private const val DIR_SFX = "sfx"
 
     /** 导入任务中间产物的保留期：超过则视为废弃任务，启动时清理 */
     private val IMPORT_RETENTION_MS = TimeUnit.DAYS.toMillis(7)
+    private val OCR_RETENTION_MS = TimeUnit.DAYS.toMillis(30)
 
     /** 一次性临时文件的保留期（留出余量，避免误删正在运行的任务刚写入的文件） */
     private val TEMP_RETENTION_MS = TimeUnit.HOURS.toMillis(2)
@@ -49,6 +52,9 @@ object AppStorage {
 
     /** 导入流水线的中间产物目录（可安全续跑，不要随手清空） */
     fun importDir(context: Context): File = ensureDir(File(context.cacheDir, DIR_IMPORT))
+
+    /** 可跨导入任务复用的 OCR 结果目录 */
+    fun ocrCacheDir(context: Context): File = ensureDir(File(context.cacheDir, DIR_OCR))
 
     /** 一次性临时文件目录 */
     fun tempDir(context: Context): File = ensureDir(File(context.cacheDir, DIR_TEMP))
@@ -79,6 +85,10 @@ object AppStorage {
     fun importOcrProgressFile(context: Context, jobId: String): File =
         File(importDir(context), "ocrp_$jobId.txt")
 
+    /** 同一源文件、同一 OCR 引擎的可复用识别文本 */
+    fun cachedOcrTextFile(context: Context, fingerprint: String, engine: String): File =
+        File(ocrCacheDir(context), "$fingerprint-${engine.lowercase()}.txt")
+
     /** PDF 落地文件：用完必须删除，命名带上时间戳避免并发覆盖 */
     fun newIngestPdf(context: Context): File =
         File(tempDir(context), "ingest_${System.currentTimeMillis()}_${counter()}.pdf")
@@ -102,6 +112,7 @@ object AppStorage {
         // temp 目录含 camera 子目录，递归清理（CameraX/相机可能留下 0 字节废文件）
         runCatching { purge(tempDir(context), now - TEMP_RETENTION_MS, recursive = true) }
         runCatching { purge(importDir(context), now - IMPORT_RETENTION_MS) }
+        runCatching { purge(ocrCacheDir(context), now - OCR_RETENTION_MS) }
         runCatching { purge(sfxDir(context), now - IMPORT_RETENTION_MS) }
         // 旧版本曾把中间文件直接堆在 cacheDir 根目录（import_raw_* / import_parsed_* /
         // ingest_*.pdf / camera_*.jpg / sfx_*.wav），新代码已不再读取这些路径，过期即删。
@@ -123,6 +134,7 @@ object AppStorage {
     /** 删除导入任务的全部中间产物（任务结束或被用户丢弃时调用） */
     fun deleteImportArtifacts(context: Context, jobId: String) {
         runCatching { importRawFile(context, jobId).delete() }
+        runCatching { importOcrProgressFile(context, jobId).delete() }
         runCatching { importParsedFile(context, jobId).delete() }
     }
 

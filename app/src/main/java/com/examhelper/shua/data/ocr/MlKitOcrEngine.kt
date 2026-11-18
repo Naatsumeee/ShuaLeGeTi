@@ -5,6 +5,7 @@ import com.google.android.gms.tasks.Task
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.Text
 import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
@@ -33,7 +34,10 @@ suspend fun <T> Task<T>.awaitTask(): T = suspendCancellableCoroutine { cont ->
 
 /** OCR 引擎统一接口（ML Kit / RapidOCR） */
 interface OcrProvider {
+    /** 可并行识别的页数；ML Kit 固定单路，RapidOCR 由设置决定。 */
+    val concurrency: Int get() = 1
     suspend fun recognize(bitmap: Bitmap): OcrPageResult
+    fun close() = Unit
 }
 
 /**
@@ -42,8 +46,15 @@ interface OcrProvider {
  */
 class MlKitOcrEngine : OcrProvider {
 
-    private val recognizer by lazy {
-        TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
+    private var recognizerInstance: TextRecognizer? = null
+    private val recognizer: TextRecognizer
+        get() = recognizerInstance ?: TextRecognition
+            .getClient(ChineseTextRecognizerOptions.Builder().build())
+            .also { recognizerInstance = it }
+
+    override fun close() {
+        recognizerInstance?.close()
+        recognizerInstance = null
     }
 
     override suspend fun recognize(bitmap: Bitmap): OcrPageResult {

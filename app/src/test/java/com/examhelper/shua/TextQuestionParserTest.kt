@@ -234,4 +234,26 @@ class TextQuestionParserTest {
         assertNotNull("名词解释答案丢失", term.answer)
         assertEquals(QuestionType.SHORT_ANSWER, short.type)
         assertNotNull("简答题答案丢失", short.answer)
-    }}
+    }
+
+    @Test
+    fun fourDigitQuestionNumbersAreQuestions() {
+        val qs = TextQuestionParser.parse(
+            """
+            1000. 四位题号题目
+            A. 甲
+            B. 乙
+            1001、下一题
+            A. 丙
+            B. 丁
+            """.trimIndent()
+        )
+        assertEquals(listOf(1000, 1001), qs.map { it.sourceNumber })
+    }
+
+    @Test
+    fun decimalsAreStillNotQuestionNumbers() {
+        val qs = TextQuestionParser.parse("2023.1 不是题号\n3.5厘米 也不是题号")
+        assertTrue(qs.isEmpty())
+    }
+}

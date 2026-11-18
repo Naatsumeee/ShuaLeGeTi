@@ -10,11 +10,14 @@ import com.examhelper.shua.data.db.StudyProgress
 import com.examhelper.shua.data.db.ProgressDao
 import com.examhelper.shua.data.model.JsonCodec
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.Json
+import java.util.UUID
 
 /** 学习会话状态：当前应展示的题目与游标信息 */
 data class StudySession(
     val mode: StudyMode,
+    val roundId: String,
     val question: Question?,
     val indexInQueue: Int,   // 当前第几题（1-based 展示用）
     val total: Int,
@@ -25,6 +28,24 @@ data class StudySession(
     /** 下一题（右邻卡片） */
     val nextQuestion: Question? = null
 )
+
+data class RoundAnswer(
+    val userAnswer: String,
+    val correct: Boolean?,
+    val answeredAt: Long,
+    val attemptId: Long
+)
+
+internal fun latestAnswerMap(records: List<AttemptRecord>): Map<Long, RoundAnswer> =
+    records.groupBy { it.questionId }.mapValues { (_, rows) ->
+        val latest = rows.maxWith(compareBy<AttemptRecord> { it.answeredAt }.thenBy { it.id })
+        RoundAnswer(
+            userAnswer = latest.userAnswer,
+            correct = latest.correct.takeIf { latest.correctKnown },
+            answeredAt = latest.answeredAt,
+            attemptId = latest.id
+        )
+    }
 
 class StudyRepository(
     private val db: AppDatabase,
@@ -52,14 +73,29 @@ class StudyRepository(
         val existing = progressDao.get(bankId, mode)
         if (existing != null && existing.filterJson == filterJson &&
             !(mode == StudyMode.RANDOM && existing.randomOrderJson == null)
-        ) return existing
+        ) {
+            if (existing.roundId != null) return existing
+            val upgraded = existing.copy(
+                roundId = UUID.randomUUID().toString(),
+                updatedAt = System.currentTimeMillis()
+            )
+            progressDao.upsert(upgraded)
+            return upgraded
+        }
+        val roundId = UUID.randomUUID().toString()
         val fresh = if (mode == StudyMode.RANDOM) {
             StudyProgress(
                 bankId = bankId, mode = mode, filterJson = filterJson,
-                randomOrderJson = JsonCodec.encodeIdList(questionIds.shuffled())
+                randomOrderJson = JsonCodec.encodeIdList(questionIds.shuffled()),
+                roundId = roundId
             )
         } else {
-            StudyProgress(bankId = bankId, mode = mode, filterJson = filterJson)
+            StudyProgress(
+                bankId = bankId,
+                mode = mode,
+                filterJson = filterJson,
+                roundId = roundId
+            )
         }
         progressDao.upsert(fresh)
         return fresh
@@ -73,6 +109,7 @@ class StudyRepository(
         filterJson: String? = null
     ): StudySession {
         val progress = ensureProgress(bankId, mode, questions.map { it.id }, filterJson)
+        val roundId = requireNotNull(progress.roundId)
         val byId = questions.associateBy { it.id }
         return when (mode) {
             StudyMode.RANDOM -> {
@@ -80,6 +117,7 @@ class StudyRepository(
                 val cursor = progress.randomCursor.coerceIn(0, order.size)
                 StudySession(
                     mode = mode,
+                    roundId = roundId,
                     question = order.getOrNull(cursor)?.let(byId::get),
                     indexInQueue = cursor + 1,
                     total = order.size,
@@ -93,6 +131,7 @@ class StudyRepository(
                 val index = progress.currentIndex.coerceIn(0, questions.size)
                 StudySession(
                     mode = mode,
+                    roundId = roundId,
                     question = questions.getOrNull(index),
                     indexInQueue = index + 1,
                     total = questions.size,
@@ -113,6 +152,7 @@ class StudyRepository(
         mode: StudyMode,
         userAnswer: String,
         correct: Boolean,
+        correctKnown: Boolean = true,
         selfRated: Boolean = false,
         runId: String? = null,
         durationMs: Long? = null
@@ -127,6 +167,7 @@ class StudyRepository(
                 mode = mode,
                 userAnswer = userAnswer,
                 correct = correct,
+                correctKnown = correctKnown,
                 selfRated = selfRated,
                 runId = runId,
                 durationMs = durationMs
@@ -134,6 +175,9 @@ class StudyRepository(
             existing
         )
     }
+
+    suspend fun latestAnswersByRound(runId: String): Map<Long, RoundAnswer> =
+        latestAnswerMap(recordDao.getByRun(runId))
 
     /** 测试模式报告数据 */
     suspend fun examReport(runId: String): ExamReport? {
@@ -212,7 +256,29 @@ class StudyRepository(
                 bankId = bankId,
                 mode = StudyMode.RANDOM,
                 randomOrderJson = JsonCodec.encodeIdList(questionIds.shuffled()),
-                randomCursor = 0
+                randomCursor = 0,
+                roundId = UUID.randomUUID().toString()
+            )
+        )
+    }
+
+    /** 原地开始新一轮，保留当前筛选条件但换 roundId，不能恢复上一轮作答。 */
+    suspend fun startNewRound(bankId: Long, mode: StudyMode, questionIds: List<Long>) {
+        val existing = progressDao.get(bankId, mode)
+        progressDao.upsert(
+            StudyProgress(
+                bankId = bankId,
+                mode = mode,
+                currentIndex = 0,
+                randomOrderJson = if (mode == StudyMode.RANDOM) {
+                    JsonCodec.encodeIdList(questionIds.shuffled())
+                } else {
+                    existing?.randomOrderJson
+                },
+                randomCursor = 0,
+                filterJson = existing?.filterJson,
+                roundId = UUID.randomUUID().toString(),
+                updatedAt = System.currentTimeMillis()
             )
         )
     }
@@ -266,31 +332,39 @@ class StudyRepository(
      * 只有真的往前走过（position > 1）才算可恢复，避免刚进入就提示。
      */
     suspend fun savedProgress(bankId: Long, filterJson: String? = null): List<SavedProgress> {
-        val rows = progressDao.allByBank(bankId)
-        if (rows.isEmpty()) return emptyList()
-        return rows.mapNotNull { row ->
-            val questions = filteredQuestions(bankId, com.examhelper.shua.data.model.StudyFilter.fromFingerprint(row.filterJson))
-            val total = if (row.mode == StudyMode.RANDOM) {
-                com.examhelper.shua.data.model.JsonCodec.decodeIdList(row.randomOrderJson).size
-            } else {
-                questions.size
-            }
-            val pos = if (row.mode == StudyMode.RANDOM) row.randomCursor + 1 else row.currentIndex + 1
-            if (pos <= 1) return@mapNotNull null
-            // 已经刷到队尾（pos > total）说明这轮做完了：这条进度不该再以
-            // 「第 30 / 30 题 · 继续」的形式挂在范围页上。做完即清，
-            // 下次进来就是新的一轮，而不是接着一个不存在的第 31 题。
-            if (total > 0 && pos > total) return@mapNotNull null
-            val chapter = questions.getOrNull(pos - 1)?.chapter?.takeIf { it.isNotBlank() }
-            SavedProgress(
-                mode = row.mode,
-                position = pos.coerceAtMost(total.coerceAtLeast(pos)),
-                total = total,
-                chapter = chapter,
-                updatedAt = row.updatedAt,
-                filterJson = row.filterJson
-            )
-        }.sortedByDescending { it.updatedAt }
+        return progressDao.allByBank(bankId)
+            .mapNotNull { savedProgressFor(bankId, it) }
+            .sortedByDescending { it.updatedAt }
+    }
+
+    fun observeSavedProgress(bankId: Long): Flow<List<SavedProgress>> =
+        progressDao.observeAllByBank(bankId).map { rows ->
+            rows.mapNotNull { savedProgressFor(bankId, it) }
+                .sortedByDescending { it.updatedAt }
+        }
+
+    private suspend fun savedProgressFor(bankId: Long, row: StudyProgress): SavedProgress? {
+        val questions = filteredQuestions(
+            bankId,
+            com.examhelper.shua.data.model.StudyFilter.fromFingerprint(row.filterJson)
+        )
+        val total = if (row.mode == StudyMode.RANDOM) {
+            JsonCodec.decodeIdList(row.randomOrderJson).size
+        } else {
+            questions.size
+        }
+        val position = if (row.mode == StudyMode.RANDOM) row.randomCursor + 1 else row.currentIndex + 1
+        if (position <= 1) return null
+        if (total > 0 && position > total) return null
+        val chapter = questions.getOrNull(position - 1)?.chapter?.takeIf { it.isNotBlank() }
+        return SavedProgress(
+            mode = row.mode,
+            position = position.coerceAtMost(total.coerceAtLeast(position)),
+            total = total,
+            chapter = chapter,
+            updatedAt = row.updatedAt,
+            filterJson = row.filterJson
+        )
     }
 
     suspend fun toggleFavorite(question: Question): Boolean {
@@ -305,6 +379,16 @@ class StudyRepository(
     }
 
     suspend fun isFavorite(questionId: Long): Boolean = recordDao.getFavorite(questionId) != null
+
+    suspend fun saveChat(questionId: Long, turns: List<com.examhelper.shua.data.model.ChatTurn>) {
+        db.questionDao().updateAskChat(
+            questionId,
+            turns.takeIf { it.isNotEmpty() }?.let(JsonCodec::encodeChat)
+        )
+    }
+
+    fun loadChat(question: Question): List<com.examhelper.shua.data.model.ChatTurn> =
+        JsonCodec.decodeChat(question.askChatJson)
 
     /** 该题最近一次作答（用于「划回已做题不重复作答」） */
     suspend fun latestAttempt(questionId: Long) = recordDao.latestAttempt(questionId)

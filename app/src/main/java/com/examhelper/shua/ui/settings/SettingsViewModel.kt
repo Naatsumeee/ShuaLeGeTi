@@ -12,6 +12,7 @@ import com.examhelper.shua.data.llm.LlmClient
 import com.examhelper.shua.data.repo.LocalDataRepository
 import com.examhelper.shua.data.settings.OcrEngine
 import com.examhelper.shua.data.settings.SettingsStore
+import com.examhelper.shua.data.ocr.RapidOcrRuntimeGuard
 import com.examhelper.shua.data.update.UpdateChecker
 import com.examhelper.shua.data.update.UpdateInfo
 import com.examhelper.shua.ui.sound.Haptics
@@ -39,6 +40,8 @@ class SettingsViewModel(
 
     data class UiState(
         val ocrEngine: String = OcrEngine.RAPID_OCR,
+        val rapidOcrConcurrency: Int = 1,
+        val rapidOcrInterrupted: Boolean = false,
         val speedSeconds: Int = 2,
         val sanShengLiuBu: Boolean = false,
         val parseConcurrency: Int = 4,
@@ -64,10 +67,15 @@ class SettingsViewModel(
     }
 
     init {
+        _ui.value = _ui.value.copy(
+            rapidOcrInterrupted = RapidOcrRuntimeGuard.consumeInterrupted(getApplication())
+        )
         viewModelScope.launch {
             settingsStore.settings.collect {
                 _ui.value = UiState(
                     ocrEngine = it.ocrEngine,
+                    rapidOcrConcurrency = it.rapidOcrConcurrency,
+                    rapidOcrInterrupted = _ui.value.rapidOcrInterrupted,
                     speedSeconds = it.speedModeSeconds,
                     sanShengLiuBu = it.sanShengLiuBu,
                     parseConcurrency = it.parseConcurrency,
@@ -88,6 +96,12 @@ class SettingsViewModel(
     }
 
     fun setOcrEngine(v: String) = viewModelScope.launch { settingsStore.setOcrEngine(v) }
+    fun setRapidOcrConcurrency(v: Int) =
+        viewModelScope.launch { settingsStore.setRapidOcrConcurrency(v) }
+    fun clearRapidOcrInterrupted() {
+        RapidOcrRuntimeGuard.clearFailure(getApplication())
+        _ui.value = _ui.value.copy(rapidOcrInterrupted = false)
+    }
     fun setSpeedSeconds(v: Int) = viewModelScope.launch { settingsStore.setSpeedSeconds(v) }
     fun setSanShengLiuBu(v: Boolean) = viewModelScope.launch { settingsStore.setSanShengLiuBu(v) }
     fun setParseConcurrency(v: Int) = viewModelScope.launch { settingsStore.setParseConcurrency(v) }

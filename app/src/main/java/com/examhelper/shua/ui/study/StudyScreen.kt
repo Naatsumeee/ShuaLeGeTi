@@ -2,6 +2,11 @@
 
 package com.examhelper.shua.ui.study
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -17,6 +22,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.gestures.Orientation
@@ -26,6 +32,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -97,6 +105,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.examhelper.shua.data.db.Question
 import com.examhelper.shua.data.db.QuestionType
 import com.examhelper.shua.data.db.StudyMode
+import com.examhelper.shua.data.model.ChatTurn
 import com.examhelper.shua.data.model.JsonCodec
 import com.examhelper.shua.data.model.QuestionChoices
 import com.examhelper.shua.ui.bank.typeLabel
@@ -137,6 +146,16 @@ fun StudyScreen(
     val compact = isCompactWidth()
     LaunchedEffect(state.askOpen) { if (state.askOpen) askSheetState.show() }
 
+    fun closeAskSheet() {
+        if (askClosing) return
+        askClosing = true
+        pageScope.launch {
+            askSheetState.hide()
+            vm.toggleAsk()
+            askClosing = false
+        }
+    }
+
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().safeTopPadding()) {
             CompactTopBar(
@@ -168,12 +187,7 @@ fun StudyScreen(
                 // 常驻「问 AI」入口：任何时候都能就当前题目提问
                 AskAiButton(compact = compact, active = state.askOpen && !askClosing) {
                     if (state.askOpen) {
-                        askClosing = true
-                        pageScope.launch {
-                            askSheetState.hide()
-                            vm.toggleAsk()
-                            askClosing = false
-                        }
+                        closeAskSheet()
                     } else {
                         vm.toggleAsk()
                     }
@@ -239,7 +253,7 @@ fun StudyScreen(
                             deepStream = memo.deepStream,
                             deepError = memo.deepError,
                             deepSolving = false,
-                            chat = emptyList(),
+                            chat = memo.chat,
                             asking = false,
                             askError = null
                         ) else state.copy(
@@ -347,7 +361,12 @@ fun StudyScreen(
                         }
                     }
                     val canPrev = livePrev != null && state.mode != StudyMode.RANDOM
-                    val canNext = liveNext != null
+                    val canNext = canMoveForward(
+                        mode = state.mode,
+                        answered = state.answered,
+                        revealed = state.revealed,
+                        hasNext = liveNext != null
+                    )
 
                     // 按钮翻页也要走同一套滑动动画。
                     //
@@ -390,7 +409,16 @@ fun StudyScreen(
                         if (flipTick == 0) return@LaunchedEffect
                         val dir = flipDir
                         val target = if (dir > 0) liveNext else livePrev
-                        if (target == null) return@LaunchedEffect
+                        if (target == null) {
+                            if (dir > 0 && canMoveForward(
+                                    mode = state.mode,
+                                    answered = state.answered,
+                                    revealed = state.revealed,
+                                    hasNext = false
+                                )
+                            ) vm.next()
+                            return@LaunchedEffect
+                        }
                         val cur = session?.question
                         // 协程内读取：拿到的是此刻真实的布局宽度，而不是组合时的 1f
                         val width = pageWidth.intValue.toFloat().coerceAtLeast(1f)
@@ -518,7 +546,7 @@ fun StudyScreen(
                                 livePrev?.let { PeekPage(it, state.mode, vm, compact, stateFor(it)) }
                             }
                         }
-                        if (canNext) {
+                        if (liveNext != null) {
                             PeekSlot(x = drag + w) {
                                 liveNext?.let { PeekPage(it, state.mode, vm, compact, stateFor(it)) }
                             }
@@ -531,6 +559,7 @@ fun StudyScreen(
                         // 暖褐色投影，比纯黑柔和；暗黑模式下用纯黑以免发灰
                         val shadowTint = if (MaterialTheme.colorScheme.background.luminance() > 0.5f)
                             Color(0x38281F17) else Color(0x66000000)
+                        val currentScroll = remember(q?.id) { ScrollState(0) }
                         Column(
                             Modifier
                                 .fillMaxSize()
@@ -546,7 +575,7 @@ fun StudyScreen(
                                     spotShadowColor = shadowTint
                                 }
                                 .background(MaterialTheme.colorScheme.background)
-                                .verticalScroll(rememberScrollState())
+                                .verticalScroll(currentScroll)
                                 .padding(horizontal = 14.dp)
                                 .padding(top = 2.dp, bottom = 6.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -575,10 +604,10 @@ fun StudyScreen(
         ModalBottomSheet(
             onDismissRequest = {
                 com.examhelper.shua.ui.sound.Haptics.tap()
-                askClosing = true
-                pageScope.launch { askSheetState.hide(); vm.toggleAsk(); askClosing = false }
+                closeAskSheet()
             },
             containerColor = MaterialTheme.colorScheme.surface,
+            contentWindowInsets = { WindowInsets.ime },
             // 键盘弹起时面板自动上移，输入框不会被遮挡
             // 半屏/全屏/关闭三档锚点，跟手阻尼与松手速度吸附由 Material3 完成。
             sheetState = askSheetState
@@ -596,8 +625,7 @@ fun StudyScreen(
                 onClear = vm::clearAsk,
                 onDismiss = {
                     com.examhelper.shua.ui.sound.Haptics.tap()
-                    askClosing = true
-                    pageScope.launch { askSheetState.hide(); vm.toggleAsk(); askClosing = false }
+                    closeAskSheet()
                 }
             )
         }
@@ -647,9 +675,14 @@ fun StudyScreen(
                         ) {
                             Text(
                                 "${i + 1}",
-                                style = monoStyle(12.sp, FontWeight.Medium),
+                                style = monoStyle(
+                                    if ("${i + 1}".length >= 4) 9.sp else 12.sp,
+                                    FontWeight.Medium
+                                ),
                                 color = if (isCurrent) MaterialTheme.colorScheme.onPrimary
-                                else MaterialTheme.colorScheme.onSurface
+                                else MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
                     }
@@ -697,14 +730,15 @@ private fun PeekPage(
     state: StudyUiState = peekState(mode, q)
 ) {
     val clean = remember(q.id, state.answered, state.revealed, state.selected, state.textInput, state.deepSolved, state.deepStream, mode) {
-        state.copy(deepSolving = false, chat = emptyList(), asking = false, askError = null)
+        state.copy(deepSolving = false, asking = false, askError = null)
     }
     // 修饰符顺序与真卡严格一致：先 verticalScroll 再 padding（内边距属于滚动内容），
     // 这样两张卡的可用宽度、首行基线与行距完全相同，滑入落地时不会"缩一下再长开"。
+    val scroll = remember(q.id) { ScrollState(0) }
     Column(
         Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(scroll)
             .padding(horizontal = 14.dp)
             .padding(top = 2.dp, bottom = 6.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -896,15 +930,18 @@ private fun QuestionBody(
         }
     }
 
-    // 邻卡（interactive = false）不画答案卡：一是背诵模式下不该让人提前偷看下一题答案，
-    // 二是答案卡里有大量按钮，画出来却不能点更糟。
-    if (state.revealed && interactive) {
-        AnswerCard(q = q, state = state, vm = vm)
+    if (shouldShowAnswerCard(interactive, state.answered, state.revealed)) {
+        AnswerCard(q = q, state = state, vm = vm, interactive = interactive)
     }
 }
 
 @Composable
-private fun AnswerCard(q: Question, state: StudyUiState, vm: StudyViewModel) {
+private fun AnswerCard(
+    q: Question,
+    state: StudyUiState,
+    vm: StudyViewModel,
+    interactive: Boolean
+) {
     val extra = shuaColors
     val hasAnswer = !q.answer.isNullOrBlank()
     if (!hasAnswer) {
@@ -931,7 +968,9 @@ private fun AnswerCard(q: Question, state: StudyUiState, vm: StudyViewModel) {
                     )
                     AiDisclaimer()
                 }
-                DeepSolveRow(state = state, q = q, vm = vm)
+                if (!interactive || state.answered) {
+                    DeepSolveRow(state = state, q = q, vm = vm, interactive = interactive)
+                }
             }
         }
         return
@@ -1034,10 +1073,12 @@ private fun AnswerCard(q: Question, state: StudyUiState, vm: StudyViewModel) {
             }
 
             // 深度解题 + 追问：两个 AI 入口（无参考答案的分支里也复用同一个组件）
-            DeepSolveRow(state = state, q = q, vm = vm)
+            if (!interactive || state.answered) {
+                DeepSolveRow(state = state, q = q, vm = vm, interactive = interactive)
+            }
 
             val dissents = JsonCodec.decodeDissent(q.dissentJson)
-            if (dissents.isNotEmpty()) {
+            if (interactive && dissents.isNotEmpty()) {
                 var expanded by remember { mutableStateOf(false) }
                 TextButton(onClick = { expanded = !expanded }, contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
                     Text(
@@ -1072,7 +1113,10 @@ private fun AnswerCard(q: Question, state: StudyUiState, vm: StudyViewModel) {
             }
 
             // 主观题自评
-            if ((q.type == QuestionType.FILL || q.type == QuestionType.SHORT_ANSWER || q.type == QuestionType.TERM) && !state.answered) {
+            if (interactive &&
+                (q.type == QuestionType.FILL || q.type == QuestionType.SHORT_ANSWER || q.type == QuestionType.TERM) &&
+                !state.answered
+            ) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(
                         onClick = { vm.selfRate(true) },
@@ -1090,7 +1134,12 @@ private fun AnswerCard(q: Question, state: StudyUiState, vm: StudyViewModel) {
 }
 
 @Composable
-private fun DeepSolveRow(state: StudyUiState, q: Question, vm: StudyViewModel) {
+private fun DeepSolveRow(
+    state: StudyUiState,
+    q: Question,
+    vm: StudyViewModel,
+    interactive: Boolean
+) {
     val extra = shuaColors
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         // 流式输出区：模型逐字吐出的内容实时显示在这里。
@@ -1157,7 +1206,7 @@ private fun DeepSolveRow(state: StudyUiState, q: Question, vm: StudyViewModel) {
                     Modifier
                         .clip(RoundedCornerShape(10.dp))
                         .background(extra.terracottaSoft)
-                        .clickable { vm.deepSolve() }
+                        .clickable(enabled = interactive) { vm.deepSolve() }
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -1180,7 +1229,7 @@ private fun DeepSolveRow(state: StudyUiState, q: Question, vm: StudyViewModel) {
                     Modifier
                         .clip(RoundedCornerShape(10.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                        .clickable {
+                        .clickable(enabled = interactive) {
                             com.examhelper.shua.ui.sound.Haptics.tap()
                             vm.toggleAsk()
                         }
@@ -1338,39 +1387,55 @@ private fun BottomControls(
         shape = RoundedCornerShape(20.dp),
         elevation = 12.dp
     ) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        Column(
+            Modifier
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+                .animateContentSize(),
+            verticalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
             // 判分结果 + 速刷倒计时合并成一行，省高度
-            if (state.answered && state.correct != null) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        if (state.correct == true) Icons.Filled.Check else Icons.Filled.Close,
-                        contentDescription = null,
-                        modifier = Modifier.size(15.dp),
-                        tint = if (state.correct == true) extra.verdant else extra.sage
-                    )
-                    Spacer(Modifier.width(5.dp))
-                    Text(
-                        if (state.correct == true) "回答正确" else "回答错误",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = if (state.correct == true) extra.verdant else extra.sage
-                    )
-                    Spacer(Modifier.weight(1f))
-                    state.countdown?.let { sec ->
-                        Text(
-                            "${sec}s 后下一题",
-                            style = monoStyle(11.sp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+            val resultState = when {
+                state.answered && state.correct == true -> "correct"
+                state.answered && state.correct == false -> "wrong"
+                else -> "none"
+            }
+            AnimatedContent(
+                targetState = resultState,
+                transitionSpec = {
+                    fadeIn(tween(160)) togetherWith fadeOut(tween(100))
+                },
+                label = "answerResult"
+            ) { result ->
+                if (result == "correct" || result == "wrong") {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            if (result == "correct") Icons.Filled.Check else Icons.Filled.Close,
+                            contentDescription = null,
+                            modifier = Modifier.size(15.dp),
+                            tint = if (result == "correct") extra.verdant else extra.sage
                         )
-                        TextButton(
-                            onClick = vm::pauseCountdown,
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                        ) {
-                            Text("暂停", style = MaterialTheme.typography.labelSmall, color = extra.terracotta)
+                        Spacer(Modifier.width(5.dp))
+                        Text(
+                            if (result == "correct") "回答正确" else "回答错误",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (result == "correct") extra.verdant else extra.sage
+                        )
+                        Spacer(Modifier.weight(1f))
+                        state.countdown?.let { sec ->
+                            Text(
+                                "${sec}s 后下一题",
+                                style = monoStyle(11.sp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            TextButton(
+                                onClick = vm::pauseCountdown,
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                            ) {
+                                Text("暂停", style = MaterialTheme.typography.labelSmall, color = extra.terracotta)
+                            }
                         }
                     }
-                }
-            } else {
-                state.countdown?.let { sec ->
+                } else state.countdown?.let { sec ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             "${sec}s 后自动下一题",
@@ -1433,19 +1498,46 @@ private fun BottomControls(
                                 onFlipNext?.invoke() ?: vm.next()
                             }
                     ) {
-                        Text(
-                            if (state.answered || state.revealed) "下一题" else "先作答",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = if (canNext) MaterialTheme.colorScheme.onPrimary
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.align(Alignment.Center)
-                        )
+                        val label = when {
+                            state.session?.nextQuestion == null && (state.answered || state.revealed) -> "完成"
+                            state.answered || state.revealed -> "下一题"
+                            else -> "先作答"
+                        }
+                        AnimatedContent(
+                            targetState = label,
+                            modifier = Modifier.align(Alignment.Center),
+                            transitionSpec = {
+                                fadeIn(tween(150)) togetherWith fadeOut(tween(90))
+                            },
+                            contentAlignment = Alignment.Center,
+                            label = "nextButtonLabel"
+                        ) { text ->
+                            Text(
+                                text,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = if (canNext) MaterialTheme.colorScheme.onPrimary
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }
         }
     }
 }
+
+internal fun canMoveForward(
+    mode: StudyMode,
+    answered: Boolean,
+    revealed: Boolean,
+    hasNext: Boolean
+): Boolean = hasNext || answered || revealed || mode == StudyMode.RECITE
+
+internal fun shouldShowAnswerCard(
+    interactive: Boolean,
+    answered: Boolean,
+    revealed: Boolean
+): Boolean = revealed && (interactive || answered)
 
 /** 解析下方的小字免责声明（用户要求：内容为 AI 生成，可能会出错） */
 @Composable

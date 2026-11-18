@@ -73,8 +73,10 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
 
     data class StatsUi(
         val todayCount: Int = 0,
+        val todayKnownCount: Int = 0,
         val todayCorrect: Int = 0,
         val totalCount: Int = 0,
+        val totalKnownCount: Int = 0,
         val totalCorrect: Int = 0,
         val perBank: List<Triple<String, Int, Int>> = emptyList()
     )
@@ -82,18 +84,54 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
     private val _heat = MutableStateFlow<Map<String, Int>>(emptyMap())
     val heat: StateFlow<Map<String, Int>> = _heat
 
-    val ui = combine(
+    private data class AccuracyCounts(
+        val todayKnown: Int,
+        val totalKnown: Int
+    )
+
+    private data class RawCounts(
+        val today: Int,
+        val total: Int,
+        val todayCorrect: Int,
+        val totalCorrect: Int
+    )
+
+    private val rawCounts = combine(
         recordDao.observeAttemptCountSince(startOfToday()),
-        recordDao.observeCorrectCountSince(startOfToday()),
         recordDao.observeTotalAttempts(),
-        recordDao.observeTotalCorrect(),
-        combine(recordDao.observeBankStats(), bankDao.observeAll()) { stats, banks ->
-            val nameById = banks.associate { it.id to it.name }
-            stats.map { Triple(nameById[it.bankId] ?: "已删除题库", it.cnt, it.ok) }
-                .sortedByDescending { it.second }
-        }
-    ) { today, todayOk, total, totalOk, perBank ->
-        StatsUi(today, todayOk, total, totalOk, perBank)
+        recordDao.observeCorrectCountSince(startOfToday()),
+        recordDao.observeTotalCorrect()
+    ) { today, total, todayCorrect, totalCorrect ->
+        RawCounts(today, total, todayCorrect, totalCorrect)
+    }
+
+    private val accuracyCounts = combine(
+        recordDao.observeKnownAttemptCountSince(startOfToday()),
+        recordDao.observeKnownTotalAttempts()
+    ) { todayKnown, totalKnown ->
+        AccuracyCounts(todayKnown, totalKnown)
+    }
+
+    private val perBank = combine(recordDao.observeBankStats(), bankDao.observeAll()) { stats, banks ->
+        val nameById = banks.associate { it.id to it.name }
+        stats.map { Triple(nameById[it.bankId] ?: "已删除题库", it.cnt, it.ok) }
+            .sortedByDescending { it.second }
+    }
+
+    val ui = combine(
+        rawCounts,
+        accuracyCounts,
+        perBank
+    ) { raw, known, banks ->
+        StatsUi(
+            todayCount = raw.today,
+            totalCount = raw.total,
+            todayCorrect = raw.todayCorrect,
+            totalCorrect = raw.totalCorrect,
+            todayKnownCount = known.todayKnown,
+            totalKnownCount = known.totalKnown,
+            perBank = banks
+        )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), StatsUi())
 
     init {
@@ -150,7 +188,7 @@ fun StatsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                     StatCard("今日刷题", "${ui.todayCount}", "题", Modifier.weight(1f))
                     StatCard(
                         "今日正确率",
-                        if (ui.todayCount == 0) "—" else "${ui.todayCorrect * 100 / ui.todayCount}",
+                        if (ui.todayKnownCount == 0) "—" else "${ui.todayCorrect * 100 / ui.todayKnownCount}",
                         "%",
                         Modifier.weight(1f),
                         accent = true
@@ -162,7 +200,7 @@ fun StatsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                     StatCard("累计刷题", "${ui.totalCount}", "题", Modifier.weight(1f))
                     StatCard(
                         "累计正确率",
-                        if (ui.totalCount == 0) "—" else "${ui.totalCorrect * 100 / ui.totalCount}",
+                        if (ui.totalKnownCount == 0) "—" else "${ui.totalCorrect * 100 / ui.totalKnownCount}",
                         "%",
                         Modifier.weight(1f),
                         accent = true

@@ -58,6 +58,7 @@ import com.examhelper.shua.ui.theme.CompactTopBar
 import com.examhelper.shua.ui.theme.GlassSurface
 import com.examhelper.shua.ui.theme.Latex
 import com.examhelper.shua.ui.theme.PaperCard
+import com.examhelper.shua.ui.theme.QuestionNumberBadge
 import com.examhelper.shua.ui.theme.SectionLabel
 import com.examhelper.shua.ui.theme.SemanticChip
 import com.examhelper.shua.ui.theme.isCompactWidth
@@ -212,15 +213,7 @@ private fun QuestionRow(index: Int, q: Question, onClick: () -> Unit) {
     val extra = shuaColors
     PaperCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(15.dp), onClick = onClick) {
         Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier
-                    .size(26.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("$index", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+            QuestionNumberBadge(index)
             Spacer(Modifier.width(9.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Latex.LatexText(

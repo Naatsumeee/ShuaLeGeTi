@@ -71,6 +71,17 @@ class LlmParseResilienceTest {
         assertTrue(parser.recoverQuestions("").isEmpty())
         assertTrue(parser.recoverQuestions("抱歉我无法完成").isEmpty())
         assertTrue(parser.recoverQuestions("{\"questions\":[]}").isEmpty())
+        assertTrue(parser.isExplicitEmptyResponse("{\"questions\":[]}"))
+        assertTrue(parser.isExplicitEmptyResponse("[]"))
+        assertTrue(!parser.isExplicitEmptyResponse("""{"questions":[{"stem":"有效题"}]}"""))
+    }
+
+    @Test
+    fun partialJsonMustBeRetriedInsteadOfTreatedAsExplicitEmpty() {
+        assertTrue(parser.isIncompleteStructuredResponse("{"))
+        assertTrue(parser.isIncompleteStructuredResponse("""{"questions":["""))
+        assertTrue(!parser.isIncompleteStructuredResponse("""{"questions":[]}"""))
+        assertTrue(!parser.isIncompleteStructuredResponse("[]"))
     }
 
     /** 单块输出预算必须足够一个 6000 字分块转成 JSON，不能再退回服务端默认值 */

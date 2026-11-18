@@ -6,7 +6,9 @@ import android.util.Log
 import com.benjaminwan.ocrlibrary.LayoutEngine
 import com.examhelper.shua.BuildConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withContext
+import java.io.Closeable
 
 /**
  * RapidOCR（PP-OCRv5 ONNX，离线高精度引擎）。
@@ -19,20 +21,85 @@ import kotlinx.coroutines.withContext
  * 版面模型是可选的：assets 里缺文件或加载失败时 [layoutEngineAvailable] 为 false，
  * 自动退回旧的双栏启发式，不影响出题。
  */
-class RapidOcrEngine(context: Context) : OcrProvider {
+class RapidOcrEngine(
+    context: Context,
+    concurrency: Int = RapidOcrConcurrency.DEFAULT
+) : OcrProvider, Closeable {
 
     private val appContext = context.applicationContext
+    override val concurrency: Int = RapidOcrConcurrency.clamp(concurrency)
 
-    /**
-     * 引擎实例进程内共享。
-     *
-     * 每次 `OcrEngine(...)` 构造都会走一遍 JNI init：重载三个 ONNX 模型 + 重建字典。
-     * 原来每导入一次题库就新建一个实例，代价是几百毫秒的加载，更严重的是
-     * 原生层 `CrnnNet::initModel` 过去不清空 `keys`，重复 init 会让字典翻倍、
-     * 识别结果整体错位成乱码（已在 CrnnNet.cpp 修掉，但这里也不再重复 init）。
-     */
-    private val engine by lazy { sharedEngine(appContext) }
+    private val lock = Any()
+    private val workers = mutableListOf<RapidOcrWorker>()
+    @Volatile
+    private var available: Channel<RapidOcrWorker>? = null
+    @Volatile
+    private var closed = false
 
+    /** 版面分析模型是否可用（供导入页显示引擎能力） */
+    val layoutEngineAvailable: Boolean
+        get() = workerSlots().let { slots ->
+            workers.firstOrNull()?.layoutEngineAvailable == true
+        }
+
+    override suspend fun recognize(bitmap: Bitmap): OcrPageResult {
+        val slots = workerSlots()
+        val worker = slots.receive()
+        return try {
+            withContext(Dispatchers.Default) { worker.recognize(bitmap) }
+        } finally {
+            slots.trySend(worker)
+        }
+    }
+
+    private fun workerSlots(): Channel<RapidOcrWorker> {
+        synchronized(lock) {
+            available?.let { return it }
+            check(!closed) { "RapidOCR 已释放" }
+            val created = mutableListOf<RapidOcrWorker>()
+            try {
+                repeat(concurrency) {
+                    created += RapidOcrWorker(
+                        appContext = appContext,
+                        ocrThreads = RapidOcrConcurrency.ocrThreadsPerLane(concurrency),
+                        layoutThreads = RapidOcrConcurrency.layoutThreadsPerLane(concurrency)
+                    )
+                }
+            } catch (t: Throwable) {
+                created.forEach { it.close() }
+                throw t
+            }
+            workers += created
+            return Channel<RapidOcrWorker>(created.size).also { channel ->
+                created.forEach { channel.trySend(it) }
+                available = channel
+            }
+        }
+    }
+
+    override fun close() {
+        val slots = synchronized(lock) {
+            if (closed) return
+            closed = true
+            available.also { available = null }
+        }
+        slots?.close()
+        synchronized(lock) {
+            workers.forEach { it.close() }
+            workers.clear()
+        }
+    }
+}
+
+/**
+ * 一路 OCR 的完整原生会话。实例之间不共享 OcrEngine/LayoutEngine，
+ * 因为 JNI 侧每个实例都会持有自己的 ONNX Session 和可变工作区。
+ */
+private class RapidOcrWorker(
+    private val appContext: Context,
+    private val ocrThreads: Int,
+    private val layoutThreads: Int
+) : Closeable {
     /**
      * 检测阶段的长边上限。**这是小字漏检的关键**：PDF 页面渲染出来约 1400×1980，
      * 这里若给 1280，A4 扫描件在检测时只剩 905px 高，10pt 的小字字高约 8px，
@@ -40,19 +107,22 @@ class RapidOcrEngine(context: Context) : OcrProvider {
      */
     private val detectMaxSideLen: Int = 1920
 
-    /**
-     * 版面分析模型。加载失败（assets 没打进模型、NDK 没编译该源文件）时为 null，
-     * 由 LayoutEngine.available 告知。
-     */
-    private val layoutEngine: LayoutEngine? by lazy {
-        runCatching { LayoutEngine(appContext).takeIf { it.available } }.getOrNull()
+    private val engine = com.benjaminwan.ocrlibrary.OcrEngine(appContext, ocrThreads).apply {
+        padding = 50
+        boxScoreThresh = 0.5f
+        boxThresh = 0.2f
+        unClipRatio = 1.8f
+        doAngle = true
+        mostAngle = true
     }
 
-    /** 版面分析模型是否可用（供导入页显示引擎能力） */
-    val layoutEngineAvailable: Boolean
-        get() = layoutEngine?.available == true
+    private val layoutEngine: LayoutEngine? = runCatching {
+        LayoutEngine(appContext, layoutThreads).takeIf { it.available }
+    }.getOrNull()
 
-    override suspend fun recognize(bitmap: Bitmap): OcrPageResult = withContext(Dispatchers.Default) {
+    val layoutEngineAvailable: Boolean get() = layoutEngine != null
+
+    suspend fun recognize(bitmap: Bitmap): OcrPageResult = withContext(Dispatchers.Default) {
         val output = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
         try {
             // 第一步：版面分析。给出页眉页脚、表格、公式的位置。
@@ -99,33 +169,60 @@ class RapidOcrEngine(context: Context) : OcrProvider {
         }
     }
 
-    companion object {
-        @Volatile
-        private var engineInstance: com.benjaminwan.ocrlibrary.OcrEngine? = null
+    override fun close() {
+        runCatching { engine.close() }
+        runCatching { layoutEngine?.close() }
+    }
+}
 
-        /**
-         * 进程内唯一的 OCR 引擎。构造一次要重载三个 ONNX 并建字典，
-         * 重复构造既慢，也会把原生层的字典反复追加（旧 bug）。
-         */
-        @Synchronized
-        private fun sharedEngine(context: Context): com.benjaminwan.ocrlibrary.OcrEngine {
-            engineInstance?.let { return it }
-            return com.benjaminwan.ocrlibrary.OcrEngine(context.applicationContext).apply {
-                // 扫描试卷场景参数。
-                //
-                // boxThresh / unClipRatio 的取值依据（官方参数说明）：
-                // · box_thresh「存在漏检时，调低该值」——试卷里 A~E 五个选项常被整块漏掉，
-                //   调低到 0.2 用少量误检换召回，多认几个噪声字比漏掉整个选项好；
-                // · unclip_ratio「出现框截断文字的情况，调大该值」——1.6 → 1.8 让文本框
-                //   多留一点边，避免紧贴的文字被切掉首尾。
-                // boxScoreThresh 仍是 0.5：它管的是「算不算文字」，再降会把污点当字。
-                padding = 50
-                boxScoreThresh = 0.5f
-                boxThresh = 0.2f
-                unClipRatio = 1.8f
-                doAngle = true
-                mostAngle = true
-            }.also { engineInstance = it }
+object RapidOcrConcurrency {
+    const val DEFAULT = 1
+    const val MAX = 4
+
+    fun clamp(value: Int): Int = value.coerceIn(DEFAULT, MAX)
+    fun ocrThreadsPerLane(lanes: Int): Int = when (clamp(lanes)) {
+        1 -> 4
+        2 -> 2
+        else -> 1
+    }
+    fun layoutThreadsPerLane(lanes: Int): Int = if (clamp(lanes) <= 2) 2 else 1
+}
+
+/**
+ * 多路原生 OCR 如果直接 SIGABRT，Java finally 来不及执行。这里在进程内记下
+ * 活跃进程 PID；下一次新进程看到旧 PID 就知道上次并行识别没有正常收尾。
+ */
+object RapidOcrRuntimeGuard {
+    private const val PREFS = "rapid_ocr_runtime"
+    private const val KEY_ACTIVE_PID = "active_pid"
+    private const val KEY_FAILED = "parallel_failed"
+
+    private fun prefs(context: Context) =
+        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    fun markStarted(context: Context) {
+        prefs(context).edit()
+            .putInt(KEY_ACTIVE_PID, android.os.Process.myPid())
+            .commit()
+    }
+
+    fun markFinished(context: Context, success: Boolean) {
+        prefs(context).edit()
+            .remove(KEY_ACTIVE_PID)
+            .putBoolean(KEY_FAILED, prefs(context).getBoolean(KEY_FAILED, false) || !success)
+            .apply()
+    }
+
+    fun consumeInterrupted(context: Context): Boolean {
+        val p = prefs(context)
+        val activePid = p.getInt(KEY_ACTIVE_PID, 0)
+        if (activePid != 0 && activePid != android.os.Process.myPid()) {
+            p.edit().remove(KEY_ACTIVE_PID).putBoolean(KEY_FAILED, true).apply()
         }
+        return p.getBoolean(KEY_FAILED, false)
+    }
+
+    fun clearFailure(context: Context) {
+        prefs(context).edit().remove(KEY_FAILED).apply()
     }
 }

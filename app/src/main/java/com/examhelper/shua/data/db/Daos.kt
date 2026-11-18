@@ -124,6 +124,9 @@ interface QuestionDao {
     @Update
     suspend fun update(question: Question)
 
+    @Query("UPDATE questions SET askChatJson = :json WHERE id = :questionId")
+    suspend fun updateAskChat(questionId: Long, json: String?)
+
     @Query("DELETE FROM questions WHERE bankId = :bankId")
     suspend fun deleteByBank(bankId: Long)
 
@@ -169,6 +172,9 @@ interface ProgressDao {
     @Query("SELECT * FROM study_progress WHERE bankId = :bankId ORDER BY updatedAt DESC")
     suspend fun allByBank(bankId: Long): List<StudyProgress>
 
+    @Query("SELECT * FROM study_progress WHERE bankId = :bankId ORDER BY updatedAt DESC")
+    fun observeAllByBank(bankId: Long): Flow<List<StudyProgress>>
+
     /** 实时刷新最近活动时间：作答即算触达，不必等点“下一题” */
     @Query("UPDATE study_progress SET updatedAt = :ts WHERE bankId = :bankId AND mode = :mode")
     suspend fun touch(bankId: Long, mode: StudyMode, ts: Long)
@@ -192,13 +198,19 @@ interface RecordDao {
     @Query("SELECT COUNT(*) FROM attempt_records WHERE answeredAt >= :since")
     fun observeAttemptCountSince(since: Long): Flow<Int>
 
-    @Query("SELECT COUNT(*) FROM attempt_records WHERE correct = 1 AND answeredAt >= :since")
+    @Query("SELECT COUNT(*) FROM attempt_records WHERE correctKnown = 1 AND answeredAt >= :since")
+    fun observeKnownAttemptCountSince(since: Long): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM attempt_records WHERE correct = 1 AND correctKnown = 1 AND answeredAt >= :since")
     fun observeCorrectCountSince(since: Long): Flow<Int>
 
     @Query("SELECT COUNT(*) FROM attempt_records")
     fun observeTotalAttempts(): Flow<Int>
 
-    @Query("SELECT COUNT(*) FROM attempt_records WHERE correct = 1")
+    @Query("SELECT COUNT(*) FROM attempt_records WHERE correctKnown = 1")
+    fun observeKnownTotalAttempts(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM attempt_records WHERE correct = 1 AND correctKnown = 1")
     fun observeTotalCorrect(): Flow<Int>
 
     // 测试模式报告
@@ -228,7 +240,13 @@ interface RecordDao {
 
     data class BankStatRow(val bankId: Long, val cnt: Int, val ok: Int)
 
-    @Query("SELECT bankId, COUNT(*) as cnt, SUM(CASE WHEN correct THEN 1 ELSE 0 END) as ok FROM attempt_records GROUP BY bankId")
+    @Query("""
+        SELECT bankId,
+               SUM(CASE WHEN correctKnown = 1 THEN 1 ELSE 0 END) as cnt,
+               SUM(CASE WHEN correctKnown = 1 AND correct = 1 THEN 1 ELSE 0 END) as ok
+        FROM attempt_records
+        GROUP BY bankId
+    """)
     fun observeBankStats(): Flow<List<BankStatRow>>
 
     // ---- 错题本 ----
@@ -377,6 +395,7 @@ interface RecordDao {
         existingWrong: WrongRecord?
     ) {
         insertAttempt(record)
+        if (!record.correctKnown) return
         if (!record.correct) {
             if (existingWrong != null) {
                 upsertWrong(

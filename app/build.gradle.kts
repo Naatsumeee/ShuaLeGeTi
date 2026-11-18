@@ -26,7 +26,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = generatedVersionCode
-        versionName = "1.2.0"
+        versionName = "1.3.0"
     }
 
     // 正式签名：从仓库根目录的 keystore.properties 读取（该文件与 release.jks 都在 .gitignore 里）。
@@ -39,8 +39,11 @@ android {
     //   storePassword=...
     //   keyAlias=shualegeti
     //   keyPassword=...
+    val keystorePropsFile = (project.findProperty("keystorePropertiesFile") as String?)
+        ?.let { file(it) }
+        ?: rootProject.file("keystore.properties")
     val keystoreProps = Properties().apply {
-        val f = rootProject.file("keystore.properties")
+        val f = keystorePropsFile
         if (f.exists()) f.inputStream().use { load(it) }
     }
     val hasReleaseKey = keystoreProps.getProperty("storePassword").isNullOrBlank().not()
@@ -67,7 +70,7 @@ android {
     signingConfigs {
         if (hasReleaseKey) {
             create("release") {
-                storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
+                storeFile = keystorePropsFile.parentFile.resolve(keystoreProps.getProperty("storeFile"))
                 storePassword = keystoreProps.getProperty("storePassword")
                 keyAlias = keystoreProps.getProperty("keyAlias")
                 keyPassword = keystoreProps.getProperty("keyPassword")
@@ -77,7 +80,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             // 有正式 keystore 就用它；没有则退回 debug 签名（包能出，但不能覆盖已装正版）
             signingConfig = if (hasReleaseKey) {
                 signingConfigs.getByName("release")
@@ -103,6 +107,14 @@ android {
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
         resources.excludes += "/META-INF/DEPENDENCIES"
+        // PDFBox 会传递依赖 BouncyCastle；这些 PQC 参数文件与本项目的常规 PDF 处理无关。
+        resources.excludes += listOf(
+            "org/bouncycastle/pqc/crypto/picnic/lowmc.properties",
+            "org/bouncycastle/pqc/crypto/sike/p751.properties",
+            "org/bouncycastle/pqc/crypto/sike/p610.properties",
+            "org/bouncycastle/pqc/crypto/sike/p503.properties",
+            "org/bouncycastle/pqc/crypto/sike/p434.properties"
+        )
     }
 }
 
