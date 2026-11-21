@@ -1,17 +1,17 @@
-{
-  "schema": 1,
-  "versionName": "1.3.0",
-  "versionCode": 1123,
-  "publishedAt": 1794991137,
-  "notes": [
-    "新增 AI 导入首段优先与连续并发、按轮次恢复做题进度、每题问 AI 持久化和 RapidOCR 1-4 路实验并发。",
-    "优化导入流式预览、切题动画、长题滚动、完成轮次刷新、键盘避让、OCR 缓存复用、多源检查更新和安装包体积。",
-    "修复 AI 解析空结果循环、最后一题无法完成、进度与题号错位、问 AI 历史丢失和 RapidOCR 重复闪退。"
-  ],
-  "downloads": [
-    "https://gitee.com/Naatsumeee/ShuaLeGeTi-release/releases/download/v1.3.0/Shualegeti-arm64-v8a-1.3.0.apk",
-    "https://github.com/Naatsumeee/ShuaLeGeTi/releases/download/v1.3.0/Shualegeti-arm64-v8a-1.3.0.apk"
-  ],
-  "releaseUrl": "https://github.com/Naatsumeee/ShuaLeGeTi/releases/tag/v1.3.0",
-  "sha256": "6E62FBCDB878923BD197AF8FD22F9D3F3EFB9B3B83762A1CA3576BDE816973C0"
+﻿{
+    "schema":  1,
+    "versionName":  "1.4.0",
+    "versionCode":  1137,
+    "publishedAt":  1795290908,
+    "notes":  [
+                  "新增全局渲染比例、OpenCode 请求头、章节分块与题间分章编辑、做题页单题编辑与时间戳笔记。",
+                  "优化 5 档前强后脆震动曲线、底部真悬浮毛玻璃导航与长按跟手移动、深色模式文字与设置页滑块高度。",
+                  "修复 LaTeX 下标与根号长顶线渲染、百炼流式 400、错题重刷队列与背题切题动画等问题。"
+              ],
+    "downloads":  [
+                      "https://gitee.com/Naatsumeee/ShuaLeGeTi-release/releases/download/v1.4.0/Shualegeti-arm64-v8a-1.4.0.apk",
+                      "https://github.com/Naatsumeee/ShuaLeGeTi/releases/download/v1.4.0/Shualegeti-arm64-v8a-1.4.0.apk"
+                  ],
+    "releaseUrl":  "https://github.com/Naatsumeee/ShuaLeGeTi/releases/tag/v1.4.0",
+    "sha256":  "5DB2413569C4ED7F85251ECA12CFF60EA31754C5300B48A51B84C3CEDBD305C9"
 }
