@@ -110,6 +110,12 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
         fontDraft = ui.fontScale
         lastFontStep = (ui.fontScale * 20).roundToInt()
     }
+    var uiScaleDraft by remember { mutableFloatStateOf(ui.uiScale) }
+    var lastUiScaleStep by remember { mutableIntStateOf((ui.uiScale * 20).roundToInt()) }
+    LaunchedEffect(ui.uiScale) {
+        uiScaleDraft = ui.uiScale
+        lastUiScaleStep = (ui.uiScale * 20).roundToInt()
+    }
 
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(message) {
@@ -151,26 +157,23 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                     Column {
                         SettingSwitchRow(
                             title = "震动反馈",
-                            subtitle = "点选项、切题、判分时短促触感",
+                            subtitle = "点击与判分触感",
                             checked = ui.hapticEnabled,
                             onCheckedChange = vm::setHapticEnabled
                         )
                         if (ui.hapticEnabled) {
                             DividerLine()
-                            Column(Modifier.padding(14.dp)) {
-                                // 转子马达（或系统禁用了振幅控制）时，amplitude 会被系统忽略，
-                                // 「强度」滑块怎么拖都是同一个手感。与其让用户反复试，
-                                // 不如在这里直说 —— 这正是以前「强度调节失效」最容易被误判的来源。
+                            Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
                                 HapticSliderRow(
                                     title = "震动强度",
-                                    hint = "振幅 + 脉冲密度（震得多重）",
+                                    hint = "",
                                     value = ui.hapticStrength,
                                     onChange = vm::setHapticStrength
                                 )
-                                Spacer(Modifier.height(14.dp))
+                                Spacer(Modifier.height(4.dp))
                                 HapticSliderRow(
                                     title = "震动时长",
-                                    hint = "只影响毫秒（震得多长）",
+                                    hint = "",
                                     value = ui.hapticDuration,
                                     onChange = vm::setHapticDuration
                                 )
@@ -178,9 +181,9 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                         }
                         DividerLine()
                         SettingSwitchRow(
-                            title = "暗黑护眼（橄榄柔光夜读）",
-                            subtitle = if (ui.darkMode == null) "当前跟随系统 · 打开后强制橄榄柔光夜间配色"
-                            else if (ui.darkMode == true) "已启用夜间配色" else "已锁定暖纸日间配色",
+                            title = "暗黑护眼",
+                            subtitle = if (ui.darkMode == null) "跟随系统"
+                            else if (ui.darkMode == true) "夜间配色" else "日间配色",
                             checked = ui.darkMode == true,
                             onCheckedChange = { vm.setDarkMode(if (it) true else false) }
                         )
@@ -201,7 +204,7 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                             }
                         }
                         DividerLine()
-                        Column(Modifier.padding(14.dp)) {
+                        Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     "字体大小",
@@ -225,7 +228,37 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                                     }
                                 },
                                 onValueChangeFinished = { vm.setFontScale(fontDraft) },
-                                valueRange = 0.8f..1.5f
+                                valueRange = 0.8f..1.5f,
+                                modifier = Modifier.fillMaxWidth().height(28.dp)
+                            )
+                        }
+                        DividerLine()
+                        Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "渲染比例",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                MonoText("${(uiScaleDraft * 100).roundToInt()}%", color = extra.terracotta)
+                            }
+                            Slider(
+                                value = uiScaleDraft,
+                                onValueChange = {
+                                    val stepped = (it * 20).roundToInt() / 20f
+                                    if (stepped != uiScaleDraft) {
+                                        uiScaleDraft = stepped
+                                        val step = (stepped * 20).roundToInt()
+                                        if (step != lastUiScaleStep) {
+                                            lastUiScaleStep = step
+                                            Haptics.tick()
+                                        }
+                                    }
+                                },
+                                onValueChangeFinished = { vm.setUiScale(uiScaleDraft) },
+                                valueRange = 0.8f..1.25f,
+                                modifier = Modifier.fillMaxWidth().height(28.dp)
                             )
                         }
                     }
@@ -239,7 +272,7 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                     Column {
                         SettingActionRow(
                             title = "导出学习数据",
-                            subtitle = "题库 + 作答历史 + 错题本 + 收藏 + 斩题，整合为一个 .shua 文件",
+                            subtitle = "导出为 .shua 备份文件",
                             actionLabel = "导出",
                             icon = Icons.Filled.Save,
                             onClick = { exportLauncher.launch(vm.suggestedFileName()) }
@@ -247,7 +280,7 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                         DividerLine()
                         SettingActionRow(
                             title = "清空收藏夹",
-                            subtitle = "只删除收藏标记，题目与作答记录不受影响",
+                            subtitle = "仅清空收藏标记",
                             actionLabel = "清空",
                             icon = Icons.Filled.Delete,
                             danger = true,
@@ -256,7 +289,7 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                         DividerLine()
                         SettingActionRow(
                             title = "重置刷题进度",
-                            subtitle = "把四种模式的游标与随机队列归零，题目与错题保留",
+                            subtitle = "清零当前刷题进度",
                             actionLabel = "重置",
                             icon = Icons.Filled.Refresh,
                             danger = true,
@@ -274,7 +307,7 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text("还没有配置模型", style = serifTitle(15.sp, FontWeight.Medium))
                             Text(
-                                "添加后即可使用 AI 解析题目、生成答案与解析。支持 DeepSeek / GLM / Kimi / Qwen / OpenAI / Ollama 等任何 OpenAI 兼容接口。",
+                                "支持任意 OpenAI 兼容接口",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -338,7 +371,7 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                             }
                         }
                         Text(
-                            bal.text ?: "点「查询」读取 DeepSeek 官方余额（仅 api.deepseek.com 支持）。",
+                            bal.text ?: "仅 api.deepseek.com 支持余额查询",
                             style = MaterialTheme.typography.labelSmall,
                             color = when (bal.ok) {
                                 true -> extra.terracotta
@@ -426,8 +459,7 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                                 color = extra.sage
                             )
                             w == null -> Text(
-                                "选一个窗口后点「统计」。首次使用需要积累几天余额快照才能算出实际消费；" +
-                                    "应用每次打开会采一次（每天最多一次），任务前后也会采。",
+                                "选择窗口后点「统计」查看消费记录",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -467,12 +499,6 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
-                                Text(
-                                    "「实际消费」= 当前主模型账号的余额下降量，DeepSeek 目前不提供按 API Key 单独查询消费的接口；" +
-                                        "「本地估算」汇总本机所有 AI 调用（导入解析、答案生成、问 AI、深度/极简解析），按每次调用的模型、时间和 token 计算。",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
                             }
                         }
                     }
@@ -553,11 +579,6 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                                     )
                                 }
                             }
-                            Text(
-                                "实验功能。多路会同时加载多份 ONNX 会话，CPU、内存和发热都会明显增加。",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.outline
-                            )
                             if (ui.rapidOcrInterrupted) {
                                 Text(
                                     "上次 RapidOCR 多路任务未正常结束（可能发生闪退），建议切回 1 路。",
@@ -578,7 +599,7 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
             item {
                 PaperCard(Modifier.fillMaxWidth()) {
                     Column {
-                        Column(Modifier.padding(14.dp)) {
+                        Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     "速刷自动切换",
@@ -592,11 +613,12 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                                 value = ui.speedSeconds.toFloat(),
                                 onValueChange = { vm.setSpeedSeconds(it.toInt()) },
                                 valueRange = 1f..10f,
-                                steps = 8
+                                steps = 8,
+                                modifier = Modifier.fillMaxWidth().height(28.dp)
                             )
                         }
                         DividerLine()
-                        Column(Modifier.padding(14.dp)) {
+                        Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     "AI 解析并发",
@@ -606,23 +628,15 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                                 )
                                 MonoText("${ui.parseConcurrency} 路", color = extra.terracotta)
                             }
-                            Text(
-                                "分块并行请求数。提速但更吃模型限流，报 429 时调低",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
                             Slider(
                                 value = ui.parseConcurrency.toFloat(),
                                 onValueChange = { vm.setParseConcurrency(it.toInt()) },
                                 valueRange = 1f..8f,
-                                steps = 6
+                                steps = 6,
+                                modifier = Modifier.fillMaxWidth().height(28.dp)
                             )
                         }
                         DividerLine()
-                        // 思考强度：只影响「深度解题」「补全解析」，导入解析固定关。
-                        //
-                        // 档位按 DeepSeek 官方口径给 none/low/high/max —— 没有 medium，
-                        // 官方把 medium 映射成 high，给了反而让人误以为选了更省的档。
                         Column(Modifier.padding(14.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
@@ -633,11 +647,6 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                                 )
                                 MonoText(ui.reasoningEffort.label, color = extra.terracotta)
                             }
-                            Text(
-                                "越高越会推演但也越慢越贵。导入解析固定关闭思考（结构化抽取用不上，白烧输出预算）",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
                             ReasonEffortSelector(
                                 current = ui.reasoningEffort,
                                 onSelect = vm::setReasoningEffort
@@ -782,11 +791,8 @@ private fun DividerLine() {
 }
 
 /**
- * 1–10 档震动滑块。
- *
- * 为什么用滑块而不是三档 chip：用户明确要求「改成 1-10 档滑动条，划到哪就按
- * 设置后的情况震一下作预览」。拖动过程中每跨一档就震一次（值真的变了才震），
- * 这样调的时候手里能立刻感觉到这一档是什么手感。
+ * 1–5 档震动滑块（默认 3 档）。
+ * 拖动过程中每跨一档就震一次作即时手感预览。
  */
 @Composable
 private fun HapticSliderRow(
@@ -807,18 +813,20 @@ private fun HapticSliderRow(
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier.weight(1f)
             )
-            MonoText("$value / 10", color = extra.terracotta)
+            MonoText("$value / 5", color = extra.terracotta)
         }
-        Text(
-            hint,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.outline
-        )
+        if (hint.isNotBlank()) {
+            Text(
+                hint,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline
+            )
+        }
         Slider(
             value = pos,
             onValueChange = { f ->
                 pos = f
-                val v = f.roundToInt().coerceIn(1, 10)
+                val v = f.roundToInt().coerceIn(1, 5)
                 if (v != value) {
                     onChange(v)
                     // 预览：每跨一档震一下，跟着手指走
@@ -828,10 +836,10 @@ private fun HapticSliderRow(
                     }
                 }
             },
-            onValueChangeFinished = { onChange(pos.roundToInt().coerceIn(1, 10)) },
-            valueRange = 1f..10f,
-            steps = 8,   // 10 个整点之间的 8 个刻度
-            modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+            onValueChangeFinished = { onChange(pos.roundToInt().coerceIn(1, 5)) },
+            valueRange = 1f..5f,
+            steps = 3,   // 5 个整点之间的 3 个刻度
+            modifier = Modifier.fillMaxWidth().height(28.dp),
             colors = SliderDefaults.colors(
                 thumbColor = extra.terracotta,
                 activeTrackColor = extra.terracotta,
@@ -890,12 +898,6 @@ private fun ReasonEffortSelector(
             }
         }
     }
-    Text(
-        "Off 最快最省；High/Max 适合病例分析类深解题，但输出预算有限时容易写不全",
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.outline,
-        modifier = Modifier.padding(top = 6.dp)
-    )
 }
 
 @Composable
@@ -1374,6 +1376,10 @@ private fun ProviderCard(
                             Spacer(Modifier.width(6.dp))
                             SemanticChip("已停用", ChipTone.Neutral)
                         }
+                        if (provider.openCodeHeaderEnabled) {
+                            Spacer(Modifier.width(6.dp))
+                            SemanticChip("OpenCode", ChipTone.Neutral)
+                        }
                     }
                     Spacer(Modifier.height(2.dp))
                     Text(
@@ -1431,6 +1437,8 @@ private fun ProviderEditDialog(
     var baseUrl by remember { mutableStateOf(initial.baseUrl) }
     var apiKey by remember { mutableStateOf(initial.apiKey) }
     var model by remember { mutableStateOf(initial.model) }
+    var openCodeEnabled by remember { mutableStateOf(initial.openCodeHeaderEnabled) }
+    var openCodeUa by remember { mutableStateOf(initial.openCodeUserAgent.orEmpty()) }
     var showKey by remember { mutableStateOf(false) }
 
     AlertDialog(
@@ -1472,6 +1480,39 @@ private fun ProviderEditDialog(
                     label = { Text("模型名（如 deepseek-chat）") }, singleLine = true,
                     modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)
                 )
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { openCodeEnabled = !openCodeEnabled }
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "启用 OpenCode 请求头",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Switch(
+                        checked = openCodeEnabled,
+                        onCheckedChange = { openCodeEnabled = it },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                            checkedTrackColor = MaterialTheme.colorScheme.primary
+                        )
+                    )
+                }
+                if (openCodeEnabled) {
+                    OutlinedTextField(
+                        value = openCodeUa,
+                        onValueChange = { openCodeUa = it },
+                        label = { Text("User-Agent（可选）") },
+                        placeholder = { Text(com.examhelper.shua.data.llm.LlmClient.DEFAULT_OPENCODE_USER_AGENT) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                }
             }
         },
         confirmButton = {
@@ -1482,7 +1523,9 @@ private fun ProviderEditDialog(
                             name = name.trim(),
                             baseUrl = baseUrl.trim().removeSuffix("/"),
                             apiKey = apiKey.trim(),
-                            model = model.trim()
+                            model = model.trim(),
+                            openCodeHeaderEnabled = openCodeEnabled,
+                            openCodeUserAgent = openCodeUa.trim().takeIf { it.isNotEmpty() }
                         )
                     )
                 },

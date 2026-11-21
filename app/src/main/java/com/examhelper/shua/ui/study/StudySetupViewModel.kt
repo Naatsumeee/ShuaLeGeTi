@@ -56,10 +56,16 @@ class StudySetupViewModel(
             val groupBanks = if (bank?.isGroup == true) {
                 container.bankRepo.getGroupBanks(bankId)
             } else emptyList()
+            val targetBankIds = if (bank?.isGroup == true) {
+                groupBanks.map { it.id }
+            } else listOf(bankId)
+            val baseChapters = questions.mapNotNull { it.chapter?.takeIf { c -> c.isNotBlank() } }.distinct()
+            val hasRebrush = runCatching { container.studyRepo.hasRebrushFailedForBanks(targetBankIds) }.getOrDefault(false)
+            val chapters = if (hasRebrush) baseChapters + StudyRepository.REBRUSH_UNMASTERED_CHAPTER else baseChapters
             _state.value = UiState(
                 bank = bank,
                 groupBanks = groupBanks,
-                chapters = questions.mapNotNull { it.chapter?.takeIf { c -> c.isNotBlank() } }.distinct(),
+                chapters = chapters,
                 typesPresent = questions.map { it.type.name }.distinct().sorted(),
                 subtypesPresent = questions.mapNotNull { it.subtype }.distinct().sorted(),
                 filter = StudyFilter(),
@@ -71,7 +77,7 @@ class StudySetupViewModel(
         viewModelScope.launch {
             runCatching {
                 container.studyRepo.observeSavedProgress(bankId).collect { saved ->
-                    _state.value = _state.value.copy(saved = saved)
+                    _state.value = _state.value.copy(saved = saved.filter { it.mode == mode })
                 }
             }
         }
@@ -89,6 +95,7 @@ class StudySetupViewModel(
         val current = _state.value.filter
         val next = if (id in current.bankIds) current.bankIds - id else current.bankIds + id
         val selected = if (next.isEmpty()) groupQuestions else groupQuestions.filter { it.bankId in next }
+        val targetIds = if (next.isEmpty()) _state.value.groupBanks.map { it.id } else next
         _state.value = _state.value.copy(
             filter = current.copy(bankIds = next, chapters = emptyList(), types = emptyList(), subtypes = emptyList()),
             chapters = selected.mapNotNull { it.chapter?.takeIf { c -> c.isNotBlank() } }.distinct(),
@@ -96,7 +103,13 @@ class StudySetupViewModel(
             subtypesPresent = selected.mapNotNull { it.subtype }.distinct().sorted()
         )
         viewModelScope.launch {
-            _state.value = _state.value.copy(matchCount = container.studyRepo.filteredQuestions(bankId, _state.value.filter.copy(bankIds = next, chapters = emptyList(), types = emptyList(), subtypes = emptyList())).size)
+            val hasRebrush = runCatching { container.studyRepo.hasRebrushFailedForBanks(targetIds) }.getOrDefault(false)
+            val baseChapters = selected.mapNotNull { it.chapter?.takeIf { c -> c.isNotBlank() } }.distinct()
+            val nextChapters = if (hasRebrush) baseChapters + StudyRepository.REBRUSH_UNMASTERED_CHAPTER else baseChapters
+            _state.value = _state.value.copy(
+                chapters = nextChapters,
+                matchCount = container.studyRepo.filteredQuestions(bankId, _state.value.filter.copy(bankIds = next, chapters = emptyList(), types = emptyList(), subtypes = emptyList())).size
+            )
         }
     }
 

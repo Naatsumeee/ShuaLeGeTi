@@ -1,8 +1,11 @@
 package com.examhelper.shua.ui.theme
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -10,17 +13,36 @@ import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -239,6 +261,11 @@ object Latex {
                 append('/')
                 append(wrapOperand(b))
             }
+            name == "binom" || name == "tbinom" || name == "dbinom" -> {
+                val top = plain(readGroup(c), italic)
+                val bottom = plain(readGroup(c), italic)
+                append("C($top,$bottom)")
+            }
             name == "sqrt" -> {
                 var index = ""
                 if (c.peek() == '[') {
@@ -304,7 +331,7 @@ object Latex {
         val body = readGroup(c)
         val small = (baseSp * 0.72f).coerceAtLeast(7f)
         // BaselineShift 入参是相对字号的倍数，不是 TextUnit
-        val shift = if (up) 0.34f else -0.13f
+        val shift = if (up) 0.34f else -0.28f
         withStyle(
             SpanStyle(
                 fontSize = small.sp,
@@ -368,7 +395,23 @@ object Latex {
                 val b = plain(readGroup(c), italic)
                 "${wrapOperand(a)}/${wrapOperand(b)}"
             }
-            name == "sqrt" -> "√" + plain(readGroup(c), italic)
+            name == "binom" || name == "tbinom" || name == "dbinom" -> {
+                val top = plain(readGroup(c), italic)
+                val bottom = plain(readGroup(c), italic)
+                "C($top,$bottom)"
+            }
+            name == "sqrt" -> {
+                c.skipSpaces()
+                var idx = ""
+                if (c.peek() == '[') {
+                    c.take()
+                    val sb = StringBuilder()
+                    while (!c.eof() && c.peek() != ']') sb.append(c.take())
+                    if (!c.eof()) c.take()
+                    idx = plain(sb.toString(), italic)
+                }
+                idx + "√" + plain(readGroup(c), italic)
+            }
             name == "text" || name == "mathrm" || name == "mbox" || name == "operatorname" ->
                 plain(readGroup(c), false)
             name == "left" || name == "right" || name == "big" || name == "Big" -> {
@@ -593,14 +636,20 @@ object Latex {
                 val b = groupNodes(c)
                 Node.Frac(a, b)
             }
+            name == "binom" || name == "tbinom" || name == "dbinom" -> {
+                val top = groupNodes(c)
+                val bottom = groupNodes(c)
+                Node.Env(3, listOf(listOf(top), listOf(bottom)))
+            }
             name == "sqrt" -> {
                 var index: List<Node>? = null
+                c.skipSpaces()
                 if (c.peek() == '[') {
                     c.take()
                     val sb = StringBuilder()
                     while (!c.eof() && c.peek() != ']') sb.append(c.take())
                     if (!c.eof()) c.take()
-                    index = listOf(Node.Txt(sb.toString()))
+                    index = parseSeq(Cursor(sb.toString()), stopAtBrace = false, stopAtEnvEnd = null)
                 }
                 Node.Root(index, groupNodes(c))
             }
@@ -751,7 +800,7 @@ object Latex {
         }
     }
 
-    /** 行间公式：用真布局渲染（分式堆叠、根号线、矩阵、求和号归位） */
+    /** 行间公式：用真布局渲染（单行不挤压，超宽可左右滑动并带底部导航条） */
     @Composable
     fun LatexView(
         source: String,
@@ -766,11 +815,84 @@ object Latex {
             val c = Cursor(normalizeSource(source))
             parseSeq(c, stopAtBrace = false, stopAtEnvEnd = null)
         }
-        Box(
+        val scrollState = rememberScrollState()
+        var viewportPx by remember { mutableIntStateOf(0) }
+        val scope = rememberCoroutineScope()
+        val canScroll = scrollState.maxValue > 0
+
+        Column(
             modifier = modifier.fillMaxWidth(),
-            contentAlignment = if (center) Alignment.Center else Alignment.CenterStart
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            RenderNodes(nodes, baseSp, style, color, mathFontFamily)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onSizeChanged { viewportPx = it.width }
+                    .horizontalScroll(scrollState),
+                contentAlignment = if (center && !canScroll) Alignment.Center else Alignment.CenterStart
+            ) {
+                RenderNodes(nodes, baseSp, style, color, mathFontFamily)
+            }
+            if (canScroll && viewportPx > 0) {
+                LatexScrollBar(
+                    value = scrollState.value,
+                    maxValue = scrollState.maxValue,
+                    viewportPx = viewportPx,
+                    accentColor = color,
+                    onDragTo = { target ->
+                        scope.launch { scrollState.scrollTo(target) }
+                    }
+                )
+            }
+        }
+    }
+
+    @Composable
+    private fun LatexScrollBar(
+        value: Int,
+        maxValue: Int,
+        viewportPx: Int,
+        accentColor: Color,
+        onDragTo: (Int) -> Unit
+    ) {
+        val totalPx = (viewportPx + maxValue).coerceAtLeast(1)
+        val thumbFraction = (viewportPx.toFloat() / totalPx).coerceIn(0.18f, 1f)
+        val progress = if (maxValue <= 0) 0f else (value.toFloat() / maxValue).coerceIn(0f, 1f)
+        val density = LocalDensity.current
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(10.dp)
+                .pointerInput(maxValue) {
+                    detectHorizontalDragGestures { change, dragAmount ->
+                        change.consume()
+                        val trackW = size.width.toFloat().coerceAtLeast(1f)
+                        val deltaRatio = dragAmount / trackW
+                        val next = (value + (deltaRatio * maxValue).roundToInt()).coerceIn(0, maxValue)
+                        onDragTo(next)
+                    }
+                },
+            contentAlignment = Alignment.CenterStart
+        ) {
+            val trackPx = with(density) { maxWidth.toPx() }
+            val thumbPx = (trackPx * thumbFraction).coerceAtLeast(with(density) { 24.dp.toPx() })
+            val travelPx = (trackPx - thumbPx).coerceAtLeast(0f)
+            val offsetX = (travelPx * progress).roundToInt()
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .clip(CircleShape)
+                    .background(accentColor.copy(alpha = 0.12f))
+            )
+            Box(
+                Modifier
+                    .offset { IntOffset(offsetX, 0) }
+                    .width(with(density) { thumbPx.toDp() })
+                    .height(4.dp)
+                    .clip(CircleShape)
+                    .background(accentColor.copy(alpha = 0.45f))
+            )
         }
     }
 
@@ -805,7 +927,9 @@ object Latex {
                     fontSize = baseSp.sp,
                     fontStyle = if (node.roman) FontStyle.Normal else FontStyle.Italic
                 ),
-                color = color
+                color = color,
+                maxLines = 1,
+                softWrap = false
             )
 
             is Node.Seq -> RenderNodes(node.items, baseSp, style, color, mathFont)
@@ -826,45 +950,24 @@ object Latex {
                 RenderNodes(node.den, baseSp * 0.92f, style, color, mathFont)
             }
 
-            is Node.Root -> Row(verticalAlignment = Alignment.CenterVertically) {
-                node.index?.let {
-                    RenderNodes(it, baseSp * 0.62f, style, color, mathFont)
-                }
-                Text(
-                    "√",
-                    style = style.copy(fontFamily = mathFont, fontSize = (baseSp * 1.28f).sp),
-                    color = color
-                )
-                Column(
-                    modifier = Modifier.padding(top = 2.dp),
-                    horizontalAlignment = Alignment.Start
-                ) {
-                    HorizontalDivider(
-                        modifier = Modifier.widthIn(min = 8.dp),
-                        thickness = 1.dp,
-                        color = color.copy(alpha = 0.7f)
-                    )
-                    RenderNodes(node.body, baseSp, style, color, mathFont)
-                }
-            }
+            is Node.Root -> RenderRoot(node, baseSp, style, color, mathFont)
 
             is Node.Script -> Row(verticalAlignment = Alignment.CenterVertically) {
                 if (node.base.isNotEmpty()) {
                     RenderNodes(node.base, baseSp, style, color, mathFont)
                 }
                 Column(
-                    modifier = Modifier.padding(bottom = 1.dp),
-                    verticalArrangement = Arrangement.spacedBy(0.dp)
+                    verticalArrangement = Arrangement.spacedBy((baseSp * 0.12f).dp)
                 ) {
-                    node.sup?.let {
-                        Box(Modifier.padding(bottom = (baseSp * 0.10f).dp)) {
-                            RenderNodes(it, baseSp * 0.68f, style, color, mathFont)
-                        }
+                    if (node.sup != null) {
+                        RenderNodes(node.sup, baseSp * 0.68f, style, color, mathFont)
+                    } else if (node.sub != null) {
+                        Spacer(Modifier.height((baseSp * 0.52f).dp))
                     }
-                    node.sub?.let {
-                        Box(Modifier.padding(top = (baseSp * 0.10f).dp)) {
-                            RenderNodes(it, baseSp * 0.68f, style, color, mathFont)
-                        }
+                    if (node.sub != null) {
+                        RenderNodes(node.sub, baseSp * 0.68f, style, color, mathFont)
+                    } else if (node.sup != null) {
+                        Spacer(Modifier.height((baseSp * 0.48f).dp))
                     }
                 }
             }
@@ -922,7 +1025,10 @@ object Latex {
                     5 -> "^"
                     else -> ""
                 }
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(
+                    modifier = Modifier.width(IntrinsicSize.Max),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
                     when (node.kind) {
                         0, 2, 3, 4, 5 -> {
                             if (mark.isNotEmpty()) {
@@ -936,7 +1042,7 @@ object Latex {
                                 )
                             } else {
                                 HorizontalDivider(
-                                    modifier = Modifier.widthIn(min = 8.dp),
+                                    modifier = Modifier.fillMaxWidth().widthIn(min = 8.dp),
                                     thickness = 1.dp,
                                     color = color.copy(alpha = 0.8f)
                                 )
@@ -947,7 +1053,7 @@ object Latex {
                     RenderNodes(node.body, baseSp, style, color, mathFont)
                     if (node.kind == 1) {
                         HorizontalDivider(
-                            modifier = Modifier.widthIn(min = 8.dp),
+                            modifier = Modifier.fillMaxWidth().widthIn(min = 8.dp),
                             thickness = 1.dp,
                             color = color.copy(alpha = 0.8f)
                         )
@@ -958,6 +1064,89 @@ object Latex {
             is Node.Gap -> Spacer(Modifier.width((baseSp * node.em).dp))
 
             is Node.Env -> RenderEnv(node, baseSp, style, color, mathFont)
+        }
+    }
+
+    /**
+     * 根式渲染（`\sqrt{...}` 与 `\sqrt[n]{...}`）：
+     *
+     * 旧实现的两个缺陷：
+     * 1. 处在 `horizontalScroll` 内时父级 `maxWidth = Constraints.Infinity`，而根式内部 `Column`
+     *    未限制宽度，导致 `HorizontalDivider` 的 `fillMaxWidth()` 在无界约束下退化为 `minWidth = 8.dp`，
+     *    于是长根式的顶线只有最左边短短一截；
+     * 2. 左边根号用的是固定字号的 `Text("√")`，当被开方数含分式、求和或积分时，根号高度远小于内容高度，
+     *    且根指数 `n` 平铺在中心基线上。
+     *
+     * 现改为包裹被开方数容器后在 `drawBehind` 中按真实测量出的 `size.width × size.height`
+     * 一笔画成完整根号折线与贯通全宽的顶线（vinculum），并将根指数抬升至根号左钩凹槽上方。
+     */
+    @Composable
+    private fun RenderRoot(
+        node: Node.Root,
+        baseSp: Float,
+        style: TextStyle,
+        color: Color,
+        mathFont: FontFamily
+    ) {
+        val radWidthDp = (baseSp * 0.62f).coerceAtLeast(9f).dp
+        val topPadDp = 3.5.dp
+        val strokeDp = 1.2.dp
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (node.index != null) {
+                Box(
+                    modifier = Modifier
+                        .offset(x = (baseSp * 0.16f).dp, y = (-baseSp * 0.36f).dp)
+                ) {
+                    RenderNodes(
+                        nodes = node.index,
+                        baseSp = (baseSp * 0.60f).coerceAtLeast(8f),
+                        style = style,
+                        color = color,
+                        mathFont = mathFont
+                    )
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .drawBehind {
+                        val strokePx = strokeDp.toPx()
+                        val radW = radWidthDp.toPx()
+                        val topY = strokePx * 0.75f
+                        val bottomY = (size.height - strokePx * 0.8f).coerceAtLeast(topY + 4f)
+                        val hookStartX = strokePx * 0.6f
+                        val hookPeakX = radW * 0.22f
+                        val hookPeakY = topY + (bottomY - topY) * 0.54f
+                        val hookStartY = (hookPeakY + (bottomY - topY) * 0.08f).coerceAtMost(bottomY)
+                        val valleyX = radW * 0.48f
+                        val apexX = radW
+
+                        val path = Path().apply {
+                            moveTo(hookStartX, hookStartY)
+                            lineTo(hookPeakX, hookPeakY)
+                            lineTo(valleyX, bottomY)
+                            lineTo(apexX, topY)
+                            lineTo(size.width, topY)
+                        }
+                        drawPath(
+                            path = path,
+                            color = color.copy(alpha = 0.88f),
+                            style = Stroke(
+                                width = strokePx,
+                                cap = StrokeCap.Round,
+                                join = StrokeJoin.Round
+                            )
+                        )
+                    }
+                    .padding(
+                        start = radWidthDp + 2.dp,
+                        top = topPadDp,
+                        end = 2.dp,
+                        bottom = 1.dp
+                    )
+            ) {
+                RenderNodes(node.body, baseSp, style, color, mathFont)
+            }
         }
     }
 
@@ -990,6 +1179,7 @@ object Latex {
             }
             Column(
                 modifier = Modifier.padding(horizontal = 3.dp),
+                horizontalAlignment = if (env.kind == 2) Alignment.Start else Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(if (env.kind == 0) 3.dp else 5.dp)
             ) {
                 env.rows.forEach { row ->
@@ -1071,7 +1261,7 @@ object Latex {
                 continue
             }
             val math = s.substring(open, close)
-            if (display) {
+            if (display || (allowDisplay && isLongOrComplexFormula(math))) {
                 flush()
                 out += Seg.Display(math)
             } else {
@@ -1082,6 +1272,13 @@ object Latex {
         }
         flush()
         return out
+    }
+
+    private fun isLongOrComplexFormula(math: String): Boolean {
+        if (math.length >= 28) return true
+        return "\\frac" in math || "\\dfrac" in math || "\\tfrac" in math ||
+            "\\sqrt" in math || "\\sum" in math || "\\prod" in math ||
+            "\\int" in math || "\\begin{" in math
     }
 
     /** 把「普通文字 + 行内 `$公式$`」压成一条 AnnotatedString，保证能正常换行 */

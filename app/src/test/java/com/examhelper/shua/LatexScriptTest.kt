@@ -49,4 +49,12 @@ class LatexScriptTest {
     fun plainSubscriptStillWorks() {
         assertEquals("a_(n+1)", Latex.debugTree("a_{n+1}").replace(" ", ""))
     }
+
+    @Test
+    fun nthRootAndBinomParseIntoStructuredNodes() {
+        val rootTree = Latex.debugTree("""\sqrt[3]{x^3+y^3+z^3-3xyz}""")
+        assertEquals("√[3](x^(3)+y^(3)+z^(3)-3xyz)", rootTree)
+        val binomTree = Latex.debugTree("""\binom{m}{k}""")
+        assertEquals("env3[m,k]", binomTree)
+    }
 }

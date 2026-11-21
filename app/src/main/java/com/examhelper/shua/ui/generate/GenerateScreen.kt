@@ -106,11 +106,6 @@ fun GenerateScreen(
                                     ) { vm.toggleChapter(c) }
                                 }
                             }
-                            Text(
-                                "选中章节后，「生成缺失 / 全部重生成」只在所选章节内执行；不选则处理全库。",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.outline
-                            )
                         }
                     }
                 }
@@ -195,17 +190,6 @@ fun GenerateScreen(
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.outline
                                 )
-                                // 0 命中要说清是「缓存还没建立」还是「端点不透传字段」，
-                                // 否则用户只会看到吓人的 0% 却不知道要不要处理。
-                                if (rate == 0) {
-                                    Text(
-                                        "前缀缓存要等第一次请求**完成**后才建立，而分批是并发发出的，" +
-                                            "所以第一批（并发数那么多批）必然全部未命中；" +
-                                            "若后续批次仍恒为 0，多为中转端未透传缓存字段。",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.outline
-                                    )
-                                }
                             }
                             // 「实扣」已删除：DeepSeek 计费有几分钟延迟，任务前后两次读余额
                             // 几乎总相等（实测 61.29 → 61.29），显示出来只会误导。
@@ -283,7 +267,7 @@ fun GenerateScreen(
                             SemanticChip("${state.scopedBroken} 题", ChipTone.Amber)
                         }
                         Text(
-                            "已有答案但缺解析的题。用于批量补齐某一段解析，或修正早期版本遗留的覆盖空洞。",
+                            "已有答案但缺解析的题",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.outline
                         )
@@ -314,7 +298,7 @@ fun GenerateScreen(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            "只处理缺答案或缺解析的题，解析限制 30 字以内，费用约为标准模式的一半。已生成过的题目自动跳过。",
+                            "解析限制 30 字以内，省 token",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.outline
                         )
@@ -329,13 +313,6 @@ fun GenerateScreen(
                         }
                     }
                 }
-            }
-            item {
-                Text(
-                    "已生成过的题目会自动跳过，中断后点「生成缺失」从断点继续，不重复计费。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline
-                )
             }
         }
     }

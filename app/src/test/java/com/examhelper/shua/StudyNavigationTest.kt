@@ -82,4 +82,16 @@ class StudyNavigationTest {
             )
         )
     }
+
+    @Test
+    fun reciteNeighborRevealsAnswerCardDuringTransition() {
+        assertTrue(
+            shouldShowAnswerCard(
+                interactive = false,
+                answered = false,
+                revealed = true,
+                mode = StudyMode.RECITE
+            )
+        )
+    }
 }

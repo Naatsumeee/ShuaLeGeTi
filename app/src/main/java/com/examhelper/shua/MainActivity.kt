@@ -47,7 +47,7 @@ class MainActivity : ComponentActivity() {
             Haptics.setStrength(settings.hapticStrength)
             Haptics.setDuration(settings.hapticDuration)
             ShuaTheme(darkTheme = settings.darkMode) {
-                AppRoot(fontScale = settings.fontScale)
+                AppRoot(fontScale = settings.fontScale, uiScale = settings.uiScale)
                 updateInfo?.let { info ->
                     UpdateAvailableDialog(
                         info = info,

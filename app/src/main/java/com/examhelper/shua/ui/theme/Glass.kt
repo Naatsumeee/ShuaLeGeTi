@@ -26,9 +26,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -99,7 +101,11 @@ fun GlassSurface(
             shape = shape
         )
     if (onClick != null) base = base.clickable(onClick = onClick)
-    Column(modifier = base, content = content)
+    Column(modifier = base) {
+        CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
+            content()
+        }
+    }
 }
 
 /** 实心暖纸卡片（列表里的常规容器，不做玻璃，避免整页过度发白） */
@@ -119,7 +125,11 @@ fun PaperCard(
         .background(container)
         .border(1.dp, borderColor, shape)
     if (onClick != null) base = base.clickable(onClick = onClick)
-    Column(modifier = base, content = content)
+    Column(modifier = base) {
+        CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
+            content()
+        }
+    }
 }
 
 /** 页面级顶部安全区：防止被安卓状态栏 / 水滴屏 / 摄像头遮挡 */

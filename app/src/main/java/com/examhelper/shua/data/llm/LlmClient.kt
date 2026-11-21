@@ -16,6 +16,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.IOException
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -121,7 +122,7 @@ internal object SseParser {
 }
 
 @Serializable
-data class StreamOptions(@SerialName("include_usage") val includeUsage: Boolean = true)
+data class StreamOptions(@SerialName("include_usage") val includeUsage: Boolean)
 
 /** SSE 增量帧里的 delta：正文与思维链可能分别下发 */
 @Serializable
@@ -211,6 +212,7 @@ class LlmClient(
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+    private val openCodeSessionId: String = "ses_${UUID.randomUUID().toString().replace("-", "")}"
 
     suspend fun chat(
         provider: LlmProvider,
@@ -336,9 +338,9 @@ class LlmClient(
                 streamOnce(provider, messages, jsonMode, temperature, maxTokens, null, onReasoning, trackDelta)
             }
             if (second.isSuccess) return@recoverCatching second.getOrThrow()
-            // 第二级：连 response_format / max_tokens 一起去掉
+            // 第二级：连 response_format / max_tokens / stream_options 一起去掉
             if (emitted) throw first
-            streamOnce(provider, messages, false, temperature, null, null, onReasoning, trackDelta)
+            streamOnce(provider, messages, false, temperature, null, null, onReasoning, trackDelta, includeStreamOptions = false)
         }.getOrThrow()
         runCatching { usageRecorder(provider, usageContext, result.usage) }
         result
@@ -352,7 +354,8 @@ class LlmClient(
         maxTokens: Int?,
         reasoningEffort: ReasoningEffort?,
         onReasoning: (String) -> Unit,
-        onDelta: (String) -> Unit
+        onDelta: (String) -> Unit,
+        includeStreamOptions: Boolean = true
     ): ChatResult {
         val body = ChatCompletionRequest(
             model = provider.model,
@@ -362,7 +365,7 @@ class LlmClient(
             maxTokens = maxTokens,
             reasoningEffort = reasoningEffort?.apiValue,
             stream = true,
-            streamOptions = StreamOptions()
+            streamOptions = if (includeStreamOptions) StreamOptions(includeUsage = true) else null
         )
         val url = provider.baseUrl.trimEnd('/') + "/chat/completions"
         val request = Request.Builder()
@@ -370,6 +373,7 @@ class LlmClient(
             .header("Authorization", "Bearer ${provider.apiKey}")
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
+            .applyProviderHeaders(provider, openCodeSessionId)
             .post(json.encodeToString(body).toRequestBody(jsonMediaType))
             .build()
 
@@ -471,6 +475,7 @@ class LlmClient(
             .url(url)
             .header("Authorization", "Bearer ${provider.apiKey}")
             .header("Content-Type", "application/json")
+            .applyProviderHeaders(provider, openCodeSessionId)
             .post(json.encodeToString(body).toRequestBody(jsonMediaType))
             .build()
 
@@ -535,6 +540,23 @@ class LlmClient(
                 )
             }
         })
+    }
+
+    companion object {
+        const val DEFAULT_OPENCODE_USER_AGENT = "opencode/1.0.0"
+
+        internal fun Request.Builder.applyProviderHeaders(
+            provider: LlmProvider,
+            sessionId: String
+        ): Request.Builder {
+            if (provider.openCodeHeaderEnabled) {
+                val ua = provider.openCodeUserAgent?.trim()?.takeIf { it.isNotEmpty() }
+                    ?: DEFAULT_OPENCODE_USER_AGENT
+                header("User-Agent", ua)
+                header("x-opencode-session", sessionId)
+            }
+            return this
+        }
     }
 
     /** 测试连通性：发一句 "ping" 要求回复 pong */

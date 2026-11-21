@@ -132,6 +132,7 @@ fun BankListScreen(
     var groupDialog by remember { mutableStateOf<BankAction?>(null) }
     var deleteBatch by remember { mutableStateOf(false) }
     var confirmUndoMerge by remember { mutableStateOf<QuestionBank?>(null) }
+    var discardingJob by remember { mutableStateOf<com.examhelper.shua.data.db.ImportJob?>(null) }
     var actionError by remember { mutableStateOf<String?>(null) }
     val extra = shuaColors
     val activeJobs = jobs.filter { it.stage != "FAILED" && it.stage != "CANCELED" }
@@ -321,35 +322,73 @@ fun BankListScreen(
                 ) {
                     activeJobs.forEach { job ->
                         item(key = "job_${job.id}") {
+                            var jobMenuOpen by remember(job.id) { mutableStateOf(false) }
                             GlassSurface(
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(20.dp),
                                 elevation = 6.dp,
                                 onClick = { onImportFile(job.id) }
                             ) {
-                                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        SemanticChip(
-                                            if (job.stage == "DONE") "待确认" else "进行中",
-                                            if (job.stage == "DONE") ChipTone.Brand else ChipTone.Amber
-                                        )
-                                        Spacer(Modifier.width(8.dp))
+                                Row(
+                                    Modifier.padding(14.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            SemanticChip(
+                                                if (job.stage == "DONE") "待确认" else "进行中",
+                                                if (job.stage == "DONE") ChipTone.Brand else ChipTone.Amber
+                                            )
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(
+                                                "《${job.bankName}》",
+                                                style = serifTitle(15.sp, FontWeight.Medium),
+                                                modifier = Modifier.weight(1f),
+                                                maxLines = 1
+                                            )
+                                        }
                                         Text(
-                                            "《${job.bankName}》",
-                                            style = serifTitle(15.sp, FontWeight.Medium),
-                                            modifier = Modifier.weight(1f),
-                                            maxLines = 1
+                                            when (job.stage) {
+                                                "DONE" -> "解析完成，待确认导入 · 已得 ${job.parsedCount} 题"
+                                                "PARSE" -> "后台解析中 ${job.doneUnits}/${job.totalUnits} 段 · 已得 ${job.parsedCount} 题"
+                                                else -> "正在识别文件…"
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
-                                    Text(
-                                        when (job.stage) {
-                                            "DONE" -> "解析完成，待确认导入 · 已得 ${job.parsedCount} 题"
-                                            "PARSE" -> "后台解析中 ${job.doneUnits}/${job.totalUnits} 段 · 已得 ${job.parsedCount} 题"
-                                            else -> "正在识别文件…"
-                                        },
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                    if (job.stage == "DONE") {
+                                        Box {
+                                            com.examhelper.shua.ui.theme.GlassIconButton(
+                                                icon = Icons.Filled.MoreVert,
+                                                contentDescription = "导入操作",
+                                                onClick = { jobMenuOpen = true }
+                                            )
+                                            DropdownMenu(
+                                                expanded = jobMenuOpen,
+                                                onDismissRequest = { jobMenuOpen = false }
+                                            ) {
+                                                DropdownMenuItem(
+                                                    text = { Text("确认导入") },
+                                                    leadingIcon = { Icon(Icons.Filled.Check, contentDescription = null) },
+                                                    onClick = {
+                                                        jobMenuOpen = false
+                                                        vm.confirmImportJob(job)
+                                                    }
+                                                )
+                                                DropdownMenuItem(
+                                                    text = { Text("舍弃", color = extra.sage) },
+                                                    leadingIcon = {
+                                                        Icon(Icons.Filled.Delete, contentDescription = null, tint = extra.sage)
+                                                    },
+                                                    onClick = {
+                                                        jobMenuOpen = false
+                                                        discardingJob = job
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -682,6 +721,27 @@ fun BankListScreen(
         )
     }
 
+    discardingJob?.let { job ->
+        AlertDialog(
+            onDismissRequest = { discardingJob = null },
+            containerColor = MaterialTheme.colorScheme.surface,
+            title = { Text("舍弃导入结果？", style = serifTitle(18.sp, FontWeight.Medium)) },
+            text = {
+                Text(
+                    "确定舍弃《${job.bankName}》（已得 ${job.parsedCount} 题）？删除后不可恢复。",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.discardImportJob(job)
+                    discardingJob = null
+                }) { Text("确认舍弃", color = extra.sage) }
+            },
+            dismissButton = { TextButton(onClick = { discardingJob = null }) { Text("取消") } }
+        )
+    }
+
     actionError?.let { message ->
         AlertDialog(
             onDismissRequest = { actionError = null },
@@ -914,6 +974,7 @@ private fun BatchActionBar(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
+            .padding(bottom = 84.dp)
             .safeBottomPadding(minBottom = 8.dp),
         shape = RoundedCornerShape(18.dp),
         elevation = 14.dp

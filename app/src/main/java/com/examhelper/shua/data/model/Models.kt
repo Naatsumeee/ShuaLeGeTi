@@ -10,6 +10,14 @@ import java.util.UUID
 @Serializable
 data class QuestionOption(val key: String, val text: String)
 
+/** 题目笔记（带时间戳，按添加顺序展示并随题库文件导出/导入） */
+@Serializable
+data class QuestionNote(
+    val id: String = UUID.randomUUID().toString(),
+    val content: String,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
 /** 解析器输出的中间题目模型 */
 data class ParsedQuestion(
     var chapter: String? = null,
@@ -41,7 +49,10 @@ data class ParsedQuestion(
     var minimalSolved: Boolean = false,
     var confidence: Int? = null,
     var agreement: String? = null,
-    var dissent: List<DissentEntry> = emptyList()
+    var dissent: List<DissentEntry> = emptyList(),
+    var notes: List<QuestionNote> = emptyList(),
+    /** 从标准题库文件导入时保留用户手改章节名，不经 OCR 脏标题清洗 */
+    var preserveChapter: Boolean = false
 )
 
 /** 标准题库文件格式（导出/导入/分享用） */
@@ -90,7 +101,8 @@ data class ShuaQuestionJson(
     val minimalSolved: Boolean = false,
     val confidence: Int? = null,
     val agreement: String? = null,
-    val dissent: List<DissentEntry> = emptyList()
+    val dissent: List<DissentEntry> = emptyList(),
+    val notes: List<QuestionNote> = emptyList()
 )
 
 /** 后台解析 JSONL 行 DTO：带分块索引用于恢复全局顺序 */
@@ -166,6 +178,14 @@ object JsonCodec {
     fun decodeChat(raw: String?): List<ChatTurn> =
         runCatching { json.decodeFromString<List<ChatTurn>>(raw ?: return emptyList()) }
             .getOrDefault(emptyList())
+
+    fun encodeNotes(notes: List<QuestionNote>): String? =
+        if (notes.isEmpty()) null else json.encodeToString(notes.sortedBy { it.createdAt })
+
+    fun decodeNotes(raw: String?): List<QuestionNote> =
+        runCatching { json.decodeFromString<List<QuestionNote>>(raw ?: return emptyList()) }
+            .getOrDefault(emptyList())
+            .sortedBy { it.createdAt }
 
     fun encodeStringList(items: List<String>): String? =
         if (items.isEmpty()) null else json.encodeToString(items)

@@ -58,9 +58,13 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCut
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -108,7 +112,12 @@ import com.examhelper.shua.data.db.StudyMode
 import com.examhelper.shua.data.model.ChatTurn
 import com.examhelper.shua.data.model.JsonCodec
 import com.examhelper.shua.data.model.QuestionChoices
+import com.examhelper.shua.data.model.QuestionNote
 import com.examhelper.shua.ui.bank.typeLabel
+import com.examhelper.shua.ui.editor.QuestionEditDialog
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import com.examhelper.shua.ui.theme.ChipTone
 import com.examhelper.shua.ui.theme.SquishyButtonSurface
 import com.examhelper.shua.ui.theme.CompactTopBar
@@ -140,11 +149,21 @@ fun StudyScreen(
     val state by vm.state.collectAsState()
     var showSheet by remember { mutableStateOf(false) }
     var askClosing by remember { mutableStateOf(false) }
+    var editingQuestion by remember { mutableStateOf<Question?>(null) }
+    var addingNoteForId by remember { mutableStateOf<Long?>(null) }
+    var editingNoteTarget by remember { mutableStateOf<Pair<Long, QuestionNote>?>(null) }
+    var toastMsg by remember { mutableStateOf<String?>(null) }
     val pageScope = rememberCoroutineScope()
     val askSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
     val extra = shuaColors
     val compact = isCompactWidth()
     LaunchedEffect(state.askOpen) { if (state.askOpen) askSheetState.show() }
+    LaunchedEffect(state.toast) {
+        state.toast?.let {
+            toastMsg = it
+            vm.clearToast()
+        }
+    }
 
     fun closeAskSheet() {
         if (askClosing) return
@@ -178,6 +197,14 @@ fun StudyScreen(
                     desc = "收藏",
                     tint = if (state.favorite) extra.amber else extra.inkFaint
                 ) { vm.toggleFavorite() }
+                val hasNotes = JsonCodec.decodeNotes(state.session?.question?.notesJson).isNotEmpty()
+                IconAction(
+                    icon = Icons.Filled.EditNote,
+                    desc = "添加笔记",
+                    tint = if (hasNotes) extra.amber else extra.inkFaint
+                ) {
+                    state.session?.question?.let { addingNoteForId = it.id }
+                }
                 if (state.mode != StudyMode.RANDOM && (state.session?.total ?: 0) > 1) {
                     IconAction(Icons.Filled.Apps, "答题卡", extra.inkFaint) { showSheet = true }
                 }
@@ -583,7 +610,15 @@ fun StudyScreen(
                             if (q == null) {
                                 Text("题目加载中…")
                             } else {
-                                QuestionBody(q = q, state = bodyState, vm = vm, compact = compact)
+                                QuestionBody(
+                                    q = q,
+                                    state = bodyState,
+                                    vm = vm,
+                                    compact = compact,
+                                    onEditQuestion = { editingQuestion = it },
+                                    onEditNote = { qid, note -> editingNoteTarget = qid to note },
+                                    onDeleteNote = { qid, noteId -> vm.deleteNote(qid, noteId) }
+                                )
                             }
                         }
                     }
@@ -597,6 +632,42 @@ fun StudyScreen(
                 }
             }
         }
+    }
+
+    // ---- 题目编辑弹窗 ----
+    editingQuestion?.let { target ->
+        QuestionEditDialog(
+            q = target,
+            onDismiss = { editingQuestion = null },
+            onSave = { ch, type, subtype, stem, options, answer, analysis ->
+                vm.saveEditedQuestion(target.id, ch, type, subtype, stem, options, answer, analysis)
+                editingQuestion = null
+            }
+        )
+    }
+
+    // ---- 新增 / 编辑笔记弹窗 ----
+    addingNoteForId?.let { qid ->
+        NoteEditDialog(
+            title = "添加笔记",
+            initialContent = "",
+            onDismiss = { addingNoteForId = null },
+            onSave = { content ->
+                vm.addNote(qid, content)
+                addingNoteForId = null
+            }
+        )
+    }
+    editingNoteTarget?.let { (qid, note) ->
+        NoteEditDialog(
+            title = "编辑笔记",
+            initialContent = note.content,
+            onDismiss = { editingNoteTarget = null },
+            onSave = { content ->
+                vm.updateNote(qid, note.id, content)
+                editingNoteTarget = null
+            }
+        )
     }
 
     // ---- 问 AI 追问面板 ----
@@ -690,6 +761,24 @@ fun StudyScreen(
             }
         }
     }
+
+    toastMsg?.let { msg ->
+        LaunchedEffect(msg) {
+            kotlinx.coroutines.delay(1800)
+            toastMsg = null
+        }
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+            Box(Modifier.padding(bottom = 96.dp)) {
+                GlassSurface(Modifier, shape = RoundedCornerShape(14.dp), elevation = 16.dp) {
+                    Text(
+                        msg,
+                        Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
+    }
 }
 
 /**
@@ -710,7 +799,7 @@ private fun PeekSlot(x: Float, content: @Composable () -> Unit) {
 private fun peekState(mode: StudyMode, q: Question?): StudyUiState = StudyUiState(
     loading = false,
     mode = mode,
-    revealed = false,
+    revealed = mode == StudyMode.RECITE,
     deepSolved = q?.deepSolved ?: false
 )
 
@@ -774,7 +863,7 @@ private fun IconAction(
 ) {
     Box(
         Modifier
-            .size(36.dp)
+            .size(34.dp)
             .clip(CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
@@ -790,7 +879,10 @@ private fun QuestionBody(
     vm: StudyViewModel,
     compact: Boolean,
     // 邻卡预览时置 false：只借它的排版，不允许任何点击改到当前题的状态
-    interactive: Boolean = true
+    interactive: Boolean = true,
+    onEditQuestion: (Question) -> Unit = {},
+    onEditNote: (Long, QuestionNote) -> Unit = { _, _ -> },
+    onDeleteNote: (Long, String) -> Unit = { _, _ -> }
 ) {
     // 判断题即使库里没存选项，也要强行造出「正确 / 错误」两行 ——
     // 否则整个选项区是空的，用户根本点不了。这里读库时统一兜底，
@@ -830,20 +922,44 @@ private fun QuestionBody(
     // 题干
     PaperCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), elevation = 1.dp) {
         Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 SemanticChip(
                     typeLabel(q.type) + (q.subtype?.let { " · $it" } ?: ""),
                     ChipTone.Brand
                 )
-                q.chapter?.takeIf { it.isNotBlank() }?.let {
+                val chap = q.chapter?.takeIf { it.isNotBlank() }
+                if (chap != null) {
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        it,
+                        chap,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
+                        modifier = Modifier.weight(1f)
+                    )
+                } else {
+                    Spacer(Modifier.weight(1f))
+                }
+                Spacer(Modifier.width(6.dp))
+                Row(
+                    Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(enabled = interactive) { onEditQuestion(q) }
+                        .padding(horizontal = 6.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    Icon(
+                        Icons.Filled.Edit,
+                        contentDescription = "编辑题目",
+                        modifier = Modifier.size(13.dp),
+                        tint = extra.terracotta
+                    )
+                    Text(
+                        "编辑",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = extra.terracotta
                     )
                 }
             }
@@ -930,9 +1046,128 @@ private fun QuestionBody(
         }
     }
 
-    if (shouldShowAnswerCard(interactive, state.answered, state.revealed)) {
+    if (shouldShowAnswerCard(interactive, state.answered, state.revealed, state.mode)) {
         AnswerCard(q = q, state = state, vm = vm, interactive = interactive)
+        val notes = JsonCodec.decodeNotes(q.notesJson)
+        if (notes.isNotEmpty()) {
+            QuestionNotesCard(
+                questionId = q.id,
+                notes = notes,
+                interactive = interactive,
+                onEditNote = onEditNote,
+                onDeleteNote = onDeleteNote
+            )
+        }
     }
+}
+
+@Composable
+private fun QuestionNotesCard(
+    questionId: Long,
+    notes: List<QuestionNote>,
+    interactive: Boolean,
+    onEditNote: (Long, QuestionNote) -> Unit,
+    onDeleteNote: (Long, String) -> Unit
+) {
+    val extra = shuaColors
+    val fmt = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
+    PaperCard(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        container = MaterialTheme.colorScheme.surface,
+        borderColor = extra.amber.copy(alpha = 0.35f),
+        elevation = 1.dp
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SemanticChip("笔记", ChipTone.Amber)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "${notes.size} 条",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            notes.forEachIndexed { idx, note ->
+                if (idx > 0) {
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(extra.creamLine))
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        MonoText(
+                            text = fmt.format(Date(note.createdAt)),
+                            size = 11.sp,
+                            color = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (interactive) {
+                            Row(
+                                Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable { onEditNote(questionId, note) }
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("编辑", style = MaterialTheme.typography.labelSmall, color = extra.terracotta)
+                            }
+                            Row(
+                                Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable { onDeleteNote(questionId, note.id) }
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("删除", style = MaterialTheme.typography.labelSmall, color = extra.sage)
+                            }
+                        }
+                    }
+                    Markdown.MarkdownText(
+                        text = note.content,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NoteEditDialog(
+    title: String,
+    initialContent: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var content by remember(initialContent) { mutableStateOf(initialContent) }
+    val extra = shuaColors
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(22.dp),
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = { Text(title, style = serifTitle(17.sp, FontWeight.Medium)) },
+        text = {
+            OutlinedTextField(
+                value = content,
+                onValueChange = { content = it },
+                label = { Text("笔记内容") },
+                placeholder = { Text("写下解题思路、易错点或记忆口诀…") },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 3,
+                maxLines = 8,
+                shape = RoundedCornerShape(12.dp)
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSave(content) },
+                enabled = content.isNotBlank(),
+                shape = RoundedCornerShape(13.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = extra.terracotta)
+            ) { Text("保存") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
 }
 
 @Composable
@@ -968,7 +1203,7 @@ private fun AnswerCard(
                     )
                     AiDisclaimer()
                 }
-                if (!interactive || state.answered) {
+                if (!interactive || state.answered || state.mode == StudyMode.RECITE) {
                     DeepSolveRow(state = state, q = q, vm = vm, interactive = interactive)
                 }
             }
@@ -1073,7 +1308,7 @@ private fun AnswerCard(
             }
 
             // 深度解题 + 追问：两个 AI 入口（无参考答案的分支里也复用同一个组件）
-            if (!interactive || state.answered) {
+            if (!interactive || state.answered || state.mode == StudyMode.RECITE) {
                 DeepSolveRow(state = state, q = q, vm = vm, interactive = interactive)
             }
 
@@ -1258,14 +1493,6 @@ private fun DeepSolveRow(
                 color = extra.sage,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
-            )
-        }
-        // 深度解题刚完成时提示下一步能干什么，而不是自动弹面板打断阅读
-        if (!state.deepSolving && (state.deepSolved || q.deepSolved) && state.chat.isEmpty()) {
-            Text(
-                "深度解题完成 · 点「追问 AI」可以接着问考点、易错点或相似题",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
@@ -1536,8 +1763,9 @@ internal fun canMoveForward(
 internal fun shouldShowAnswerCard(
     interactive: Boolean,
     answered: Boolean,
-    revealed: Boolean
-): Boolean = revealed && (interactive || answered)
+    revealed: Boolean,
+    mode: StudyMode = StudyMode.SEQUENTIAL
+): Boolean = revealed && (interactive || answered || mode == StudyMode.RECITE)
 
 /** 解析下方的小字免责声明（用户要求：内容为 AI 生成，可能会出错） */
 @Composable

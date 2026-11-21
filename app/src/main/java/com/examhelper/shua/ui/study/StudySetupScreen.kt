@@ -85,7 +85,7 @@ fun StudySetupScreen(
         ) {
             // 「回到上次进度」显著置顶：有未做完的进度才出现
             val savedForThis = state.saved.firstOrNull { it.mode == mode }
-            val others = state.saved.filter { it.mode != mode }
+            val others = emptyList<StudyRepository.SavedProgress>() // 模式间进度隔离
             if (state.saved.isNotEmpty()) {
                 ResumeCard(
                     primary = savedForThis,
@@ -210,7 +210,7 @@ private fun StartBar(
                 )
             }
             Text(
-                "题库共 $total 题，当前筛选命中 $matchCount 题。切换筛选会重置该模式的进度。",
+                "题库共 $total 题，命中 $matchCount 题",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 2

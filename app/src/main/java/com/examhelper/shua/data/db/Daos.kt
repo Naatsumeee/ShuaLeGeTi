@@ -20,6 +20,9 @@ interface BankDao {
     @Query("UPDATE banks SET name = :name, updatedAt = :now WHERE id = :id")
     suspend fun rename(id: Long, name: String, now: Long)
 
+    @Query("UPDATE banks SET updatedAt = :now WHERE id = :id")
+    suspend fun touch(id: Long, now: Long)
+
     @Query("UPDATE banks SET pinned = :pinned, updatedAt = :now WHERE id = :id")
     suspend fun setPinned(id: Long, pinned: Boolean, now: Long)
 
@@ -124,6 +127,16 @@ interface QuestionDao {
     @Update
     suspend fun update(question: Question)
 
+    @Query("UPDATE questions SET chapter = :chapter WHERE id IN (:ids)")
+    suspend fun updateChapterBatchChunk(ids: List<Long>, chapter: String?)
+
+    @Transaction
+    suspend fun updateChapterBatch(ids: List<Long>, chapter: String?) {
+        ids.chunked(500).forEach { chunk ->
+            updateChapterBatchChunk(chunk, chapter)
+        }
+    }
+
     @Query("UPDATE questions SET askChatJson = :json WHERE id = :questionId")
     suspend fun updateAskChat(questionId: Long, json: String?)
 
@@ -217,6 +230,12 @@ interface RecordDao {
     @Query("SELECT * FROM attempt_records WHERE runId = :runId ORDER BY answeredAt ASC")
     suspend fun getByRun(runId: String): List<AttemptRecord>
 
+    @Query("SELECT * FROM attempt_records WHERE runId = :runId AND questionId = :questionId ORDER BY answeredAt DESC, id DESC LIMIT 1")
+    suspend fun latestAttemptInRun(runId: String, questionId: Long): AttemptRecord?
+
+    @Query("UPDATE attempt_records SET correct = :correct, correctKnown = :correctKnown WHERE id = :id")
+    suspend fun updateAttemptResult(id: Long, correct: Boolean, correctKnown: Boolean)
+
     // 热力图：日期聚合在 Kotlin 层做
     @Query("SELECT answeredAt FROM attempt_records WHERE answeredAt >= :since")
     suspend fun timestampsSince(since: Long): List<Long>
@@ -231,6 +250,15 @@ interface RecordDao {
 
     @Query("SELECT questionId FROM wrong_records WHERE mastered = 0")
     suspend fun wrongIds(): List<Long>
+
+    @Query("SELECT questionId FROM wrong_records WHERE mastered = 0 AND rebrushFailed = 1")
+    suspend fun rebrushFailedIds(): List<Long>
+
+    @Query("SELECT questionId FROM wrong_records WHERE bankId = :bankId AND mastered = 0 AND rebrushFailed = 1")
+    suspend fun rebrushFailedIdsByBank(bankId: Long): List<Long>
+
+    @Query("SELECT questionId FROM wrong_records WHERE bankId IN (:bankIds) AND mastered = 0 AND rebrushFailed = 1")
+    suspend fun rebrushFailedIdsForBanks(bankIds: List<Long>): List<Long>
 
     @Query("SELECT questionId FROM favorites")
     suspend fun favoriteIds(): List<Long>
@@ -269,8 +297,11 @@ interface RecordDao {
     @Query("UPDATE wrong_records SET flagged = :flagged WHERE questionId = :questionId")
     suspend fun setFlagged(questionId: Long, flagged: Boolean)
 
-    @Query("UPDATE wrong_records SET mastered = 1 WHERE questionId = :questionId")
+    @Query("UPDATE wrong_records SET mastered = 1, rebrushFailed = 0 WHERE questionId = :questionId")
     suspend fun markMastered(questionId: Long)
+
+    @Query("UPDATE wrong_records SET mastered = 1, rebrushFailed = 0 WHERE questionId IN (:questionIds)")
+    suspend fun markMasteredBatch(questionIds: List<Long>)
 
     @Query("DELETE FROM wrong_records WHERE questionId = :questionId")
     suspend fun removeWrong(questionId: Long)
@@ -392,7 +423,9 @@ interface RecordDao {
     @Transaction
     suspend fun submitAnswer(
         record: AttemptRecord,
-        existingWrong: WrongRecord?
+        existingWrong: WrongRecord?,
+        deferMastered: Boolean = false,
+        isRebrush: Boolean = false
     ) {
         insertAttempt(record)
         if (!record.correctKnown) return
@@ -402,7 +435,8 @@ interface RecordDao {
                     existingWrong.copy(
                         wrongCount = existingWrong.wrongCount + 1,
                         lastWrongAt = record.answeredAt,
-                        mastered = false
+                        mastered = false,
+                        rebrushFailed = existingWrong.rebrushFailed || isRebrush
                     )
                 )
             } else {
@@ -411,11 +445,12 @@ interface RecordDao {
                         questionId = record.questionId,
                         bankId = record.bankId,
                         wrongCount = 1,
-                        lastWrongAt = record.answeredAt
+                        lastWrongAt = record.answeredAt,
+                        rebrushFailed = isRebrush
                     )
                 )
             }
-        } else if (existingWrong != null) {
+        } else if (existingWrong != null && !deferMastered) {
             markMastered(record.questionId)
         }
     }

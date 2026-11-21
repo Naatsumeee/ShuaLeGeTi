@@ -296,14 +296,31 @@ fun WrongBookScreen(
             else -> lists.kills.filter { bankFilter(it.second) }
         }
 
-        // 章节分类：错题按章节归拢，可单选章节做「重刷 / 抽检」
-        val chapters = remember(tabEntries) {
-            tabEntries.mapNotNull { it.second?.chapter?.takeIf { c -> c.isNotBlank() } }.distinct().sorted()
+        // 章节分类：未选择题库时禁止选择章节；选定题库后可按章节（含「重刷仍未掌握」）筛选
+        val rebrushChapter = com.examhelper.shua.data.repo.StudyRepository.REBRUSH_UNMASTERED_CHAPTER
+        val hasRebrushFailed = remember(tabEntries, selectedBank) {
+            selectedBank != null && tabEntries.any { (meta, _) ->
+                meta is WrongRecord && meta.rebrushFailed && !meta.mastered
+            }
         }
-        val entries = if (chapter == null) tabEntries else tabEntries.filter { it.second?.chapter == chapter }
+        val chapters = remember(tabEntries, selectedBank, hasRebrushFailed) {
+            if (selectedBank == null) emptyList()
+            else {
+                val normal = tabEntries.mapNotNull { it.second?.chapter?.takeIf { c -> c.isNotBlank() } }
+                    .distinct()
+                    .sorted()
+                if (hasRebrushFailed) listOf(rebrushChapter) + normal else normal
+            }
+        }
+        val entries = when (chapter) {
+            null -> tabEntries
+            rebrushChapter -> tabEntries.filter { (meta, _) ->
+                meta is WrongRecord && meta.rebrushFailed && !meta.mastered
+            }
+            else -> tabEntries.filter { it.second?.chapter == chapter }
+        }
 
-        // 筛选条：题库 / 章节 两个下拉菜单，替代原来两整排横向滚动的 chip
-        //（用户反馈那一块太松散、高度过大 —— 从约 200dp 压到约 62dp）。
+        // 筛选条：题库 / 章节 两个下拉菜单
         if (lists.bankNames.isNotEmpty()) {
             val bankEntries: List<Pair<Long?, String>> =
                 listOf<Pair<Long?, String>>(null to "全部题库") +
@@ -321,8 +338,12 @@ fun WrongBookScreen(
                 )
                 PickerPill(
                     label = "章节",
-                    value = chapter ?: "全部章节",
-                    enabled = chapters.isNotEmpty(),
+                    value = when {
+                        selectedBank == null -> "请先选择题库"
+                        chapter != null -> chapter!!
+                        else -> "全部章节"
+                    },
+                    enabled = selectedBank != null && chapters.isNotEmpty(),
                     modifier = Modifier.weight(1f),
                     options = (listOf<String?>(null) + chapters).map { c -> (c ?: "全部章节") to (c == chapter) },
                     onSelect = { i -> chapter = if (i == 0) null else chapters[i - 1] }
@@ -414,9 +435,15 @@ fun WrongBookScreen(
                                 }
                                 Spacer(Modifier.weight(1f))
                                 when (meta) {
-                                    is WrongRecord -> if (meta.flagged) {
-                                        SemanticChip("重点", ChipTone.Amber)
-                                        Spacer(Modifier.width(4.dp))
+                                    is WrongRecord -> {
+                                        if (meta.rebrushFailed && !meta.mastered) {
+                                            SemanticChip("重刷未掌握", ChipTone.Amber)
+                                            Spacer(Modifier.width(4.dp))
+                                        }
+                                        if (meta.flagged) {
+                                            SemanticChip("重点", ChipTone.Amber)
+                                            Spacer(Modifier.width(4.dp))
+                                        }
                                     }
                                     else -> {}
                                 }

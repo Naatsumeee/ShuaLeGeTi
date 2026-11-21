@@ -87,9 +87,7 @@ fun ImportScreen(
     val extra = shuaColors
     // 复制提示词是「做完了但界面无变化」的操作，必须有可见反馈
     var promptCopied by remember { mutableStateOf(false) }
-    // 电脑端整理题库的路线说明默认收起：它是「少数人才需要」的长文本，
-    // 常驻展开会把首屏的选择文件按钮挤出屏幕。
-    var showPcGuide by remember { mutableStateOf(false) }
+    var discardConfirm by remember { mutableStateOf(false) }
     var reportExpanded by remember(state.jobId, state.parseReport) { mutableStateOf(false) }
     LaunchedEffect(promptCopied) {
         if (promptCopied) {
@@ -198,59 +196,10 @@ fun ImportScreen(
                 }
                 if (promptCopied) {
                     Text(
-                        "已复制。粘给任意 AI（ChatGPT / DeepSeek / Kimi 都行），让它把题目整理成 JSON，" +
-                            "把结果存成 .json 再用下面的「导入 .json」一步导进来。",
+                        "已复制提示词，整理为 .json 后点击「导入 .json」即可",
                         style = MaterialTheme.typography.labelSmall,
                         color = extra.terracottaDeep
                     )
-                }
-                // 电脑上有扫描件时的路线：手机拍照 OCR 的精度远不如在 PC 上跑一遍。
-                // 默认收起——常驻展开会把上面的按钮挤出首屏。
-                GlassSurface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), elevation = 6.dp) {
-                    Column(Modifier.padding(13.dp)) {
-                        Row(
-                            Modifier.fillMaxWidth().clickableTab { showPcGuide = !showPcGuide },
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            SemanticChip("电脑端", ChipTone.Verdant)
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                "扫描件先用电脑整理，再交给 AI",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Text(
-                                if (showPcGuide) "收起" else "展开",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = extra.terracottaDeep
-                            )
-                        }
-                        if (showPcGuide) {
-                            Spacer(Modifier.height(10.dp))
-                            Text(
-                                "扫描件在手机上 OCR 又慢又容易认错。更好的做法是：把上面那段提示词整段复制给" +
-                                    "电脑端的 AI（Claude Code、Cursor、Codex 这类能执行命令的都行），" +
-                                    "它会自己装好离线 OCR 环境、把 PDF 逐页识别出来，再整理成可导入的 JSON。" +
-                                    "你只需要把 JSON 存成文件，回到这里用「导入 .json」一步导进来。\n\n" +
-                                    "如果手上没有电脑，也可以自己用任意 OCR 软件把文字导出来（双栏要按左栏读完再读右栏），" +
-                                    "贴给 AI 配上同一段提示词，效果一样。",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-                GlassSurface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), elevation = 8.dp) {
-                    Row(Modifier.padding(13.dp), verticalAlignment = Alignment.Top) {
-                        SemanticChip("提示", ChipTone.Amber)
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "扫描 PDF 会逐页离线 OCR；解析在后台运行，切出应用或锁屏都不会中断，完成后状态栏提醒。",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
                 }
                 state.error?.let { Text(it, color = extra.sage, style = MaterialTheme.typography.bodySmall) }
             }
@@ -291,14 +240,9 @@ fun ImportScreen(
                                 EngineTab("ML Kit · 快", state.ocrEngine == "mlkit", Modifier.weight(1f)) { vm.setOcrEngine("mlkit") }
                                 EngineTab("RapidOCR · 准", state.ocrEngine == "rapidocr", Modifier.weight(1f)) { vm.setOcrEngine("rapidocr") }
                             }
-                            Text(
-                                "扫描件质量差、双栏密集或 ML Kit 识别不理想时建议 RapidOCR（PP-OCRv5，离线）",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.outline
-                            )
                             if (state.ocrEngine != "mlkit" && state.rapidOcrConcurrency > 1) {
                                 Text(
-                                    "实验性 ${state.rapidOcrConcurrency} 路并发，性能开销较大；如闪退请到设置切回 1 路",
+                                    "实验性 ${state.rapidOcrConcurrency} 路并发",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.error
                                 )
@@ -331,12 +275,6 @@ fun ImportScreen(
                                     }
                         }
                     }
-                } else {
-                    Text(
-                        "文本类文件直接读取，不需要 OCR。Markdown 的 # 标题会作为章节，**粗体**、表格、代码围栏等标记在解析前统一清理；公式 \$…\$ 原样保留。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline
-                    )
                 }
                 val cacheDecisionPending =
                     state.checkingOcrCache || (state.cachedOcrAt != null && !state.ocrChoiceResolved)
@@ -345,14 +283,13 @@ fun ImportScreen(
                     extra.terracotta,
                     enabled = !cacheDecisionPending
                 ) { vm.startPipeline("ai") }
-                Text(
-                    if (state.providersReady)
-                        "主模型解析，${state.concurrency} 路并行，可切出应用。支持 A1/A2/A3/B 型题分组识别。"
-                    else
-                        "尚未配置模型——请先到设置添加，或改用离线解析。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (state.providersReady) MaterialTheme.colorScheme.outline else extra.sage
-                )
+                if (!state.providersReady) {
+                    Text(
+                        "尚未配置模型，请先到设置添加或改用离线解析",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = extra.sage
+                    )
+                }
                 SecondaryAction(
                     "离线快解析（规整文本）",
                     Modifier.fillMaxWidth(),
@@ -433,26 +370,7 @@ fun ImportScreen(
                                     style = MaterialTheme.typography.labelSmall,
                                     color = extra.amber
                                 )
-                                // 首次导入的前几块必然是 0 命中：前缀缓存要等第一次请求**完成**
-                                // 才建立，而分块是并发发出的，第一批（并发数这么多块）全部落空。
-                                // 这不是统计坏了，得说清楚，否则用户会以为功能失效。
-                                if (hitPct == 0) {
-                                    Text(
-                                        "首次解析时前缀缓存尚不存在，第一批并发分块必然全部未命中；" +
-                                            "同一提示词再次解析才会命中（命中价约为未命中的 1/50）。",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.outline
-                                    )
-                                }
                             }
-                            // 「实扣」已删除：DeepSeek 计费有几分钟延迟，任务前后两次读余额
-                            // 几乎总是相等（实测 61.29 → 61.29 而实际消耗了 1.6 万 token），
-                            // 显示出来只会误导。要看实际消费请到设置页「用量情况」。
-                            Text(
-                                "后台运行中，可以切出应用或锁屏，回来继续。",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.outline
-                            )
                             if (job?.stage == "FAILED") {
                                 job.errorMessage?.let {
                                     Text(it, color = extra.sage, style = MaterialTheme.typography.labelSmall)
@@ -589,18 +507,50 @@ fun ImportScreen(
                         singleLine = true,
                         shape = RoundedCornerShape(14.dp)
                     )
-                    PrimaryAction(
-                        if (state.targetBankId != null) "追加 ${state.preview.size} 题"
-                        else "确认导入 ${state.preview.size} 题",
-                        extra.terracotta,
-                        enabled = state.preview.isNotEmpty()
-                    ) {
-                        vm.save(onDone)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        SecondaryAction("舍弃", Modifier.weight(1f)) {
+                            discardConfirm = true
+                        }
+                        Button(
+                            onClick = { vm.save(onDone) },
+                            modifier = Modifier.weight(1.8f).heightIn(min = 48.dp),
+                            shape = RoundedCornerShape(15.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = extra.terracotta)
+                        ) {
+                            Text(
+                                if (state.targetBankId != null) "追加 ${state.preview.size} 题"
+                                else "确认导入 ${state.preview.size} 题",
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                        }
                     }
                 }
                 state.error?.let { Text(it, color = extra.sage, style = MaterialTheme.typography.bodySmall) }
             }
         }
+    }
+
+    if (discardConfirm) {
+        AlertDialog(
+            onDismissRequest = { discardConfirm = false },
+            containerColor = MaterialTheme.colorScheme.surface,
+            title = { Text("舍弃导入结果？", style = serifTitle(17.sp, FontWeight.Medium)) },
+            text = {
+                Text(
+                    "已解析的 ${state.preview.size} 道题目与本次导入任务将被删除，不可恢复。",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    discardConfirm = false
+                    vm.discardJob(onDone)
+                }) { Text("确认舍弃", color = extra.sage) }
+            },
+            dismissButton = {
+                TextButton(onClick = { discardConfirm = false }) { Text("取消") }
+            }
+        )
     }
 
     val cachedAt = state.cachedOcrAt

@@ -5,8 +5,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.examhelper.shua.ShuaApp
 import com.examhelper.shua.data.db.Question
+import com.examhelper.shua.data.db.QuestionType
 import com.examhelper.shua.data.db.StudyMode
 import com.examhelper.shua.data.model.ChatTurn
+import com.examhelper.shua.data.model.JsonCodec
+import com.examhelper.shua.data.model.QuestionNote
+import com.examhelper.shua.data.model.QuestionOption
 import com.examhelper.shua.data.model.StudyFilter
 import com.examhelper.shua.data.repo.BankRepository
 import com.examhelper.shua.data.repo.RoundAnswer
@@ -67,7 +71,8 @@ data class StudyUiState(
     /** 本轮做错的题数（完成页「刷本轮错题」按钮用） */
     val roundWrongCount: Int = 0,
     /** 当前是否已在「刷本轮错题」的子会话里 */
-    val roundWrongOnly: Boolean = false
+    val roundWrongOnly: Boolean = false,
+    val toast: String? = null
 )
 
 /** 深度解题返回的 JSON 结构 */
@@ -174,6 +179,11 @@ class StudyViewModel(
     /** 主轮总题数（错题子会话结束后要回到主轮完成页，得知道它是几题） */
     private var mainRoundTotal: Int = 0
 
+    private val isWrongRebrushRound: Boolean
+        get() = roundWrongFilter != null ||
+            filter?.status == "WRONG" ||
+            filter?.chapters?.contains(StudyRepository.REBRUSH_UNMASTERED_CHAPTER) == true
+
     /** 当前轮次内答过的题，由 roundId 对应的数据库记录恢复。 */
     private val roundAnswers: MutableMap<Long, Pair<String, Boolean?>> = mutableMapOf()
 
@@ -201,16 +211,19 @@ class StudyViewModel(
         if (wrongOnly == null && mainRoundTotal == 0) mainRoundTotal = questions.size
         val sessionFilter = if (wrongOnly == null) filterJson else roundFilterKey()
         val session = studyRepo.currentSession(bankId, mode, questions, sessionFilter)
-        // 这轮已经刷完（游标推到队尾）→ 立刻清掉这条进度。
-        // 否则范围页会一直挂着「第 30 / 30 题 · 继续」，点进去还是个空页。
-        // 也顺带清掉进程被杀后残留的这种"已完成"进度。
-        if (session.finished && questions.isNotEmpty()) {
-            runCatching { studyRepo.clearRound(bankId, mode) }
-        }
         questionShownAt = System.currentTimeMillis()
         // 只恢复当前 roundId 的记录；历史轮次仍用于统计/错题本，但不能混进本轮。
         val q = session.question
         val dbAnswers = studyRepo.latestAnswersByRound(session.roundId)
+        // 这轮已经刷完（游标推到队尾）：若为错题重刷轮次，此时统一把本轮答对的错题标为「已掌握」，
+        // 然后再清掉这条进度，保证作答途中队列不缩水、不跳题漏刷。
+        if (session.finished && questions.isNotEmpty()) {
+            if (isWrongRebrushRound) {
+                val masteredIds = dbAnswers.filterValues { it.correct == true }.keys.toList()
+                runCatching { studyRepo.finalizeRoundMastered(masteredIds) }
+            }
+            runCatching { studyRepo.clearRound(bankId, mode) }
+        }
         roundAnswers.clear()
         roundWrongIds.clear()
         dbAnswers.forEach { (questionId, answer) ->
@@ -304,7 +317,9 @@ class StudyViewModel(
                     userAnswer = answerStr, correct = correct == true,
                     correctKnown = hasAnswer,
                     runId = s.session?.roundId,
-                    durationMs = duration
+                    durationMs = duration,
+                    deferMastered = isWrongRebrushRound,
+                    isRebrush = isWrongRebrushRound
                 )
                 // 作答即刷新进度时间戳：即便用户直接杀进程，下次也能看到准确时间
                 studyRepo.touchProgress(bankId, mode)
@@ -340,7 +355,9 @@ class StudyViewModel(
                     userAnswer = s.textInput.take(200),
                     correct = correct, correctKnown = true, selfRated = true,
                     runId = s.session?.roundId,
-                    durationMs = duration
+                    durationMs = duration,
+                    deferMastered = isWrongRebrushRound,
+                    isRebrush = isWrongRebrushRound
                 )
                 studyRepo.touchProgress(bankId, mode)
             }
@@ -424,7 +441,7 @@ class StudyViewModel(
         roundWrongFilter = ids
         roundWrongIds = mutableSetOf()
         viewModelScope.launch {
-            studyRepo.resetRoundWrong(bankId, mode, roundFilterKey())
+            studyRepo.resetRoundWrong(bankId, mode, roundFilterKey(), ids.toList())
             reload()
         }
     }
@@ -458,6 +475,133 @@ class StudyViewModel(
         viewModelScope.launch {
             val killed = studyRepo.toggleKill(q)
             _state.value = _state.value.copy(killed = killed)
+        }
+    }
+
+    fun clearToast() {
+        _state.value = _state.value.copy(toast = null)
+    }
+
+    /** 做题页单题编辑保存：刷新当前题展示，并在已作答时按新答案/题型重判 */
+    fun saveEditedQuestion(
+        questionId: Long,
+        chapter: String?,
+        type: QuestionType,
+        subtype: String?,
+        stem: String,
+        options: List<QuestionOption>,
+        answer: String?,
+        analysis: String?
+    ) {
+        val s = _state.value
+        val target = questions.firstOrNull { it.id == questionId }
+            ?: s.session?.question?.takeIf { it.id == questionId }
+            ?: return
+        val updated = target.copy(
+            chapter = chapter?.trim()?.takeIf { it.isNotBlank() },
+            type = type,
+            subtype = subtype,
+            stem = stem.trim().ifBlank { target.stem },
+            optionsJson = options.filter { it.text.isNotBlank() }.takeIf { it.isNotEmpty() }
+                ?.let(JsonCodec::encodeOptions),
+            answer = answer?.trim()?.takeIf { it.isNotBlank() },
+            analysis = analysis?.trim()?.takeIf { it.isNotBlank() }
+        )
+        questions = questions.map { if (it.id == updated.id) updated else it }
+        val curSession = _state.value.session
+        val stillHere = curSession?.question?.id == updated.id
+        var nextCorrect = _state.value.correct
+        val isObjective = updated.type == QuestionType.SINGLE ||
+            updated.type == QuestionType.MULTIPLE ||
+            updated.type == QuestionType.JUDGE
+        val shouldRejudge = stillHere && _state.value.answered && isObjective
+        val userAns = roundAnswers[updated.id]?.first ?: if (_state.value.selected.isNotEmpty()) {
+            _state.value.selected.sorted().joinToString("")
+        } else {
+            _state.value.textInput.take(200)
+        }
+        if (shouldRejudge) {
+            val hasAnswer = !updated.answer.isNullOrBlank()
+            nextCorrect = if (hasAnswer) studyRepo.judge(updated, userAns) else null
+            roundAnswers[updated.id] = userAns to nextCorrect
+            if (nextCorrect == false) roundWrongIds.add(updated.id) else roundWrongIds.remove(updated.id)
+        }
+        _state.value = _state.value.copy(
+            session = curSession?.copy(
+                question = if (curSession.question?.id == updated.id) updated else curSession.question,
+                prevQuestion = if (curSession.prevQuestion?.id == updated.id) updated else curSession.prevQuestion,
+                nextQuestion = if (curSession.nextQuestion?.id == updated.id) updated else curSession.nextQuestion
+            ),
+            correct = if (shouldRejudge) nextCorrect else _state.value.correct,
+            roundWrongCount = roundWrongIds.size,
+            toast = "题目已保存"
+        )
+        viewModelScope.launch {
+            withContext(NonCancellable) {
+                bankRepo.updateQuestion(updated)
+                if (shouldRejudge) {
+                    studyRepo.rejudgeRoundAnswer(
+                        question = updated,
+                        runId = curSession?.roundId,
+                        correct = nextCorrect,
+                        isRebrush = isWrongRebrushRound
+                    )
+                }
+            }
+        }
+    }
+
+    /** 添加带时间戳的题目笔记（按添加时间先后升序存放） */
+    fun addNote(questionId: Long, content: String) {
+        val text = content.trim()
+        if (text.isEmpty()) return
+        val q = questions.firstOrNull { it.id == questionId }
+            ?: _state.value.session?.question?.takeIf { it.id == questionId }
+            ?: return
+        val existing = JsonCodec.decodeNotes(q.notesJson)
+        val note = QuestionNote(content = text, createdAt = System.currentTimeMillis())
+        persistNotes(q, existing + note, "笔记已保存")
+    }
+
+    fun updateNote(questionId: Long, noteId: String, newContent: String) {
+        val text = newContent.trim()
+        val q = questions.firstOrNull { it.id == questionId }
+            ?: _state.value.session?.question?.takeIf { it.id == questionId }
+            ?: return
+        val existing = JsonCodec.decodeNotes(q.notesJson)
+        val next = if (text.isEmpty()) {
+            existing.filterNot { it.id == noteId }
+        } else {
+            existing.map { if (it.id == noteId) it.copy(content = text) else it }
+        }
+        persistNotes(q, next, if (text.isEmpty()) "笔记已删除" else "笔记已更新")
+    }
+
+    fun deleteNote(questionId: Long, noteId: String) {
+        val q = questions.firstOrNull { it.id == questionId }
+            ?: _state.value.session?.question?.takeIf { it.id == questionId }
+            ?: return
+        val next = JsonCodec.decodeNotes(q.notesJson).filterNot { it.id == noteId }
+        persistNotes(q, next, "笔记已删除")
+    }
+
+    private fun persistNotes(q: Question, notes: List<QuestionNote>, toastMsg: String) {
+        val updated = q.copy(notesJson = JsonCodec.encodeNotes(notes))
+        questions = questions.map { if (it.id == updated.id) updated else it }
+        val curSession = _state.value.session
+        _state.value = _state.value.copy(
+            session = curSession?.copy(
+                question = if (curSession.question?.id == updated.id) updated else curSession.question,
+                prevQuestion = if (curSession.prevQuestion?.id == updated.id) updated else curSession.prevQuestion,
+                nextQuestion = if (curSession.nextQuestion?.id == updated.id) updated else curSession.nextQuestion
+            ),
+            toast = toastMsg
+        )
+        Haptics.click()
+        viewModelScope.launch {
+            withContext(NonCancellable) {
+                bankRepo.updateQuestion(updated)
+            }
         }
     }
 

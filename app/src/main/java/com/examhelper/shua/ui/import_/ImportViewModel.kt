@@ -99,10 +99,8 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
             _state.value = _state.value.copy(
                 stage = when (job.stage) {
                     "DONE" -> Stage.PREVIEW
-                    // 已取消且一个字都没解析出来 → 回到首页重选文件，
-                    // 不能显示成 RUNNING 让用户以为还在跑。
                     "CANCELED" -> if (preview.isEmpty()) Stage.IDLE else Stage.PREVIEW
-                    "FAILED" -> if (preview.isEmpty()) Stage.RUNNING else Stage.PREVIEW
+                    "FAILED" -> Stage.PREVIEW
                     else -> Stage.RUNNING
                 },
                 jobId = jobId,
@@ -291,9 +289,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                     stage = when {
                         job.stage == "DONE" -> Stage.PREVIEW
                         job.stage == "INGEST" || job.stage == "PARSE" -> Stage.RUNNING
-                        job.stage == "FAILED" -> if (preview.isEmpty()) Stage.RUNNING else Stage.PREVIEW
-                        // 任务被系统/通知栏取消：有已解析结果就当预览，否则回首页重选文件。
-                        // 旧实现让 CANCELED 落进 else 保留原 stage，界面会一直卡在「解析中」。
+                        job.stage == "FAILED" -> Stage.PREVIEW
                         job.stage == "CANCELED" -> if (preview.isEmpty()) Stage.IDLE else Stage.PREVIEW
                         else -> _state.value.stage
                     }
@@ -362,7 +358,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
     fun save(onDone: () -> Unit) {
         val s = _state.value
         val job = s.job ?: return
-        if (s.preview.isEmpty() || s.stage == Stage.SAVING) return
+        if (s.stage == Stage.SAVING) return
         viewModelScope.launch {
             _state.value = s.copy(stage = Stage.SAVING)
             runCatching {
@@ -385,17 +381,39 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                     bankRepo.createBank(s.bankName.ifBlank { job.bankName }, job.sourceName.ifBlank { null }, parsed)
                 }
             }.onSuccess {
-                // 清理任务与中间产物（DB 里记录的旧路径可能是老版本的 cacheDir 根目录文件名，一并删掉）
-                job.rawTextPath?.let { File(it).delete() }
-                job.parsedPath?.let { File(it).delete() }
-                com.examhelper.shua.data.storage.AppStorage
-                    .deleteImportArtifacts(getApplication(), job.id)
+                cleanupJobFiles(job)
                 jobDao.delete(job.id)
                 onDone()
             }.onFailure {
                 _state.value = _state.value.copy(stage = Stage.PREVIEW, error = "导入失败：${it.message}")
             }
         }
+    }
+
+    /** 舍弃本次导入结果并清理任务与临时文件 */
+    fun discardJob(onDone: () -> Unit) {
+        val s = _state.value
+        val jid = s.jobId ?: s.job?.id ?: return
+        ImportPipelineWorker.cancel(getApplication(), jid)
+        viewModelScope.launch {
+            val job = s.job ?: jobDao.getById(jid)
+            if (job != null) cleanupJobFiles(job)
+            com.examhelper.shua.data.storage.AppStorage.deleteImportArtifacts(getApplication(), jid)
+            jobDao.delete(jid)
+            _state.value = UiState(
+                providersReady = s.providersReady,
+                concurrency = s.concurrency,
+                ocrEngine = s.ocrEngine,
+                rapidOcrConcurrency = s.rapidOcrConcurrency
+            )
+            onDone()
+        }
+    }
+
+    private fun cleanupJobFiles(job: ImportJob) {
+        job.rawTextPath?.let { File(it).delete() }
+        job.parsedPath?.let { File(it).delete() }
+        com.examhelper.shua.data.storage.AppStorage.deleteImportArtifacts(getApplication(), job.id)
     }
 
     /** 标准题库 JSON 直接导入（不经后台） */

@@ -356,17 +356,20 @@ class ImportPipelineWorker(
                 }
                 val questions = offlineParsed
                 if (questions.isEmpty()) {
-                    val reason = "离线解析未识别到题目，请检查文本排版或改用 AI 解析"
+                    parsed.writeText("")
                     updateJob(jobId) {
                         it.copy(
-                            stage = "FAILED",
-                            doneUnits = 0,
+                            stage = "DONE",
+                            totalUnits = 1,
+                            doneUnits = 1,
                             parsedCount = 0,
-                            errorMessage = reason,
-                            message = reason
+                            rawTextPath = raw.absolutePath,
+                            parsedPath = parsed.absolutePath,
+                            message = "未识别到题目，可舍弃或确认导入"
                         )
                     }
-                    return fail(jobId, reason)
+                    notifyDone(jobId, bankName, 0)
+                    return Result.success()
                 }
                 kotlinx.coroutines.yield()
                 parsed.writeText(
@@ -705,8 +708,24 @@ class ImportPipelineWorker(
                 return fail(jobId, "AI 解析全部失败（$detail）")
             }
             if (finalLines.isEmpty()) {
+                runCatching { parsed.writeText("") }
+                val report = ParseReportBuilder.build(chunkList, text, emptyList(), failedChunks)
                 drainTail()
-                return fail(jobId, "AI 解析未生成任何题目，请检查模型配置后重试")
+                updateJob(jobId) {
+                    it.copy(
+                        stage = "DONE",
+                        totalUnits = chunks.size.coerceAtLeast(1),
+                        doneUnits = chunks.size.coerceAtLeast(1),
+                        parsedCount = 0,
+                        rawTextPath = raw.absolutePath,
+                        parsedPath = parsed.absolutePath,
+                        parseReportJson = report.encode(),
+                        message = "未识别到题目，可舍弃或确认导入",
+                        streamTail = null
+                    )
+                }
+                notifyDone(jobId, bankName, 0)
+                return Result.success()
             }
             val report = ParseReportBuilder.build(chunkList, text, finalLines, failedChunks)
             // 收尾再采一次余额快照：这次采样意味着「任务结束时的余额」，
