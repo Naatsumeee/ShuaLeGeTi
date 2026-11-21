@@ -1,5 +1,9 @@
 package com.examhelper.shua.data.update
 
+import android.app.DownloadManager
+import android.content.Context
+import android.net.Uri
+import android.os.Environment
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
@@ -78,6 +82,28 @@ object UpdateChecker {
     fun parseVersionCode(notes: String): Int? =
         Regex("""(?i)versionCode\s*[:：]\s*(\d+)""").find(notes)
             ?.groupValues?.get(1)?.toIntOrNull()
+
+    /**
+     * 使用系统 DownloadManager 下载 APK 并强制指定 MIME 与 `.apk` 文件名。
+     * Gitee 附件 CDN 会返回 `Content-Type: application/zip`，直接丢给系统浏览器会被自动追加 `.zip` 后缀。
+     */
+    fun startApkDownload(context: Context, url: String, version: String): Boolean {
+        val cleanUrl = url.trim()
+        if (!cleanUrl.substringBefore('?').endsWith(".apk", ignoreCase = true)) return false
+        return runCatching {
+            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+                ?: return false
+            val fileName = "Shualegeti-$version.apk"
+            val request = DownloadManager.Request(Uri.parse(cleanUrl))
+                .setTitle("刷了个题 v$version")
+                .setDescription("正在下载安装包…")
+                .setMimeType("application/vnd.android.package-archive")
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+            dm.enqueue(request)
+            true
+        }.getOrDefault(false)
+    }
 
     fun errorMessage(error: Throwable): String {
         val checkError = error as? UpdateCheckException

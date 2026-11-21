@@ -1,6 +1,7 @@
 package com.examhelper.shua
 
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -53,12 +54,29 @@ class MainActivity : ComponentActivity() {
                         info = info,
                         onDismiss = { updateInfo = null },
                         onUpdate = {
-                            uriHandler.openUri(info.downloadUrl.ifBlank { info.releaseUrl })
+                            val target = info.downloadUrl.ifBlank { info.releaseUrl }
+                            if (UpdateChecker.startApkDownload(this@MainActivity, target, info.version)) {
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    "已开始下载 Shualegeti-${info.version}.apk，请在通知栏查看",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            } else {
+                                uriHandler.openUri(target)
+                            }
                             updateInfo = null
                         },
                         onFallback = info.fallbackDownloadUrl?.let { url ->
                             {
-                                uriHandler.openUri(url)
+                                if (UpdateChecker.startApkDownload(this@MainActivity, url, info.version)) {
+                                    Toast.makeText(
+                                        this@MainActivity,
+                                        "已开始下载 Shualegeti-${info.version}.apk，请在通知栏查看",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                } else {
+                                    uriHandler.openUri(url)
+                                }
                                 updateInfo = null
                             }
                         }
