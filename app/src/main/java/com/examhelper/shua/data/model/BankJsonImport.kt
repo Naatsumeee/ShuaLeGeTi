@@ -194,6 +194,7 @@ object BankJsonImport {
         val subtype = Regex("""(?i)(A[123]|B[12]|B)""")
             .find(subtypeRaw.orEmpty())
             ?.groupValues?.get(1)?.uppercase()
+        val notes = parseNotes(obj["notes"] ?: obj["笔记"])
 
         return ShuaQuestionJson(
             chapter = obj["chapter"].asTextOrNull()
@@ -217,8 +218,30 @@ object BankJsonImport {
             deepSolved = obj["deepSolved"].asBoolOrNull() ?: false,
             minimalSolved = obj["minimalSolved"].asBoolOrNull() ?: false,
             confidence = obj["confidence"].asIntOrNull(),
-            agreement = obj["agreement"].asTextOrNull()
+            agreement = obj["agreement"].asTextOrNull(),
+            notes = notes
         )
+    }
+
+    private fun parseNotes(el: JsonElement?): List<QuestionNote> {
+        val arr = el as? JsonArray ?: return emptyList()
+        return arr.mapIndexedNotNull { index, item ->
+            when (item) {
+                is JsonPrimitive -> item.content.trim().takeIf { it.isNotEmpty() }?.let {
+                    QuestionNote(content = it, createdAt = System.currentTimeMillis() + index)
+                }
+                is JsonObject -> {
+                    val text = (item["content"].asTextOrNull() ?: item["text"].asTextOrNull())
+                        ?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapIndexedNotNull null
+                    val createdAt = (item["createdAt"] as? JsonPrimitive)?.content?.toLongOrNull()
+                        ?: (System.currentTimeMillis() + index)
+                    val id = item["id"].asTextOrNull()?.takeIf { it.isNotBlank() }
+                        ?: java.util.UUID.randomUUID().toString()
+                    QuestionNote(id = id, content = text, createdAt = createdAt)
+                }
+                else -> null
+            }
+        }.sortedBy { it.createdAt }
     }
 
     /**

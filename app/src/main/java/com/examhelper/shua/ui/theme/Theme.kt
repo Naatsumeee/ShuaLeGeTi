@@ -68,7 +68,7 @@ object OlivePalette {
     val IvorySurface = Color(0xFF1F1F1A)
     val IvorySunken = Color(0xFF27271F)
     val Terracotta = Color(0xFFD97757)
-    val TerracottaDeep = Color(0xFFE68D6F)
+    val TerracottaDeep = Color(0xFFF2A388)
     val TerracottaSoft = Color(0xFF4A2C22)
     val Sage = Color(0xFFE08573)
     val SageSoft = Color(0xFF4C241D)
@@ -122,7 +122,7 @@ private val LightColors = lightColorScheme(
 
 private val DarkColors = darkColorScheme(
     primary = OlivePalette.Terracotta,
-    onPrimary = Color(0xFF2B120A),
+    onPrimary = Color(0xFFFFFDF8),
     primaryContainer = OlivePalette.TerracottaSoft,
     onPrimaryContainer = Color(0xFFF5D9CB),
     secondary = OlivePalette.InkSoft,
@@ -335,12 +335,17 @@ fun ShuaTheme(
     content: @Composable () -> Unit
 ) {
     val dark = darkTheme ?: isSystemInDarkTheme()
+    val scheme = if (dark) DarkColors else LightColors
     CompositionLocalProvider(LocalShuaColors provides if (dark) DarkExtra else LightExtra) {
         MaterialTheme(
-            colorScheme = if (dark) DarkColors else LightColors,
+            colorScheme = scheme,
             typography = shuaTypography(),
-            shapes = LiquidShapes,
-            content = content
-        )
+            shapes = LiquidShapes
+        ) {
+            CompositionLocalProvider(
+                androidx.compose.material3.LocalContentColor provides scheme.onSurface,
+                content = content
+            )
+        }
     }
 }

@@ -107,7 +107,9 @@ data class Question(
     /** 各部分歧 JSON: [{"provider":"名","answer":"C","analysis":"..."}] */
     val dissentJson: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
-    val askChatJson: String? = null
+    val askChatJson: String? = null,
+    /** 用户手写笔记 JSON 数组：[{"id":"...","content":"...","createdAt":123}] */
+    val notesJson: String? = null
 )
 
 /** 各模式学习进度（随机巩固的乱序队列持久化在此） */
@@ -124,7 +126,9 @@ data class StudyProgress(
     /** 本次进度对应的筛选条件指纹（变更时自动重置进度） */
     val filterJson: String? = null,
     val updatedAt: Long = System.currentTimeMillis(),
-    val roundId: String? = null
+    val roundId: String? = null,
+    /** 本轮开始时锁定的题目 id 队列，防止重刷途中队列缩短导致跳题漏刷 */
+    val lockedQuestionIdsJson: String? = null
 )
 
 /** 作答记录（判分、错题本、统计都基于它） */
@@ -159,7 +163,9 @@ data class WrongRecord(
     /** 之后答对可标记为已掌握 */
     val mastered: Boolean = false,
     /** 重点标记：错题本里可单独成组复刷（不依赖是否还在未掌握列表里） */
-    val flagged: Boolean = false
+    val flagged: Boolean = false,
+    /** 重刷错题后仍做错：仅用于错题本卡片打 tag 与「重刷仍未掌握」特殊章节 */
+    val rebrushFailed: Boolean = false
 )
 
 /** 收藏 */
@@ -219,6 +225,8 @@ data class LlmProvider(
     /** 主部（三省六部的高权重参考） */
     val isPrimary: Boolean = false,
     val temperature: Float = 0.2f,
+    val openCodeHeaderEnabled: Boolean = false,
+    val openCodeUserAgent: String? = null,
     val createdAt: Long = System.currentTimeMillis()
 )
 

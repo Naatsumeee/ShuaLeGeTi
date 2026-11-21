@@ -28,15 +28,19 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import kotlinx.coroutines.launch
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -113,12 +117,12 @@ fun LiquidDock(
                     spotColor = Color(0x403A2C18)
                 )
                 .clip(DockShape)
-                // ① 玻璃本体：暖白半透，两端略深形成弧度感
+                // ① 玻璃本体：提高不透明度 + 内层高斯模糊柔光，保持通透感同时避免底层文字透出干扰
                 .background(
                     Brush.verticalGradient(
                         listOf(
-                            if (extra.isDark) Color(0xFF32322A) else Color(0xFAFFFDF9),
-                            if (extra.isDark) Color(0xFF23231E) else Color(0xEAF6F1E5)
+                            if (extra.isDark) Color(0xEC32322A) else Color(0xEEFFFDF9),
+                            if (extra.isDark) Color(0xE223231E) else Color(0xE4F4EFE2)
                         )
                     )
                 )
@@ -147,37 +151,62 @@ fun LiquidDock(
             val cellW = maxWidth / tabs.size
             val cellPx = with(density) { cellW.toPx() }
             val pillW = cellW - 8.dp
+            val scope = rememberCoroutineScope()
+
+            // 内层高斯模糊柔光层（API 31+ 硬件 RenderEffect 高斯模糊），只柔化玻璃底衬，不影响前景图标锐度
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .blur(12.dp)
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(
+                                extra.terracotta.copy(alpha = if (extra.isDark) 0.08f else 0.06f),
+                                Color.White.copy(alpha = if (extra.isDark) 0.06f else 0.24f),
+                                extra.amber.copy(alpha = if (extra.isDark) 0.07f else 0.05f)
+                            )
+                        )
+                    )
+            )
 
             val pillX = remember { Animatable(0f) }
-            // 只维护「当前吸附到第几格」，拖动过程中不再逐帧刷新连续位移：
-            // 逐帧刷新会让 4 个 tab 每帧重组，跨多格时肉眼可见掉帧。
+            val liftProgress = remember { Animatable(0f) }
+            var lifted by remember { mutableStateOf(false) }
             var snapIndex by remember { mutableIntStateOf(-1) }
+            // 手指当前位置（px），长按拖动时直接驱动 pillX.snapTo，避免松手时坐标跳变
+            var fingerPx by remember { mutableFloatStateOf(0f) }
             val effectiveIndex = if (snapIndex >= 0) snapIndex else selectedIndex
             val target = effectiveIndex * cellPx
+            val maxPillX = cellPx * (tabs.size - 1).coerceAtLeast(0)
 
-            LaunchedEffect(target) {
-                // 非线性吸附：带一点回弹的弹簧，跨格时先快后慢地"咬合"到按钮中心
-                pillX.animateTo(
-                    target,
-                    // 用户反馈回弹略过头：把阻尼调到接近临界、提高刚度，
-                    // 保留一点点「咬合」感，但不再左右晃两下。
-                    spring(dampingRatio = 0.88f, stiffness = Spring.StiffnessMedium)
+            fun dragPillXFor(px: Float): Float = (px - cellPx / 2f).coerceIn(0f, maxPillX)
+
+            LaunchedEffect(lifted) {
+                liftProgress.animateTo(
+                    if (lifted) 1f else 0f,
+                    spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessHigh)
                 )
             }
 
-            // 手指当前位置（px），拖动时按"滑到哪一格"离散吸附，而不是连续跟手
-            var fingerPx by remember { mutableFloatStateOf(0f) }
+            LaunchedEffect(target, lifted) {
+                if (!lifted) {
+                    pillX.animateTo(
+                        target,
+                        spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessHigh)
+                    )
+                }
+            }
 
             // 胶囊滑块（唯一的动画元素）
             Box(
                 Modifier
-                    // **位移必须走 graphicsLayer，不能用 offset(x = pillX.value.toDp())**。
-                    // offset 的参数在组合阶段读取 Animatable 的值，动画每一帧都会让整个
-                    // LiquidDock 重组一遍 —— 包括 4 个 tab 的 Icon/Text、两段渐变 Brush、
-                    // 三处 border。用户反馈的「底部悬浮导航栏切换时卡顿掉帧」就是这个：
-                    // 60fps 下每秒重组 60 次整棵 Dock 子树。
-                    // graphicsLayer 只在绘制阶段改图层矩阵，不触发重组也不触发重排。
-                    .graphicsLayer { translationX = pillX.value }
+                    .graphicsLayer {
+                        val lift = liftProgress.value
+                        translationX = pillX.value
+                        translationY = -2.5.dp.toPx() * lift
+                        scaleX = 1f + 0.08f * lift
+                        scaleY = 1f + 0.12f * lift
+                    }
                     .padding(start = 4.dp, end = 4.dp, top = 6.dp, bottom = 6.dp)
                     .width(pillW)
                     .fillMaxHeight()
@@ -236,8 +265,10 @@ fun LiquidDock(
                             onDragStart = { offset ->
                                 Haptics.longPress()
                                 val idx = (offset.x / cellPx).toInt().coerceIn(0, tabs.size - 1)
-                                fingerPx = offset.x
+                                fingerPx = offset.x.coerceIn(0f, cellPx * tabs.size)
+                                lifted = true
                                 snapIndex = idx
+                                scope.launch { pillX.snapTo(dragPillXFor(fingerPx)) }
                                 // 长按起手就切到该按钮，符合"滑到哪个就切哪个"的直觉
                                 if (tabs[idx].route != currentRouteState.value) {
                                     onSelectState.value(tabs[idx].route)
@@ -246,22 +277,27 @@ fun LiquidDock(
                             onDrag = { change, amount ->
                                 change.consume()
                                 fingerPx = (fingerPx + amount.x)
-                                    .coerceIn(0f, cellPx * (tabs.size - 1))
-                                // 关键：按手指位置四舍五入到最近的按钮格，胶囊离散吸附；
-                                // 每跨一格才更新一次状态 + 切页 + 轻触感，避免逐帧重组卡顿。
-                                val idx = (fingerPx / cellPx).roundToInt()
+                                    .coerceIn(0f, cellPx * tabs.size)
+                                scope.launch { pillX.snapTo(dragPillXFor(fingerPx)) }
+                                val idx = (fingerPx / cellPx).toInt()
                                     .coerceIn(0, tabs.size - 1)
                                 if (idx != snapIndex) {
                                     snapIndex = idx
                                     Haptics.tick()
-                                    // 需求：滑动到哪个按钮，页面就切到哪个
                                     if (tabs[idx].route != currentRouteState.value) {
                                         onSelectState.value(tabs[idx].route)
                                     }
                                 }
                             },
-                            onDragEnd = { snapIndex = -1 },
-                            onDragCancel = { snapIndex = -1 }
+                            onDragEnd = {
+                                lifted = false
+                                snapIndex = -1
+                                Haptics.tap()
+                            },
+                            onDragCancel = {
+                                lifted = false
+                                snapIndex = -1
+                            }
                         )
                     },
                 verticalAlignment = Alignment.CenterVertically
@@ -272,6 +308,12 @@ fun LiquidDock(
                     Column(
                         Modifier
                             .width(cellW)
+                            .graphicsLayer {
+                                val lift = if (highlighted) liftProgress.value else 0f
+                                scaleX = 1f + 0.14f * lift
+                                scaleY = 1f + 0.14f * lift
+                                translationY = -2.dp.toPx() * lift
+                            }
                             .padding(vertical = 2.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {

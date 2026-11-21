@@ -138,10 +138,11 @@ private fun FloatingDock(currentRoute: String?, onSelect: (String) -> Unit) {
 }
 
 @Composable
-fun AppRoot(fontScale: Float = 1f) {
+fun AppRoot(fontScale: Float = 1f, uiScale: Float = 1f) {
     val density = LocalDensity.current
+    val effectiveScale = uiScale.coerceIn(0.8f, 1.25f)
     CompositionLocalProvider(
-        LocalDensity provides Density(density.density, fontScale)
+        LocalDensity provides Density(density.density * effectiveScale, fontScale)
     ) {
         val navController = rememberNavController()
         val backStackEntry by navController.currentBackStackEntryAsState()
@@ -167,6 +168,7 @@ fun AppRoot(fontScale: Float = 1f) {
 
             Scaffold(
                 containerColor = androidx.compose.ui.graphics.Color.Transparent,
+                contentColor = MaterialTheme.colorScheme.onBackground,
                 contentWindowInsets = WindowInsets(0, 0, 0, 0),
                 bottomBar = {
                     if (showBottomBar) {
@@ -197,36 +199,43 @@ fun AppRoot(fontScale: Float = 1f) {
                     // 与详情页之间来回横滑造成“层级不清”。
                     enterTransition = {
                         if (!isTabToTab(initialState.destination.route, targetState.destination.route)) {
-                            // 二级页面（详情/刷题/导入）保持系统默认的快速淡入，
-                            // 只有一级 tab 之间才做横向跟手过场。
                             slideInHorizontally(
-                                animationSpec = spring(dampingRatio = 0.82f, stiffness = Spring.StiffnessMediumLow),
-                                initialOffsetX = { full -> full / 4 }
-                            ) + fadeIn(tween(120))
+                                animationSpec = spring(
+                                    dampingRatio = Spring.DampingRatioNoBouncy,
+                                    stiffness = Spring.StiffnessMedium
+                                ),
+                                initialOffsetX = { full -> full / 7 }
+                            ) + fadeIn(tween(110))
                         } else {
                             val from = tabIndex(initialState.destination.route.orEmpty())
                             val to = tabIndex(targetState.destination.route.orEmpty())
                             val dir = if (to >= from) 1 else -1
                             slideInHorizontally(
-                                animationSpec = spring(dampingRatio = 0.80f, stiffness = Spring.StiffnessMedium),
-                                initialOffsetX = { full -> dir * full / 3 }
-                            ) + fadeIn(tween(90))
+                                animationSpec = tween(
+                                    durationMillis = 155,
+                                    easing = androidx.compose.animation.core.FastOutSlowInEasing
+                                ),
+                                initialOffsetX = { full -> dir * full / 12 }
+                            ) + fadeIn(tween(110))
                         }
                     },
                     exitTransition = {
                         if (!isTabToTab(initialState.destination.route, targetState.destination.route)) {
                             slideOutHorizontally(
-                                animationSpec = tween(160, easing = androidx.compose.animation.core.FastOutLinearInEasing),
-                                targetOffsetX = { full -> -full / 6 }
-                            ) + fadeOut(tween(110))
+                                animationSpec = tween(140, easing = androidx.compose.animation.core.FastOutLinearInEasing),
+                                targetOffsetX = { full -> -full / 10 }
+                            ) + fadeOut(tween(100))
                         } else {
                             val from = tabIndex(initialState.destination.route.orEmpty())
                             val to = tabIndex(targetState.destination.route.orEmpty())
                             val dir = if (to >= from) 1 else -1
                             slideOutHorizontally(
-                                animationSpec = tween(150, easing = androidx.compose.animation.core.FastOutLinearInEasing),
-                                targetOffsetX = { full -> -dir * full / 4 }
-                            ) + fadeOut(tween(110))
+                                animationSpec = tween(
+                                    durationMillis = 140,
+                                    easing = androidx.compose.animation.core.FastOutLinearInEasing
+                                ),
+                                targetOffsetX = { full -> -dir * full / 12 }
+                            ) + fadeOut(tween(95))
                         }
                     },
                     popEnterTransition = {
@@ -235,13 +244,19 @@ fun AppRoot(fontScale: Float = 1f) {
                             val to = tabIndex(targetState.destination.route.orEmpty())
                             val dir = if (to >= from) 1 else -1
                             slideInHorizontally(
-                                animationSpec = spring(dampingRatio = 0.84f, stiffness = Spring.StiffnessMedium),
-                                initialOffsetX = { full -> dir * full / 4 }
-                            ) + fadeIn(tween(90))
+                                animationSpec = tween(
+                                    durationMillis = 155,
+                                    easing = androidx.compose.animation.core.FastOutSlowInEasing
+                                ),
+                                initialOffsetX = { full -> dir * full / 12 }
+                            ) + fadeIn(tween(110))
                         } else {
                             slideInHorizontally(
-                                animationSpec = spring(dampingRatio = 0.84f, stiffness = Spring.StiffnessMedium),
-                                initialOffsetX = { full -> -full / 4 }
+                                animationSpec = spring(
+                                    dampingRatio = Spring.DampingRatioNoBouncy,
+                                    stiffness = Spring.StiffnessMedium
+                                ),
+                                initialOffsetX = { full -> -full / 7 }
                             ) + fadeIn(tween(100))
                         }
                     },
@@ -251,22 +266,20 @@ fun AppRoot(fontScale: Float = 1f) {
                             val to = tabIndex(targetState.destination.route.orEmpty())
                             val dir = if (to >= from) 1 else -1
                             slideOutHorizontally(
-                                animationSpec = tween(150, easing = androidx.compose.animation.core.FastOutLinearInEasing),
-                                targetOffsetX = { full -> -dir * full / 4 }
-                            ) + fadeOut(tween(110))
+                                animationSpec = tween(
+                                    durationMillis = 140,
+                                    easing = androidx.compose.animation.core.FastOutLinearInEasing
+                                ),
+                                targetOffsetX = { full -> -dir * full / 12 }
+                            ) + fadeOut(tween(95))
                         } else {
                             slideOutHorizontally(
-                                animationSpec = tween(160, easing = androidx.compose.animation.core.FastOutLinearInEasing),
-                                targetOffsetX = { full -> full / 6 }
-                            ) + fadeOut(tween(110))
+                                animationSpec = tween(140, easing = androidx.compose.animation.core.FastOutLinearInEasing),
+                                targetOffsetX = { full -> full / 10 }
+                            ) + fadeOut(tween(100))
                         }
                     },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(
-                            // Dock 走悬浮层，底部内容只需要避让 Dock 高度；顶部自绘安全区
-                            bottom = if (showBottomBar) padding.calculateBottomPadding() else 0.dp
-                        )
+                    modifier = Modifier.fillMaxSize()
                 ) {
                     composable(Routes.BANKS) {
                         BankListScreen(

@@ -46,24 +46,27 @@ object Haptics {
      * 和 2 没区别」的元凶（高档全部饱和到 255）。
      */
     enum class Beat(val ms: Long) {
-        TAP(7L),     // 选项点击 / 取消选择：最轻最快的一下
+        TAP(8L),     // 选项点击 / 取消选择：干脆有力的“咚”一记
         TICK(9L),    // 切到上一题 / 下一题
-        OK(13L),     // 答对（保留给需要区分对错的场景，正常流程只用 click）
-        NG(18L),     // 答错
+        OK(11L),     // 答对
+        NG(15L),     // 答错
         LONG(11L),   // 长按按下/松开的两段触感
-        DONE(16L)    // 完成本轮 / 返回 / 重刷
+        DONE(13L)    // 完成本轮 / 返回 / 重刷
     }
+
+    /** 硬件休眠阈值：多数线性马达驱动芯片空闲 2~5 秒即进待机，设为 2.5s 主动预唤醒 */
+    private const val IDLE_WAKE_THRESHOLD_MS = 2_500L
 
     @Volatile
     private var enabled: Boolean = true
 
-    /** 强度：1..10，只映射到 amplitude（默认 2 = 用户要的"轻"起手） */
+    /** 强度：1..5，映射到振幅（默认 3 档） */
     @Volatile
-    private var strength: Int = 2
+    private var strength: Int = 3
 
-    /** 时长：1..10，只映射到毫秒数（默认 2 = 短促但能被感知） */
+    /** 时长：1..5，映射到毫秒数（默认 3 档） */
     @Volatile
-    private var duration: Int = 2
+    private var duration: Int = 3
 
     @Volatile
     private var lastPlayedAt: Long = 0L
@@ -72,14 +75,14 @@ object Haptics {
         enabled = value
     }
 
-    /** 强度 1–10（1 最轻、10 最重），只影响振幅 */
+    /** 强度 1–5（1 最轻、5 最重），只影响振幅 */
     fun setStrength(value: Int) {
-        strength = value.coerceIn(1, 10)
+        strength = value.coerceIn(1, 5)
     }
 
-    /** 时长 1–10（1 最短、10 最长），只影响毫秒 */
+    /** 时长 1–5（1 最短、5 最长），只影响毫秒 */
     fun setDuration(value: Int) {
-        duration = value.coerceIn(1, 10)
+        duration = value.coerceIn(1, 5)
     }
 
     fun tap() = play(Beat.TAP)
@@ -110,62 +113,69 @@ object Haptics {
             val ms = durationOf(beat)
             val hasAmplitude = vibrator.hasAmplitudeControl()
             val now = System.currentTimeMillis()
-            val idle = now - lastPlayedAt > 30_000L
+            val idle = lastPlayedAt == 0L || (now - lastPlayedAt) > IDLE_WAKE_THRESHOLD_MS
             lastPlayedAt = now
             val amp = amplitudeOf()
-            if (idle && hasAmplitude) {
-                // 部分 ROM 空闲后会吞掉第一记短脉冲；预脉冲与真实反馈合成一个波形。
+            val (mainTimings, mainAmps) = thumpWaveform(ms, amp, hasAmplitude)
+            if (idle) {
+                // 空闲后驱动 IC 会进入低功耗待机；先给一记高于门限的短预激 + 5ms 间隔再推主冲击，
+                // 避免首记冲击被硬件上电过程吞掉。
+                val wakeAmp = if (hasAmplitude) 65 else VibrationEffect.DEFAULT_AMPLITUDE
                 vibrateEffect(
                     vibrator,
                     VibrationEffect.createWaveform(
-                        longArrayOf(0L, 2L, 12L) + strengthWaveform(ms, amp, hasAmplitude).first,
-                        intArrayOf(0, 8, 0) + strengthWaveform(ms, amp, hasAmplitude).second,
+                        longArrayOf(3L, 5L) + mainTimings,
+                        intArrayOf(wakeAmp, 0) + mainAmps,
                         -1
                     )
                 )
             } else {
-                val (timings, amplitudes) = strengthWaveform(ms, amp, hasAmplitude)
-                vibrateEffect(vibrator, VibrationEffect.createWaveform(timings, amplitudes, -1))
+                vibrateEffect(vibrator, VibrationEffect.createWaveform(mainTimings, mainAmps, -1))
             }
         }
     }
 
     /**
-     * 实际毫秒数 = 基准时长 × 时长系数。
-     *
-     * 系数在 1..10 档之间铺开：1 档 0.35 倍（最清脆，TAP 只有 2.5ms → 取 6ms 下限），
-     * 2 档 1.42 倍（TAP 10ms），10 档 10 倍（TAP 70ms、DONE 160ms）。
-     * **强度不参与**，否则两个旋钮又糊在一起。
-     *
-     * 上限取到 10 倍而不是更窄：用户实测「时长拉到 10 能感觉到延长，但没有特别长」，
-     * 说明 0.4..7.0 仍然不够。震动的「长」是被感知成拖尾的，想明显就得给到
-     * 60~160ms 这个量级，再往上就变成「嗡」而不是「嗒」。
+     * 5 档时长映射（5ms..22ms）：3 档默认约 8–13ms 扎实短促，绝不进入拖沓“嗡”振区。
      */
     private fun durationOf(beat: Beat): Long {
-        val scale = 0.35f + (duration - 1) * (9.65f / 9f)   // 0.35f .. 10.0f
-        return (beat.ms * scale).toLong().coerceIn(6L, 180L)
+        val scale = when (duration) {
+            1 -> 0.70f
+            2 -> 0.85f
+            3 -> 1.00f
+            4 -> 1.22f
+            else -> 1.48f
+        }
+        return (beat.ms * scale).toLong().coerceIn(5L, 22L)
     }
 
     /**
-     * 振幅 = 强度滑块的直接映射，**与具体动作无关，也不掺任何别的系数**。
-     *
-     * 用户在真机上给了两条明确反馈：
-     * 1. 「2 档（默认）已经偏强」→ 低档必须明显轻下去；
-     * 2. 「拉到 10 和 2 感觉不出差别」→ 根因是**动作权重也被乘进了振幅**：
-     *    TAP 的 0.62 / NG 的 1.25 把同一档位压成 27~255 的窄带，高档全部顶到 255
-     *    饱和，再往上和一百多没有区别。现在动作之间的轻重差异**只由 [Beat.ms]
-     *    的时长表达**（TAP 7ms 最轻、NG 18ms 最重），振幅只管强度滑块。
-     *
-     * 曲线用 1.8 次幂：1 档 20（极轻）、2 档 24（默认，轻）、5 档 63、8 档 152、
-     * 10 档 255（满幅）—— 两端差 12 倍以上，且中段不再挤在一起。
-     *
-     * 下限 20 而不是 1：低于 20 在多数线性马达上会被系统当成「无意义的一次极弱驱动」
-     * 直接吞掉，用户会以为震动坏了。
+     * 5 档基础振幅（110..255），默认 3 档 195；结合前段 1.18x 过载爆发（默认即达 230），
+     * 保证短时长下也有饱满有力的“咚”感。
      */
-    private fun amplitudeOf(): Int {
-        val t = (strength - 1) / 9f
-        val base = 20f + 235f * Math.pow(t.toDouble(), 1.8).toFloat()
-        return base.toInt().coerceIn(20, 255)
+    private fun amplitudeOf(): Int = when (strength) {
+        1 -> 110
+        2 -> 150
+        3 -> 195
+        4 -> 230
+        else -> 255
+    }
+
+    /**
+     * 前强后脆冲击包络（Overdrive Kick + Instant Cutoff）：
+     * 前 78% 时间以 1.18x 过载高幅猛推建立动量，后 22% 仅留 2–3ms 陡降收尾并立刻断电，
+     * 呈现出「前段爆发强、尾音干脆收住」的“咚”一下触感。
+     */
+    private fun thumpWaveform(ms: Long, amp: Int, hasAmplitude: Boolean): Pair<LongArray, IntArray> {
+        if (!hasAmplitude || ms < 7L) {
+            val a = if (hasAmplitude) amp else VibrationEffect.DEFAULT_AMPLITUDE
+            return longArrayOf(ms) to intArrayOf(a)
+        }
+        val kickAmp = minOf(255, (amp * 1.18f).toInt())
+        val tailMs = (ms * 22L / 100L).coerceIn(2L, 4L)
+        val kickMs = (ms - tailMs).coerceAtLeast(4L)
+        val tailAmp = (amp * 0.22f).toInt().coerceIn(25, kickAmp)
+        return longArrayOf(kickMs, tailMs) to intArrayOf(kickAmp, tailAmp)
     }
 
     /**
@@ -180,27 +190,6 @@ object Haptics {
 
     private fun vibrate(vibrator: Vibrator, ms: Long, amp: Int) {
         vibrateEffect(vibrator, VibrationEffect.createOneShot(ms, amp))
-    }
-
-    /**
-     * 同样总时长内，高档位使用更多脉冲。不能只依赖 amplitude：部分 ROM 会把
-     * USAGE_TOUCH 的振幅统一压缩，用户无论怎么调都感觉一样。
-     */
-    private fun strengthWaveform(ms: Long, amp: Int, hasAmplitude: Boolean): Pair<LongArray, IntArray> {
-        val pulses = 1 + (strength - 1) / 3
-        val gap = if (pulses > 1) 2L else 0L
-        val pulseMs = ((ms - gap * (pulses - 1)) / pulses).coerceAtLeast(2L)
-        val timings = LongArray(pulses * 2 - 1)
-        val amplitudes = IntArray(timings.size)
-        for (i in 0 until pulses) {
-            timings[i * 2] = pulseMs
-            amplitudes[i * 2] = if (hasAmplitude) amp else VibrationEffect.DEFAULT_AMPLITUDE
-            if (i < pulses - 1) {
-                timings[i * 2 + 1] = gap
-                amplitudes[i * 2 + 1] = 0
-            }
-        }
-        return timings to amplitudes
     }
 
     private fun vibrateEffect(vibrator: Vibrator, effect: VibrationEffect) {

@@ -238,10 +238,13 @@ class BankRepository(
         val (judgeOpts, judgeAns) = JudgeOptions.normalize(type, options, answer)
         val finalOptions = if (type == QuestionType.JUDGE) judgeOpts else options
         val finalAnswer = if (type == QuestionType.JUDGE) judgeAns else answer
-        // 章节名最后一道闸：所有导入路径（正则 / AI / JSON）都会走到这里。
-        // 「（一）名词解释」「一、单项选择题」这类题型分组标题不是章节，
-        // cleanChapter 会把它们判成 null（未分章），或把「第三章 名词解释」压成「第三章」。
-        val finalChapter = HeadingClassifier.cleanChapter(chapter)
+        // 章节名最后一道闸：OCR/AI 导入路径走 cleanChapter 过滤题型假标题；
+        // 从标准题库文件导入（preserveChapter = true）则保留用户手动调整好的章节名。
+        val finalChapter = if (preserveChapter) {
+            chapter?.trim()?.takeIf { it.isNotEmpty() }
+        } else {
+            HeadingClassifier.cleanChapter(chapter)
+        }
         return Question(
             bankId = bankId,
             orderInBank = order,
@@ -260,7 +263,8 @@ class BankRepository(
             minimalSolved = minimalSolved,
             confidence = confidence,
             agreement = agreement,
-            dissentJson = dissent.takeIf { it.isNotEmpty() }?.let(JsonCodec::encodeDissent)
+            dissentJson = dissent.takeIf { it.isNotEmpty() }?.let(JsonCodec::encodeDissent),
+            notesJson = JsonCodec.encodeNotes(notes)
         )
     }
 
@@ -305,7 +309,21 @@ class BankRepository(
         bankDao.deleteById(bankId)
     }
 
-    suspend fun updateQuestion(q: Question) = questionDao.update(q)
+    suspend fun updateQuestion(q: Question) {
+        db.withTransaction {
+            questionDao.update(q)
+            bankDao.touch(q.bankId, System.currentTimeMillis())
+        }
+    }
+
+    suspend fun updateQuestionsChapter(bankId: Long, questionIds: List<Long>, chapter: String?) {
+        if (questionIds.isEmpty()) return
+        val normalized = chapter?.trim()?.takeIf { it.isNotEmpty() }
+        db.withTransaction {
+            questionDao.updateChapterBatch(questionIds, normalized)
+            bankDao.touch(bankId, System.currentTimeMillis())
+        }
+    }
 
     suspend fun chapters(bankId: Long): List<String> = questionDao.chaptersOfBank(bankId)
 
@@ -340,7 +358,8 @@ class BankRepository(
                 minimalSolved = if (stripAi) false else q.minimalSolved,
                 confidence = if (stripAi) null else q.confidence,
                 agreement = if (stripAi) null else q.agreement,
-                dissent = if (stripAi) emptyList() else JsonCodec.decodeDissent(q.dissentJson)
+                dissent = if (stripAi) emptyList() else JsonCodec.decodeDissent(q.dissentJson),
+                notes = JsonCodec.decodeNotes(q.notesJson)
             )
         }
         return ShuaBankFile(
@@ -397,7 +416,9 @@ class BankRepository(
         minimalSolved = minimalSolved,
         confidence = confidence,
         agreement = agreement,
-        dissent = dissent
+        dissent = dissent,
+        notes = notes,
+        preserveChapter = true
     )
 }
 

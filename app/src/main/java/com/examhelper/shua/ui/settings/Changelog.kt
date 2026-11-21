@@ -20,9 +20,26 @@ data class NoteItem(val kind: Kind, val text: String) {
 
 val RELEASE_NOTES: List<ReleaseNote> = listOf(
     ReleaseNote(
+        version = "1.4.0",
+        date = "2026-11-22",
+        current = true,
+        items = listOf(
+            NoteItem(NoteItem.Kind.NEW, "设置页新增全局渲染比例调节（80%–125%），方便适配不同屏幕尺寸与分辨率"),
+            NoteItem(NoteItem.Kind.NEW, "大模型配置支持开启 OpenCode 请求头（含 User-Agent 与 x-opencode-session），兼容 OpenCode Go 等端点"),
+            NoteItem(NoteItem.Kind.NEW, "编辑题目/章节划分页支持按章节分块展示、题间新建/删除分章标记、点击章标题改名与右侧快速滑块定位"),
+            NoteItem(NoteItem.Kind.NEW, "做题页新增题干右上角快捷编辑与顶栏时间戳笔记，笔记按时间先后展示在解析下方并随题库文件导出/导入"),
+            NoteItem(NoteItem.Kind.NEW, "错题重刷支持「重刷未掌握」标记与专属章节，整轮完成后统一标为已掌握，避免途中跳题漏刷"),
+            NoteItem(NoteItem.Kind.IMPROVE, "震动反馈改为 5 档调节（默认 3 档），优化前强后脆冲击曲线并修复空闲后首下震动消失问题"),
+            NoteItem(NoteItem.Kind.IMPROVE, "主页底部导航栏改为真悬浮毛玻璃并叠加柔光模糊，支持长按拿起连续跟手移动；减弱页面切换弹性晃动"),
+            NoteItem(NoteItem.Kind.IMPROVE, "优化设置页滑块间距与深色模式文字对比度，速刷模式说明同步显示设置的自动跳题秒数，精简各页冗余说明文案"),
+            NoteItem(NoteItem.Kind.FIX, "修复 LaTeX 下标偏上、长公式折行挤压及根号长顶线未完整渲染的问题，并新增横向滚动条与组合数支持"),
+            NoteItem(NoteItem.Kind.FIX, "修复百炼流式端点报 400（stream_options 缺少 include_usage）、背题模式切题邻卡无解析、模式进度串联及 0 题待确认导入问题"),
+        )
+    ),
+    ReleaseNote(
         version = "1.3.0",
         date = "2026-11-18",
-        current = true,
+        current = false,
         items = listOf(
             NoteItem(NoteItem.Kind.NEW, "AI 题库导入新增“首段优先”和连续接力解析：开始后更快看到首批题目，后续分段持续推进，不再长时间空白"),
             NoteItem(NoteItem.Kind.NEW, "做题进度按每一轮实时保存；切屏、退出或重新进入后，已答题目、作答结果与解析会自动恢复"),

@@ -173,23 +173,6 @@ fun MaintenanceSetupScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            item {
-                GlassSurface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), elevation = 8.dp) {
-                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            if (isAi) Icons.Filled.AutoAwesome else Icons.Filled.Edit,
-                            contentDescription = null,
-                            tint = extra.terracotta
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            if (isAi) "先选题库、章节和生成类型，再手动开始" else "选择要编辑的一个或几个题库",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-                }
-            }
-
             item { SectionLabel("题库", trailing = "已选 ${selected.size} 本") }
             items(banks, key = { it.id }) { bank ->
                 val checked = bank.id in selected
@@ -331,13 +314,6 @@ fun MaintenanceSetupScreen(
                             if (isAi) "开始维护所选 · ${selected.size} 本" else "开始编辑所选 · ${selected.size} 本",
                             color = Color.White,
                             fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                    if (isAi) {
-                        Text(
-                            "多本题库会按顺序逐本处理，总耗时较长且失败率会增高；建议重要题库分别维护。",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }

@@ -74,27 +74,31 @@ class StudyRepository(
         if (existing != null && existing.filterJson == filterJson &&
             !(mode == StudyMode.RANDOM && existing.randomOrderJson == null)
         ) {
-            if (existing.roundId != null) return existing
+            if (existing.roundId != null && existing.lockedQuestionIdsJson != null) return existing
             val upgraded = existing.copy(
-                roundId = UUID.randomUUID().toString(),
+                roundId = existing.roundId ?: UUID.randomUUID().toString(),
+                lockedQuestionIdsJson = existing.lockedQuestionIdsJson ?: JsonCodec.encodeIdList(questionIds),
                 updatedAt = System.currentTimeMillis()
             )
             progressDao.upsert(upgraded)
             return upgraded
         }
         val roundId = UUID.randomUUID().toString()
+        val lockedJson = JsonCodec.encodeIdList(questionIds)
         val fresh = if (mode == StudyMode.RANDOM) {
             StudyProgress(
                 bankId = bankId, mode = mode, filterJson = filterJson,
                 randomOrderJson = JsonCodec.encodeIdList(questionIds.shuffled()),
-                roundId = roundId
+                roundId = roundId,
+                lockedQuestionIdsJson = lockedJson
             )
         } else {
             StudyProgress(
                 bankId = bankId,
                 mode = mode,
                 filterJson = filterJson,
-                roundId = roundId
+                roundId = roundId,
+                lockedQuestionIdsJson = lockedJson
             )
         }
         progressDao.upsert(fresh)
@@ -110,7 +114,19 @@ class StudyRepository(
     ): StudySession {
         val progress = ensureProgress(bankId, mode, questions.map { it.id }, filterJson)
         val roundId = requireNotNull(progress.roundId)
-        val byId = questions.associateBy { it.id }
+        val initialById = questions.associateBy { it.id }
+        val lockedIds = JsonCodec.decodeIdList(progress.lockedQuestionIdsJson)
+        val missingIds = lockedIds.filter { it !in initialById }
+        val byId = if (missingIds.isEmpty()) {
+            initialById
+        } else {
+            initialById + bankRepo.getQuestionsByIds(missingIds).associateBy { it.id }
+        }
+        val queueQuestions = if (lockedIds.isNotEmpty()) {
+            lockedIds.mapNotNull(byId::get).ifEmpty { questions }
+        } else {
+            questions
+        }
         return when (mode) {
             StudyMode.RANDOM -> {
                 val order = JsonCodec.decodeIdList(progress.randomOrderJson)
@@ -128,17 +144,17 @@ class StudyRepository(
                 )
             }
             else -> {
-                val index = progress.currentIndex.coerceIn(0, questions.size)
+                val index = progress.currentIndex.coerceIn(0, queueQuestions.size)
                 StudySession(
                     mode = mode,
                     roundId = roundId,
-                    question = questions.getOrNull(index),
+                    question = queueQuestions.getOrNull(index),
                     indexInQueue = index + 1,
-                    total = questions.size,
+                    total = queueQuestions.size,
                     doneCount = index,
-                    finished = index >= questions.size,
-                    prevQuestion = questions.getOrNull(index - 1),
-                    nextQuestion = questions.getOrNull(index + 1)
+                    finished = index >= queueQuestions.size,
+                    prevQuestion = queueQuestions.getOrNull(index - 1),
+                    nextQuestion = queueQuestions.getOrNull(index + 1)
                 )
             }
         }
@@ -155,7 +171,9 @@ class StudyRepository(
         correctKnown: Boolean = true,
         selfRated: Boolean = false,
         runId: String? = null,
-        durationMs: Long? = null
+        durationMs: Long? = null,
+        deferMastered: Boolean = false,
+        isRebrush: Boolean = false
     ) {
         val existing = recordDao.getWrong(question.id)
         recordDao.submitAnswer(
@@ -172,8 +190,59 @@ class StudyRepository(
                 runId = runId,
                 durationMs = durationMs
             ),
-            existing
+            existing,
+            deferMastered = deferMastered,
+            isRebrush = isRebrush
         )
+    }
+
+    /** 本轮错题重刷全部完成后，统一将本轮最终答对的错题标注为已掌握 */
+    suspend fun finalizeRoundMastered(questionIds: List<Long>) {
+        if (questionIds.isNotEmpty()) {
+            recordDao.markMasteredBatch(questionIds)
+        }
+    }
+
+    /** 做题页编辑题目后，按新答案/题型同步更新当前轮次最新一条作答记录与错题状态 */
+    suspend fun rejudgeRoundAnswer(
+        question: Question,
+        runId: String?,
+        correct: Boolean?,
+        isRebrush: Boolean
+    ) {
+        val known = correct != null
+        val isCorrect = correct == true
+        if (runId != null) {
+            val latest = recordDao.latestAttemptInRun(runId, question.id)
+            if (latest != null) {
+                recordDao.updateAttemptResult(latest.id, isCorrect, known)
+            }
+        }
+        if (!known) return
+        val existing = recordDao.getWrong(question.id)
+        if (!isCorrect) {
+            if (existing != null) {
+                recordDao.upsertWrong(
+                    existing.copy(
+                        lastWrongAt = System.currentTimeMillis(),
+                        mastered = false,
+                        rebrushFailed = existing.rebrushFailed || isRebrush
+                    )
+                )
+            } else {
+                recordDao.upsertWrong(
+                    com.examhelper.shua.data.db.WrongRecord(
+                        questionId = question.id,
+                        bankId = question.bankId,
+                        wrongCount = 1,
+                        lastWrongAt = System.currentTimeMillis(),
+                        rebrushFailed = isRebrush
+                    )
+                )
+            }
+        } else if (existing != null && !isRebrush) {
+            recordDao.markMastered(question.id)
+        }
     }
 
     suspend fun latestAnswersByRound(runId: String): Map<Long, RoundAnswer> =
@@ -265,6 +334,7 @@ class StudyRepository(
     /** 原地开始新一轮，保留当前筛选条件但换 roundId，不能恢复上一轮作答。 */
     suspend fun startNewRound(bankId: Long, mode: StudyMode, questionIds: List<Long>) {
         val existing = progressDao.get(bankId, mode)
+        val lockedJson = JsonCodec.encodeIdList(questionIds)
         progressDao.upsert(
             StudyProgress(
                 bankId = bankId,
@@ -278,7 +348,8 @@ class StudyRepository(
                 randomCursor = 0,
                 filterJson = existing?.filterJson,
                 roundId = UUID.randomUUID().toString(),
-                updatedAt = System.currentTimeMillis()
+                updatedAt = System.currentTimeMillis(),
+                lockedQuestionIdsJson = lockedJson
             )
         )
     }
@@ -294,11 +365,9 @@ class StudyRepository(
         progressDao.touch(bankId, mode, System.currentTimeMillis())
     }
 
-    /** 清掉某模式进度（「重新开始」用） */
+    /** 清掉某模式进度（「重新开始 / 忽略」用） */
     suspend fun resetProgress(bankId: Long, mode: StudyMode) {
-        progressDao.upsert(
-            StudyProgress(bankId = bankId, mode = mode, currentIndex = 0, randomCursor = 0)
-        )
+        progressDao.deleteOne(bankId, mode)
     }
 
     /**
@@ -307,9 +376,23 @@ class StudyRepository(
      * 指纹换掉是必须的——否则 ensureProgress 会认为筛选条件没变，直接复用
      * 原整轮进度（游标已在队尾），点进去就是个空完成页。
      */
-    suspend fun resetRoundWrong(bankId: Long, mode: StudyMode, filterKey: String) {
+    suspend fun resetRoundWrong(
+        bankId: Long,
+        mode: StudyMode,
+        filterKey: String,
+        questionIds: List<Long> = emptyList()
+    ) {
         progressDao.upsert(
-            StudyProgress(bankId = bankId, mode = mode, filterJson = filterKey, currentIndex = 0, randomCursor = 0)
+            StudyProgress(
+                bankId = bankId,
+                mode = mode,
+                filterJson = filterKey,
+                currentIndex = 0,
+                randomOrderJson = if (mode == StudyMode.RANDOM) JsonCodec.encodeIdList(questionIds.shuffled()) else null,
+                randomCursor = 0,
+                roundId = UUID.randomUUID().toString(),
+                lockedQuestionIdsJson = if (questionIds.isNotEmpty()) JsonCodec.encodeIdList(questionIds) else null
+            )
         )
     }
 
@@ -344,19 +427,29 @@ class StudyRepository(
         }
 
     private suspend fun savedProgressFor(bankId: Long, row: StudyProgress): SavedProgress? {
+        if (row.filterJson?.contains("\"roundWrong\"") == true) return null
         val questions = filteredQuestions(
             bankId,
             com.examhelper.shua.data.model.StudyFilter.fromFingerprint(row.filterJson)
         )
+        val randomOrder = if (row.mode == StudyMode.RANDOM) {
+            JsonCodec.decodeIdList(row.randomOrderJson)
+        } else emptyList()
         val total = if (row.mode == StudyMode.RANDOM) {
-            JsonCodec.decodeIdList(row.randomOrderJson).size
+            randomOrder.size
         } else {
             questions.size
         }
         val position = if (row.mode == StudyMode.RANDOM) row.randomCursor + 1 else row.currentIndex + 1
         if (position <= 1) return null
         if (total > 0 && position > total) return null
-        val chapter = questions.getOrNull(position - 1)?.chapter?.takeIf { it.isNotBlank() }
+        val currentQuestion = if (row.mode == StudyMode.RANDOM) {
+            val id = randomOrder.getOrNull(row.randomCursor)
+            if (id != null) questions.firstOrNull { it.id == id } else null
+        } else {
+            questions.getOrNull(position - 1)
+        }
+        val chapter = currentQuestion?.chapter?.takeIf { it.isNotBlank() }
         return SavedProgress(
             mode = row.mode,
             position = position.coerceAtMost(total.coerceAtLeast(position)),
@@ -472,8 +565,11 @@ class StudyRepository(
         } else groupQuestions
         if (filter == null || filter.isDefault) return all
         val wrong = recordDao.wrongIds().toSet()
+        val rebrushFailed = recordDao.rebrushFailedIds().toSet()
         val favorite = recordDao.favoriteIds().toSet()
         val killed = recordDao.killedIds().toSet()
+        val wantsRebrushChapter = REBRUSH_UNMASTERED_CHAPTER in filter.chapters
+        val normalChapters = filter.chapters.filterNot { it == REBRUSH_UNMASTERED_CHAPTER }
         // 题库组的题目来自多个子题库；按组 id 查作答记录会永远查不到。
         // 空 bankIds 也保持有意义的查询语义（返回空集合）。
         val questionBankIds = all.map { it.bankId }.distinct()
@@ -483,7 +579,10 @@ class StudyRepository(
             recordDao.answeredIdsForBanks(questionBankIds).toSet()
         }
         return all.filter { q ->
-            (filter.chapters.isEmpty() || filter.chapters.contains(q.chapter)) &&
+            val chapterMatch = filter.chapters.isEmpty() ||
+                (q.chapter != null && q.chapter in normalChapters) ||
+                (wantsRebrushChapter && q.id in rebrushFailed)
+            chapterMatch &&
                 (filter.types.isEmpty() || filter.types.contains(q.type.name)) &&
                 (filter.subtypes.isEmpty() || filter.subtypes.contains(q.subtype)) &&
                 when (filter.status) {
@@ -495,6 +594,11 @@ class StudyRepository(
                     else -> true
                 }
         }
+    }
+
+    suspend fun hasRebrushFailedForBanks(bankIds: List<Long>): Boolean {
+        if (bankIds.isEmpty()) return false
+        return recordDao.rebrushFailedIdsForBanks(bankIds).isNotEmpty()
     }
 
     // ---- 斩题 ----
@@ -526,6 +630,8 @@ class StudyRepository(
     }
 
     companion object {
+        const val REBRUSH_UNMASTERED_CHAPTER = "重刷仍未掌握"
+
         /**
          * 判分：字母匹配优先，选项内容匹配兜底。
          * 兜底覆盖两类真实场景：

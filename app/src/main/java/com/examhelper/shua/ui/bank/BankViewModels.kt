@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.examhelper.shua.ShuaApp
 import com.examhelper.shua.data.db.QuestionBank
 import com.examhelper.shua.data.model.ParsedQuestion
+import com.examhelper.shua.data.model.toParsedQuestion
 import com.examhelper.shua.data.parse.TextQuestionParser
 import com.examhelper.shua.data.repo.BankRepository
 import com.examhelper.shua.data.repo.StudyRepository
@@ -116,6 +117,52 @@ class BankListViewModel @JvmOverloads constructor(
             val dao = ShuaApp.instance.container.database.bankDao()
             ids.forEach { dao.setArchived(it, archived, System.currentTimeMillis()) }
         }
+    }
+
+    /** 首页直接确认导入「待确认」任务（支持 0 道题） */
+    fun confirmImportJob(job: com.examhelper.shua.data.db.ImportJob) {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                val lines = job.parsedPath
+                    ?.let { com.examhelper.shua.data.model.JsonCodec.readParsedLines(java.io.File(it)) }
+                    ?.sortedBy { it.chunkIndex * 100000 + it.indexInChunk }
+                    .orEmpty()
+                val parsed = lines.map { line ->
+                    val pq = line.toParsedQuestion()
+                    val (opts, ans) = com.examhelper.shua.data.parse.OptionNormalizer.normalize(pq.options, pq.answer)
+                    val (sopts, _) = com.examhelper.shua.data.parse.OptionNormalizer.normalize(pq.sharedOptions, null)
+                    pq.options.clear()
+                    pq.options.addAll(opts)
+                    pq.answer = ans
+                    pq.sharedOptions.clear()
+                    pq.sharedOptions.addAll(sopts)
+                    pq
+                }
+                val targetId = job.targetBankId
+                if (targetId != null) {
+                    bankRepo.appendQuestions(targetId, parsed)
+                } else {
+                    bankRepo.createBank(job.bankName.ifBlank { "导入题库" }, job.sourceName.ifBlank { null }, parsed)
+                }
+            }.onSuccess {
+                cleanupImportJob(job)
+            }
+        }
+    }
+
+    /** 首页直接舍弃「待确认」任务 */
+    fun discardImportJob(job: com.examhelper.shua.data.db.ImportJob) {
+        com.examhelper.shua.data.importjob.ImportPipelineWorker.cancel(ShuaApp.instance, job.id)
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            cleanupImportJob(job)
+        }
+    }
+
+    private suspend fun cleanupImportJob(job: com.examhelper.shua.data.db.ImportJob) {
+        job.rawTextPath?.let { java.io.File(it).delete() }
+        job.parsedPath?.let { java.io.File(it).delete() }
+        com.examhelper.shua.data.storage.AppStorage.deleteImportArtifacts(ShuaApp.instance, job.id)
+        ShuaApp.instance.container.database.importJobDao().delete(job.id)
     }
 }
 

@@ -34,10 +34,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.examhelper.shua.ShuaApp
+import com.examhelper.shua.data.settings.AppSettings
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -84,6 +87,8 @@ fun BankDetailScreen(
     var exportStats by remember { mutableStateOf<BankDetailViewModel.ExportStats?>(null) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var groupChildren by remember { mutableStateOf<List<com.examhelper.shua.data.db.QuestionBank>>(emptyList()) }
+    val settings by remember { ShuaApp.instance.container.settings.settings }
+        .collectAsState(initial = AppSettings())
     val extra = shuaColors
 
     val exportLauncher = rememberLauncherForActivityResult(
@@ -196,7 +201,7 @@ fun BankDetailScreen(
                         Column {
                             ModeRow("标准做题", "作答即判对错，看解析再下一题", StudyMode.SEQUENTIAL, tag = if (allGroup) "全题库组" else null) { onStartStudy(StudyMode.SEQUENTIAL, allGroup) }
                             Divider()
-                            ModeRow("速刷模式", "作答后直出答案，2 秒自动跳题", StudyMode.SPEED, tag = if (allGroup) "全题库组" else null) { onStartStudy(StudyMode.SPEED, allGroup) }
+                            ModeRow("速刷模式", "作答后直出答案，${settings.speedModeSeconds} 秒自动跳题", StudyMode.SPEED, tag = if (allGroup) "全题库组" else null) { onStartStudy(StudyMode.SPEED, allGroup) }
                             Divider()
                             ModeRow("背题模式", "直接展开答案与解析，快速过题", StudyMode.RECITE, tag = if (allGroup) "全题库组" else null) { onStartStudy(StudyMode.RECITE, allGroup) }
                             Divider()
@@ -215,9 +220,9 @@ fun BankDetailScreen(
                             ActionRow(
                                 title = if (noAnswer > 0) "AI 生成答案 · 缺 $noAnswer 题" else "AI 重新生成答案",
                                 subtitle = if (b.isGroup && !allGroup) {
-                                    "题库组不直接存题，请进入下方子题库生成"
+                                    "请进入下方子题库生成"
                                 } else {
-                                    "调用已配置模型补全答案与解析，标注置信度；三省六部可交叉验证"
+                                    "补全答案与解析"
                                 },
                                 onClick = { onGenerate(if (b.isGroup) groupChildren.map { it.id } else listOf(bankId)) }
                             )
@@ -225,9 +230,9 @@ fun BankDetailScreen(
                             ActionRow(
                                 title = "编辑题目 / 章节划分",
                                 subtitle = if (b.isGroup && !allGroup) {
-                                    "题库组不直接存题，请进入下方子题库编辑"
+                                    "请进入下方子题库编辑"
                                 } else {
-                                    "按页码或题号批量分章，逐题修改题干选项答案解析"
+                                    "批量分章或逐题编辑"
                                 },
                                 onClick = { onEdit(if (b.isGroup) groupChildren.map { it.id } else listOf(bankId)) }
                             )
@@ -235,9 +240,9 @@ fun BankDetailScreen(
                             ActionRow(
                                 title = "导出题库",
                                 subtitle = if (b.isGroup && !allGroup) {
-                                    "题库组暂不支持整体导出，请进入下方子题库导出"
+                                    "请进入下方子题库导出"
                                 } else {
-                                    "导出为 App 通用 .json，可再次导入"
+                                    "导出为 .json"
                                 },
                                 onClick = {
                                     if (!b.isGroup) {
@@ -293,7 +298,7 @@ fun BankDetailScreen(
                         Column(Modifier.weight(1f)) {
                             Text("包含 AI 生成的答案与解析", style = MaterialTheme.typography.bodyMedium)
                             Text(
-                                "关闭后仅剔除 AI 生成的答案/解析/置信度，题干、原题答案与手动修改全部保留",
+                                "关闭后仅保留原题与手动修改内容",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -304,12 +309,6 @@ fun BankDetailScreen(
                             colors = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primary)
                         )
                     }
-                    Text(
-                        "导出内容：章节/题型/A1A2A3B 子类型/页码/共用题干与选项/手动修改后的题干选项答案解析" +
-                            (if (pendingIncludeAi) "/AI 置信度与分歧" else "") + "，并附章节汇总。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                 }
             },
             confirmButton = {

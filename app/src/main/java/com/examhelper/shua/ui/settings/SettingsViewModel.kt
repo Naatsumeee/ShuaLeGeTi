@@ -46,9 +46,10 @@ class SettingsViewModel(
         val sanShengLiuBu: Boolean = false,
         val parseConcurrency: Int = 4,
         val fontScale: Float = 1.0f,
+        val uiScale: Float = 1.0f,
         val hapticEnabled: Boolean = true,
-        val hapticStrength: Int = 2,
-        val hapticDuration: Int = 1,
+        val hapticStrength: Int = 3,
+        val hapticDuration: Int = 3,
         val darkMode: Boolean? = null,
         val customParsePrompt: String = "",
         val customAnswerPrompt: String = "",
@@ -80,6 +81,7 @@ class SettingsViewModel(
                     sanShengLiuBu = it.sanShengLiuBu,
                     parseConcurrency = it.parseConcurrency,
                     fontScale = it.fontScale,
+                    uiScale = it.uiScale,
                     hapticEnabled = it.hapticEnabled,
                     hapticStrength = it.hapticStrength,
                     hapticDuration = it.hapticDuration,
@@ -106,6 +108,7 @@ class SettingsViewModel(
     fun setSanShengLiuBu(v: Boolean) = viewModelScope.launch { settingsStore.setSanShengLiuBu(v) }
     fun setParseConcurrency(v: Int) = viewModelScope.launch { settingsStore.setParseConcurrency(v) }
     fun setFontScale(v: Float) = viewModelScope.launch { settingsStore.setFontScale(v) }
+    fun setUiScale(v: Float) = viewModelScope.launch { settingsStore.setUiScale(v) }
     fun setCustomParsePrompt(v: String) = viewModelScope.launch { settingsStore.setCustomParsePrompt(v) }
     fun setCustomAnswerPrompt(v: String) = viewModelScope.launch { settingsStore.setCustomAnswerPrompt(v) }
 
