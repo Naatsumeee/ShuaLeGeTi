@@ -1137,17 +1137,35 @@ private fun AboutCard(
         ChangelogDialog(notes = RELEASE_NOTES, onDismiss = { showChangelog = false })
     }
 
+    val context = androidx.compose.ui.platform.LocalContext.current
     updateInfo?.let { info ->
         UpdateAvailableDialog(
             info = info,
             onDismiss = onDismissUpdate,
             onUpdate = {
-                onOpen(info.downloadUrl.ifBlank { info.releaseUrl })
+                val target = info.downloadUrl.ifBlank { info.releaseUrl }
+                if (com.examhelper.shua.data.update.UpdateChecker.startApkDownload(context, target, info.version)) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "已开始下载 Shualegeti-${info.version}.apk，请在通知栏查看",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                } else {
+                    onOpen(target)
+                }
                 onDismissUpdate()
             },
             onFallback = info.fallbackDownloadUrl?.let { url ->
                 {
-                    onOpen(url)
+                    if (com.examhelper.shua.data.update.UpdateChecker.startApkDownload(context, url, info.version)) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "已开始下载 Shualegeti-${info.version}.apk，请在通知栏查看",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    } else {
+                        onOpen(url)
+                    }
                     onDismissUpdate()
                 }
             }

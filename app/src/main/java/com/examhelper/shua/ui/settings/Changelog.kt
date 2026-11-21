@@ -34,6 +34,7 @@ val RELEASE_NOTES: List<ReleaseNote> = listOf(
             NoteItem(NoteItem.Kind.IMPROVE, "优化设置页滑块间距与深色模式文字对比度，速刷模式说明同步显示设置的自动跳题秒数，精简各页冗余说明文案"),
             NoteItem(NoteItem.Kind.FIX, "修复 LaTeX 下标偏上、长公式折行挤压及根号长顶线未完整渲染的问题，并新增横向滚动条与组合数支持"),
             NoteItem(NoteItem.Kind.FIX, "修复百炼流式端点报 400（stream_options 缺少 include_usage）、背题模式切题邻卡无解析、模式进度串联及 0 题待确认导入问题"),
+            NoteItem(NoteItem.Kind.FIX, "修复 Gitee 更新下载被系统浏览器追加 .zip 后缀变成 .apk.zip 的问题"),
         )
     ),
     ReleaseNote(
