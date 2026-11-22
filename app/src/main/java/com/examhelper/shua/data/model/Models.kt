@@ -63,6 +63,11 @@ data class ShuaBankFile(
     val groupId: Long? = null,
     val groupName: String? = null,
     val isGroup: Boolean = false,
+    val pinned: Boolean = false,
+    val archived: Boolean = false,
+    val accentColor: Long? = null,
+    val note: String? = null,
+    val sortOrder: Int = 0,
     val mergedFrom: List<Long> = emptyList(),
     val name: String,
     val sourceFileName: String? = null,
@@ -86,6 +91,7 @@ data class ChapterSummary(
 
 @Serializable
 data class ShuaQuestionJson(
+    val id: Long? = null,
     val chapter: String? = null,
     val type: String,
     val subtype: String? = null,
@@ -94,6 +100,9 @@ data class ShuaQuestionJson(
     val sharedOptions: List<QuestionOption> = emptyList(),
     val options: List<QuestionOption> = emptyList(),
     val answer: String? = null,
+    val originalAnswer: String? = null,
+    val aiAnswer: String? = null,
+    val answerVerified: Boolean = false,
     val analysis: String? = null,
     val sourcePage: Int? = null,
     val aiGenerated: Boolean = false,
@@ -102,6 +111,7 @@ data class ShuaQuestionJson(
     val confidence: Int? = null,
     val agreement: String? = null,
     val dissent: List<DissentEntry> = emptyList(),
+    val askChat: List<ChatTurn> = emptyList(),
     val notes: List<QuestionNote> = emptyList()
 )
 

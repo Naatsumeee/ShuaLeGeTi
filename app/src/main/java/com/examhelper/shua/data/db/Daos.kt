@@ -74,6 +74,9 @@ interface BankDao {
 
     @Query("DELETE FROM banks WHERE id = :id")
     suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM banks")
+    suspend fun deleteAll()
 }
 
 @Dao
@@ -142,6 +145,9 @@ interface QuestionDao {
 
     @Query("DELETE FROM questions WHERE bankId = :bankId")
     suspend fun deleteByBank(bankId: Long)
+
+    @Query("DELETE FROM questions")
+    suspend fun deleteAll()
 
     @Query("SELECT DISTINCT chapter FROM questions WHERE bankId = :bankId AND chapter IS NOT NULL ORDER BY chapter")
     suspend fun chaptersOfBank(bankId: Long): List<String>
@@ -419,6 +425,27 @@ interface RecordDao {
     /** 重置刷题进度（游标/乱序队列全清，题库与作答历史保留） */
     @Query("DELETE FROM study_progress")
     suspend fun clearAllProgress(): Int
+
+    @Query("DELETE FROM attempt_records")
+    suspend fun deleteAllAttempts(): Int
+
+    @Query("DELETE FROM wrong_records")
+    suspend fun deleteAllWrong(): Int
+
+    @Query("DELETE FROM kill_records")
+    suspend fun deleteAllKills(): Int
+
+    @Insert
+    suspend fun insertAttempts(records: List<AttemptRecord>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertWrongs(records: List<WrongRecord>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertFavorites(records: List<FavoriteRecord>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertKills(records: List<KillRecord>)
 
     @Transaction
     suspend fun submitAnswer(

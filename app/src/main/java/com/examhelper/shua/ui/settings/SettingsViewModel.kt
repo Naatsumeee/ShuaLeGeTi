@@ -63,6 +63,15 @@ class SettingsViewModel(
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message
 
+    data class PendingRestore(
+        val uri: Uri,
+        val preview: LocalDataRepository.RestorePreview,
+        val restoring: Boolean = false
+    )
+
+    private val _pendingRestore = MutableStateFlow<PendingRestore?>(null)
+    val pendingRestore: StateFlow<PendingRestore?> = _pendingRestore
+
     fun consumeMessage() {
         _message.value = null
     }
@@ -156,6 +165,42 @@ class SettingsViewModel(
                         "已导出 ${s.banks} 个题库 / ${s.questions} 题：作答 ${s.attempts} · 错题 ${s.wrong} · 收藏 ${s.favorites} · 斩题 ${s.kills}"
                 }
                 .onFailure { _message.value = "导出失败：${it.message?.take(80)}" }
+        }
+    }
+
+    fun inspectShuaPackage(uri: Uri?) {
+        if (uri == null) return
+        viewModelScope.launch {
+            runCatching { localDataRepo.inspectShuaPackage(getApplication(), uri) }
+                .onSuccess { preview ->
+                    _pendingRestore.value = PendingRestore(uri = uri, preview = preview)
+                }
+                .onFailure {
+                    _message.value = "备份校验失败：${it.message?.take(90) ?: "文件格式无效"}"
+                }
+        }
+    }
+
+    fun dismissPendingRestore() {
+        if (_pendingRestore.value?.restoring == true) return
+        _pendingRestore.value = null
+    }
+
+    fun confirmImportShuaPackage() {
+        val pending = _pendingRestore.value ?: return
+        if (pending.restoring) return
+        _pendingRestore.value = pending.copy(restoring = true)
+        viewModelScope.launch {
+            runCatching { localDataRepo.importShuaPackage(getApplication(), pending.uri) }
+                .onSuccess { s ->
+                    _pendingRestore.value = null
+                    _message.value =
+                        "已恢复 ${s.banks} 个题库 / ${s.questions} 题：作答 ${s.attempts} · 错题 ${s.wrong} · 收藏 ${s.favorites} · 斩题 ${s.kills}"
+                }
+                .onFailure {
+                    _pendingRestore.value = null
+                    _message.value = "恢复失败：${it.message?.take(90) ?: "未知错误"}"
+                }
         }
     }
 

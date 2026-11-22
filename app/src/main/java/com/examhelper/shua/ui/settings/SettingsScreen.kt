@@ -26,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
@@ -95,6 +96,7 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
     val bal by vm.balance.collectAsState()
     val usage by vm.usage.collectAsState()
     val update by vm.update.collectAsState()
+    val pendingRestore by vm.pendingRestore.collectAsState()
     val message by vm.message.collectAsState()
     var editing by remember { mutableStateOf<LlmProvider?>(null) }
     var showAdd by remember { mutableStateOf(false) }
@@ -131,6 +133,11 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
         // 破坏用户要求的 *.shua 单文件观感。
         contract = ActivityResultContracts.CreateDocument("application/octet-stream")
     ) { uri -> vm.exportShuaPackage(uri) }
+
+    // 学习数据备份导入：系统文件选择器（不限制 MIME，确保各 ROM 均可选中 .shua）
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri -> vm.inspectShuaPackage(uri) }
 
     val extra = shuaColors
 
@@ -276,6 +283,14 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                             actionLabel = "导出",
                             icon = Icons.Filled.Save,
                             onClick = { exportLauncher.launch(vm.suggestedFileName()) }
+                        )
+                        DividerLine()
+                        SettingActionRow(
+                            title = "导入学习数据",
+                            subtitle = "从 .shua 备份文件一键恢复",
+                            actionLabel = "导入",
+                            icon = Icons.Filled.FileOpen,
+                            onClick = { importLauncher.launch(arrayOf("*/*")) }
                         )
                         DividerLine()
                         SettingActionRow(
@@ -743,6 +758,50 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
             onConfirm = {
                 confirmClearFav = false
                 vm.clearFavorites()
+            }
+        )
+    }
+    pendingRestore?.let { pending ->
+        val p = pending.preview
+        AlertDialog(
+            onDismissRequest = { vm.dismissPendingRestore() },
+            title = { Text("恢复学习数据", style = serifTitle(18.sp, FontWeight.Medium)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "备份文件校验通过，包含以下数据：",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        "备份时间：${p.exportedAtText}\n" +
+                            "题库：${p.banks} 个 · 题目：${p.questions} 题\n" +
+                            "作答：${p.attempts} · 错题：${p.wrong} · 收藏：${p.favorites} · 斩题：${p.kills}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        "确认恢复将覆盖当前本地全部题库与学习记录（AI 模型配置与软件偏好保留），是否继续？",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { vm.confirmImportShuaPackage() },
+                    enabled = !pending.restoring,
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(if (pending.restoring) "恢复中…" else "一键恢复")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { vm.dismissPendingRestore() },
+                    enabled = !pending.restoring
+                ) {
+                    Text("取消")
+                }
             }
         )
     }
