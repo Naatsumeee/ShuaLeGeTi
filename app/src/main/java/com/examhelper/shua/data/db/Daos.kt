@@ -246,6 +246,47 @@ interface RecordDao {
     @Query("SELECT answeredAt FROM attempt_records WHERE answeredAt >= :since")
     suspend fun timestampsSince(since: Long): List<Long>
 
+    @Query("SELECT answeredAt FROM attempt_records WHERE answeredAt >= :since")
+    fun observeTimestampsSince(since: Long): Flow<List<Long>>
+
+    @Query("SELECT * FROM attempt_records WHERE answeredAt >= :startMs AND answeredAt < :endMs ORDER BY answeredAt DESC, id DESC")
+    fun observeAttemptsInRange(startMs: Long, endMs: Long): Flow<List<AttemptRecord>>
+
+    // ---- 每日刷题时长 ----
+    @Query("SELECT COALESCE((SELECT durationMs FROM study_daily_durations WHERE dayKey = :dayKey), 0)")
+    fun observeDayDurationMs(dayKey: String): Flow<Long>
+
+    @Query("SELECT COALESCE(SUM(durationMs), 0) FROM study_daily_durations")
+    fun observeTotalDurationMs(): Flow<Long>
+
+    @Query("SELECT * FROM study_daily_durations ORDER BY dayKey ASC")
+    suspend fun allDailyDurations(): List<StudyDailyDuration>
+
+    @Query("DELETE FROM study_daily_durations")
+    suspend fun deleteAllDailyDurations(): Int
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertDailyDurations(items: List<StudyDailyDuration>)
+
+    @Query("SELECT * FROM study_daily_durations WHERE dayKey = :dayKey LIMIT 1")
+    suspend fun getDailyDuration(dayKey: String): StudyDailyDuration?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertDailyDuration(item: StudyDailyDuration)
+
+    @Transaction
+    suspend fun addStudyDuration(dayKey: String, deltaMs: Long, now: Long) {
+        if (deltaMs <= 0L) return
+        val existing = getDailyDuration(dayKey)
+        upsertDailyDuration(
+            StudyDailyDuration(
+                dayKey = dayKey,
+                durationMs = (existing?.durationMs ?: 0L) + deltaMs,
+                updatedAt = now
+            )
+        )
+    }
+
     // 筛选用：已作答/做错/收藏/已斩 的题目集合
     @Query("SELECT DISTINCT questionId FROM attempt_records WHERE bankId = :bankId")
     suspend fun answeredIds(bankId: Long): List<Long>

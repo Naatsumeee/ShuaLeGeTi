@@ -611,14 +611,27 @@ fun BankListScreen(
     }
 
     renaming?.let { bank ->
+        val candidateBanks = remember(bank.id, allBanks) {
+            if (bank.isGroup) {
+                allBanks.filter { !it.isGroup && !it.archived && (it.groupId == bank.id || it.groupId == null) }
+            } else {
+                emptyList()
+            }
+        }
         BankEditDialog(
             initialName = bank.name,
             initialNote = bank.note,
             initialColor = bank.accentColor,
             isGroup = bank.isGroup,
+            candidateBanks = candidateBanks,
+            initialMemberIds = candidateBanks.filter { it.groupId == bank.id }.map { it.id },
             onDismiss = { renaming = null },
-            onConfirm = { name, note, color ->
-                vm.renameAndNote(bank.id, name, note, color)
+            onConfirm = { name, note, color, memberIds ->
+                if (bank.isGroup) {
+                    vm.updateGroup(bank.id, name, note, color, memberIds)
+                } else {
+                    vm.renameAndNote(bank.id, name, note, color)
+                }
                 renaming = null
             }
         )
@@ -861,6 +874,7 @@ private fun BankCard(
                         bank.name,
                         style = serifTitle(16.sp, FontWeight.Medium),
                         maxLines = 3,
+                        modifier = Modifier.weight(1f, fill = false),
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     if (bank.isGroup) {
@@ -914,7 +928,7 @@ private fun BankCard(
                         onClick = { menuOpen = false; onPin() }
                     )
                             DropdownMenuItem(
-                        text = { Text("编辑题库名称") },
+                        text = { Text(if (bank.isGroup) "编辑题库组" else "编辑题库名称") },
                         leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
                         onClick = { menuOpen = false; onRename() }
                     )
@@ -1087,21 +1101,27 @@ private fun CreateBankDialog(
     )
 }
 
-/** 题库组/合并题库编辑：名称、备注、颜色 */
+/** 题库组/合并题库编辑：名称、备注、颜色及题库组成员拆分 */
 @Composable
 private fun BankEditDialog(
     initialName: String,
     initialNote: String?,
     initialColor: Long?,
     isGroup: Boolean,
+    candidateBanks: List<QuestionBank> = emptyList(),
+    initialMemberIds: List<Long> = emptyList(),
     onDismiss: () -> Unit,
-    onConfirm: (String, String?, Long?) -> Unit
+    onConfirm: (String, String?, Long?, List<Long>) -> Unit
 ) {
     var name by remember { mutableStateOf(initialName) }
     var note by remember { mutableStateOf(initialNote.orEmpty()) }
     var color by remember {
         mutableStateOf(BankColors.fromStorage(initialColor) ?: BankColors.Default)
     }
+    val memberIds = remember(initialMemberIds) {
+        mutableStateListOf<Long>().apply { addAll(initialMemberIds) }
+    }
+    val extra = shuaColors
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (isGroup) "编辑题库组" else "编辑题库", style = serifTitle(18.sp, FontWeight.Medium)) },
@@ -1111,12 +1131,79 @@ private fun BankEditDialog(
                 OutlinedTextField(note, { note = it }, label = { Text("备注") }, maxLines = 3, modifier = Modifier.fillMaxWidth())
                 if (isGroup) {
                     BankColorEditor(initialColor = color) { color = it }
+                    if (candidateBanks.isNotEmpty()) {
+                        Text(
+                            "组内题库（取消勾选可拆分回首页，当前 ${memberIds.size} 个）",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 180.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            items(candidateBanks, key = { it.id }) { child ->
+                                val checked = child.id in memberIds
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(
+                                            if (checked) extra.terracotta.copy(alpha = 0.08f)
+                                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                                        )
+                                        .clickable {
+                                            Haptics.tick()
+                                            if (checked) memberIds.remove(child.id) else memberIds.add(child.id)
+                                        }
+                                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        Modifier
+                                            .size(18.dp)
+                                            .clip(RoundedCornerShape(5.dp))
+                                            .background(if (checked) extra.terracotta else Color.Transparent)
+                                            .border(
+                                                1.5.dp,
+                                                if (checked) extra.terracotta else extra.inkFaint,
+                                                RoundedCornerShape(5.dp)
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (checked) {
+                                            Icon(Icons.Filled.Check, null, tint = Color.White, modifier = Modifier.size(13.dp))
+                                        }
+                                    }
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        child.name,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    MonoText("${child.questionCount} 题", size = 11.sp)
+                                }
+                            }
+                        }
+                        if (memberIds.isEmpty()) {
+                            Text(
+                                "已移出全部题库，保存后将自动解散该题库组",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = extra.sage
+                            )
+                        }
+                    }
                 }
             }
         },
         confirmButton = {
             TextButton(enabled = name.isNotBlank(), onClick = {
-                onConfirm(name.trim(), note.trim().takeIf { it.isNotEmpty() }, BankColors.toStorage(color))
+                onConfirm(name.trim(), note.trim().takeIf { it.isNotEmpty() }, BankColors.toStorage(color), memberIds.toList())
             }) { Text("保存") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }

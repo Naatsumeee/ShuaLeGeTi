@@ -93,6 +93,56 @@ class BankRepository(
     }
 
     /**
+     * 编辑题库组（改名/备注/配色 + 成员调整/拆分）：
+     * - 取消勾选的子题库移回首页顶层；
+     * - 新勾选的未分组题库归入该组；
+     * - 若组内子题库全部被拆出，自动解散该空题库组。
+     */
+    suspend fun updateGroupMembership(
+        groupId: Long,
+        name: String,
+        note: String?,
+        color: Long?,
+        memberBankIds: List<Long>
+    ) {
+        val trimmed = name.trim().ifBlank { "未命名题库组" }
+        val targetSet = memberBankIds.distinct().toSet()
+        db.withTransaction {
+            val group = bankDao.getById(groupId) ?: return@withTransaction
+            if (!group.isGroup) return@withTransaction
+            val now = System.currentTimeMillis()
+            val currentChildren = bankDao.getGroupBanks(groupId)
+            currentChildren.forEach { child ->
+                if (child.id !in targetSet) {
+                    bankDao.setGroup(child.id, null, now)
+                }
+            }
+            if (targetSet.isEmpty()) {
+                bankDao.clearGroup(groupId, now)
+                bankDao.deleteById(groupId)
+                progressDao.deleteByBank(groupId)
+                return@withTransaction
+            }
+            targetSet.forEach { id ->
+                val b = bankDao.getById(id)
+                if (b != null && !b.isGroup && b.groupId != groupId) {
+                    bankDao.setGroup(id, groupId, now)
+                }
+            }
+            val totalCount = targetSet.sumOf { questionDao.countByBank(it) }
+            bankDao.update(
+                group.copy(
+                    name = trimmed,
+                    note = note?.trim()?.takeIf { it.isNotBlank() },
+                    accentColor = color,
+                    questionCount = totalCount,
+                    updatedAt = now
+                )
+            )
+        }
+    }
+
+    /**
      * 合并题库：把选中题库的题目与学习记录搬到新题库，然后删除旧库。
      *
      * 不能只做展示聚合：用户要求「合并后的题库」在错题本中也同步，

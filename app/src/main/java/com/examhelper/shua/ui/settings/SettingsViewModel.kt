@@ -137,15 +137,15 @@ class SettingsViewModel(
      * 强度 1-10：只写振幅，预览震动由设置页的滑块（每跨一档）触发，
      * 这里不再额外震 —— 否则拖一次滑块会连成一片「嗡嗡」。
      */
-    fun setHapticStrength(v: Int) = viewModelScope.launch {
-        settingsStore.setHapticStrength(v)
+    fun setHapticStrength(v: Int) {
         Haptics.setStrength(v)
+        viewModelScope.launch { settingsStore.setHapticStrength(v) }
     }
 
-    /** 时长 1-10：只写毫秒，预览同样交给设置页滑块 */
-    fun setHapticDuration(v: Int) = viewModelScope.launch {
-        settingsStore.setHapticDuration(v)
+    /** 时长 1-5：只写毫秒，预览同样交给设置页滑块 */
+    fun setHapticDuration(v: Int) {
         Haptics.setDuration(v)
+        viewModelScope.launch { settingsStore.setHapticDuration(v) }
     }
 
     /** null = 跟随系统；true/false = 强制橄榄夜读 / 暖纸 */
@@ -375,7 +375,7 @@ class SettingsViewModel(
             _usage.value = UsageState(error = "还没有启用任何模型")
             return
         }
-        _usage.value = UsageState(loading = true)
+        _usage.value = _usage.value.copy(loading = true, error = null)
         viewModelScope.launch {
             // 补采一次快照（内部会节流，不会每次都真打接口）
             runCatching {

@@ -558,6 +558,10 @@ class StudyRepository(
 
     /** 按筛选条件过滤题库题目 */
     suspend fun filteredQuestions(bankId: Long, filter: com.examhelper.shua.data.model.StudyFilter?): List<Question> {
+        if (filter != null && filter.questionIds.isNotEmpty()) {
+            val byId = bankRepo.getQuestionsByIds(filter.questionIds).associateBy { it.id }
+            return filter.questionIds.mapNotNull { byId[it] }
+        }
         val bank = bankRepo.getBank(bankId)
         val groupQuestions = if (bank?.isGroup == true) bankRepo.getQuestionsForCard(bank) else bankRepo.getQuestions(bankId)
         val all = if (filter != null && filter.bankIds.isNotEmpty()) {

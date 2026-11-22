@@ -10,6 +10,7 @@ import com.examhelper.shua.data.db.KillRecord
 import com.examhelper.shua.data.db.Question
 import com.examhelper.shua.data.db.QuestionBank
 import com.examhelper.shua.data.db.QuestionType
+import com.examhelper.shua.data.db.StudyDailyDuration
 import com.examhelper.shua.data.db.StudyMode
 import com.examhelper.shua.data.db.WrongRecord
 import com.examhelper.shua.data.export.ShuaArchive
@@ -149,6 +150,7 @@ class LocalDataRepository(
                 recordDao.deleteAllWrong()
                 recordDao.clearAllFavorites()
                 recordDao.deleteAllKills()
+                recordDao.deleteAllDailyDurations()
                 recordDao.clearAllProgress()
                 questionDao.deleteAll()
                 bankDao.deleteAll()
@@ -328,6 +330,21 @@ class LocalDataRepository(
                     killsToInsert.chunked(500).forEach { recordDao.insertKills(it) }
                 }
 
+                val durationsToInsert = archive.records["studyDurations"]?.jsonArray.orEmpty().mapNotNull { el ->
+                    val obj = runCatching { el.jsonObject }.getOrNull() ?: return@mapNotNull null
+                    val dayKey = obj["dayKey"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                        ?: return@mapNotNull null
+                    val durationMs = obj["durationMs"]?.jsonPrimitive?.longOrNull?.coerceAtLeast(0L) ?: 0L
+                    StudyDailyDuration(
+                        dayKey = dayKey,
+                        durationMs = durationMs,
+                        updatedAt = obj["updatedAt"]?.jsonPrimitive?.longOrNull ?: now
+                    )
+                }
+                if (durationsToInsert.isNotEmpty()) {
+                    durationsToInsert.chunked(500).forEach { recordDao.insertDailyDurations(it) }
+                }
+
                 ExportSummary(
                     fileName = "",
                     attempts = attemptsToInsert.size,
@@ -347,6 +364,7 @@ class LocalDataRepository(
         val wrong = recordDao.allWrong()
         val favorites = recordDao.allFavorites()
         val kills = recordDao.allKills()
+        val durations = recordDao.allDailyDurations()
         val questions = questionDao.getByIds(
             (attempts.map { it.questionId } + wrong.map { it.questionId } +
                 favorites.map { it.questionId } + kills.map { it.questionId }).distinct()
@@ -378,6 +396,9 @@ class LocalDataRepository(
             put("kills", buildJsonArray { kills.forEach { r -> add(buildJsonObject {
                 put("questionId", r.questionId); put("bankId", r.bankId); put("bankSha256", bankShaById[r.bankId] ?: ""); put("bankName", bankNames[r.bankId] ?: "")
                 put("stem", stemOf(r.questionId)); put("killedAt", r.killedAt)
+            }) } })
+            put("studyDurations", buildJsonArray { durations.forEach { d -> add(buildJsonObject {
+                put("dayKey", d.dayKey); put("durationMs", d.durationMs); put("updatedAt", d.updatedAt)
             }) } })
         }
         return Json { prettyPrint = true }.encodeToString(JsonObject.serializer(), json)

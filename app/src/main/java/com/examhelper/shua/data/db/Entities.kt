@@ -319,3 +319,11 @@ data class AiUsageRecord(
     val outputTokens: Long = 0,
     val createdAt: Long = System.currentTimeMillis()
 )
+
+/** 每日刷题停留时长（从做题页/测试页前台可见时长累加，单位毫秒） */
+@Entity(tableName = "study_daily_durations")
+data class StudyDailyDuration(
+    @PrimaryKey val dayKey: String,
+    val durationMs: Long = 0L,
+    val updatedAt: Long = System.currentTimeMillis()
+)

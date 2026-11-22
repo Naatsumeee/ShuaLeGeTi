@@ -4,7 +4,7 @@
 >
 > 先看 **[快速上手.md](快速上手.md)** —— 从申请 DeepSeek API Key、导入题库，到刷题、错题重刷、换机迁移，一份文档走完全流程，含截图级的界面路径说明与常见问题。
 >
-> 只想下载安装：直接去 [Releases](https://github.com/Naatsumeee/ShuaLeGeTi/releases) 拿 `Shualegeti-arm64-v8a-1.3.0.apk`。
+> 只想下载安装：直接去 [Releases](https://github.com/Naatsumeee/ShuaLeGeTi/releases) 拿 `Shualegeti-arm64-v8a-1.4.2.apk`。
 
 [![Release](https://img.shields.io/github/v/release/Naatsumeee/ShuaLeGeTi)](https://github.com/Naatsumeee/ShuaLeGeTi/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen.svg)](LICENSE)
@@ -44,7 +44,8 @@
 - **单题详情页**：测试报告或错题本里点任意题目，都能进完整页面看题干、共用材料、选项（对错标色）、参考答案与解析，解析默认展开
 - **斩题**：剪刀一挥，已掌握的题默认不再出现；斩题墙可随时恢复
 - **错题本**：按题库分组，**全部 / 错题 / 已掌握 / 重点** 分组管理；每题右上角菜单可收藏、斩题、标记重点、从错题本删除；标记为重点的题能单独拿出来复刷
-- **统计**：今日与累计正确率、分库统计、每题用时、16 周 GitHub 风格刷题热力图
+- **题库组与拆分**：支持把多本相关题库归入「题库组」统一刷题，也可在首页「编辑题库组」中随时拆分移出子题库
+- **统计**：顶部常驻今日/累计刷题数与刷题时长（分钟），分库统计、每题用时、8/16/32 周热力图（长按磁吸连续预览）及每日数据与「查看当日错题」一键重刷
 - **全库搜索**：跨题库搜题干 / 选项 / 解析
 - **章节划分编辑器**：按原文页码或题号范围批量分章，逐题编辑题干/选项/答案/解析/题型
 
@@ -65,9 +66,9 @@
 
 ### 数据与隐私
 - 题库 / 进度 / 错题 / 收藏全部存本地 Room 数据库；OCR 全程离线；API Key 仅存本机
-- 学习数据可导出为 `.shua` 标准 ZIP：整合题库、题库组、合并关系与学习记录，`manifest.json` 带应用/数据库版本、时间戳和题库 SHA256
+- 学习数据支持 `.shua` 一键导出与导入全量恢复：整合题库、题库组、笔记、问 AI 历史、学习记录与刷题时长，`manifest.json` 带应用/数据库版本、时间戳和题库 SHA256 校验
 - 标准题库 JSON 导出（可勾选是否包含 AI 生成内容、附章节分类汇总、缩进美化），导出→导入完整往返不丢字段
-- 数据库平滑迁移（**v1 → v16**），升级不丢数据；章节名的历史脏数据在升级时**就地清洗**，不用重导题库
+- 数据库平滑迁移（**v1 → v20**），升级不丢数据；章节名的历史脏数据在升级时**就地清洗**，不用重导题库
 - 首页题库菜单支持「继续添加题目」，新导入内容按顺序追加到已有题库
 - 每次启动静默检查 Gitee/jsDelivr/GitHub 多源静态更新清单；有新版本时才提示简要更新内容，可前往更新、备用下载或暂不更新
 
@@ -79,7 +80,7 @@
 |---|---|---|
 | `Shualegeti-arm64-v8a-<版本>.apk` | arm64-v8a | 绝大多数主流手机（**当前只发这一种**） |
 
-- 命名规则：`Shualegeti-<架构>-<版本号>.apk`，例如 `Shualegeti-arm64-v8a-1.3.0.apk`
+- 命名规则：`Shualegeti-<架构>-<版本号>.apk`，例如 `Shualegeti-arm64-v8a-1.4.2.apk`
 - 系统：Android 8.0（API 26）及以上；原生库全部按 **16KB 页对齐**构建，兼容新设备
 - AI 功能需在「设置」配置任意 OpenAI 兼容模型；不配置也可正常离线刷题
 - 从 **v1.1.0 起使用正式签名**。此前所有版本都是调试签名，两者证书不同，
@@ -107,7 +108,7 @@ Kotlin · Jetpack Compose (Material 3) · Room · DataStore · WorkManager · Ok
 ```
 app/src/main/java/com/examhelper/shua/
 ├── data/
-│   ├── db/          # Room：实体、DAO、迁移（v1→v12）
+│   ├── db/          # Room：实体、DAO、迁移（v1→v20）
 │   ├── ocr/         # 双 OCR 引擎 + 版面分析 + 双栏阅读顺序重排
 │   ├── ingest/      # docx/PDF/图片/Markdown 统一提取（页码标记贯穿、逐页落盘）
 │   ├── parse/       # AI 结构化解析（分块防断裂）/ 答案表绑定 / 离线正则 / 选项规范化
@@ -133,7 +134,7 @@ AGENTS.md           # 项目完整记忆（供任何模型/Agent 接手开发）
 git clone https://github.com/Naatsumeee/ShuaLeGeTi.git
 cd ShuaLeGeTi
 ./gradlew assembleDebug          # 需 JDK 17 与 Android SDK（compileSdk 35）
-./gradlew testDebugUnitTest      # 单元测试（205 项）
+./gradlew testDebugUnitTest      # 单元测试（350 项）
 ./gradlew assembleRelease        # 出正式包 → Shualegeti-arm64-v8a-<版本>.apk
 ```
 
