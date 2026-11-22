@@ -343,6 +343,7 @@ class BankRepository(
         val exported = questions.map { q ->
             val stripAi = !includeAiGenerated && q.aiGenerated
             ShuaQuestionJson(
+                id = q.id,
                 chapter = q.chapter,
                 type = q.type.name,
                 subtype = q.subtype,
@@ -351,6 +352,9 @@ class BankRepository(
                 sharedOptions = JsonCodec.decodeOptions(q.sharedOptionsJson),
                 options = JsonCodec.decodeOptions(q.optionsJson),
                 answer = if (stripAi) null else q.answer,
+                originalAnswer = q.originalAnswer,
+                aiAnswer = if (stripAi) null else q.aiAnswer,
+                answerVerified = if (stripAi) false else q.answerVerified,
                 analysis = if (stripAi) null else q.analysis,
                 sourcePage = q.sourcePage,
                 aiGenerated = if (stripAi) false else q.aiGenerated,
@@ -359,6 +363,7 @@ class BankRepository(
                 confidence = if (stripAi) null else q.confidence,
                 agreement = if (stripAi) null else q.agreement,
                 dissent = if (stripAi) emptyList() else JsonCodec.decodeDissent(q.dissentJson),
+                askChat = JsonCodec.decodeChat(q.askChatJson),
                 notes = JsonCodec.decodeNotes(q.notesJson)
             )
         }
@@ -367,6 +372,11 @@ class BankRepository(
             groupId = bank.groupId,
             groupName = groupName,
             isGroup = bank.isGroup,
+            pinned = bank.pinned,
+            archived = bank.archived,
+            accentColor = bank.accentColor,
+            note = bank.note,
+            sortOrder = bank.sortOrder,
             mergedFrom = JsonCodec.decodeIdList(bank.mergedFromJson),
             name = bank.name,
             sourceFileName = bank.sourceFileName,

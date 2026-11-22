@@ -20,9 +20,18 @@ data class NoteItem(val kind: Kind, val text: String) {
 
 val RELEASE_NOTES: List<ReleaseNote> = listOf(
     ReleaseNote(
-        version = "1.4.0",
+        version = "1.4.1",
         date = "2026-11-22",
         current = true,
+        items = listOf(
+            NoteItem(NoteItem.Kind.NEW, "设置页「本地学习数据」新增「导入学习数据」入口，支持选择并校验 .shua 备份文件后一键恢复全量题库、题库组、笔记、问 AI 对话与学习记录"),
+            NoteItem(NoteItem.Kind.IMPROVE, "导出 .shua 备份包补全题库置顶/归档/配色/备注、题目问 AI 历史与错题标记字段，同时向下兼容导入旧版 .shua 备份文件"),
+        )
+    ),
+    ReleaseNote(
+        version = "1.4.0",
+        date = "2026-11-22",
+        current = false,
         items = listOf(
             NoteItem(NoteItem.Kind.NEW, "设置页新增全局渲染比例调节（80%–125%），方便适配不同屏幕尺寸与分辨率"),
             NoteItem(NoteItem.Kind.NEW, "大模型配置支持开启 OpenCode 请求头（含 User-Agent 与 x-opencode-session），兼容 OpenCode Go 等端点"),

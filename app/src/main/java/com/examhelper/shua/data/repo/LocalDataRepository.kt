@@ -2,15 +2,33 @@ package com.examhelper.shua.data.repo
 
 import android.content.Context
 import android.net.Uri
+import androidx.room.withTransaction
 import com.examhelper.shua.data.db.AppDatabase
+import com.examhelper.shua.data.db.AttemptRecord
+import com.examhelper.shua.data.db.FavoriteRecord
+import com.examhelper.shua.data.db.KillRecord
+import com.examhelper.shua.data.db.Question
+import com.examhelper.shua.data.db.QuestionBank
+import com.examhelper.shua.data.db.QuestionType
+import com.examhelper.shua.data.db.StudyMode
+import com.examhelper.shua.data.db.WrongRecord
 import com.examhelper.shua.data.export.ShuaArchive
+import com.examhelper.shua.data.model.JsonCodec
+import com.examhelper.shua.data.model.JudgeOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -39,6 +57,16 @@ class LocalDataRepository(
         val questions: Int = 0
     )
 
+    data class RestorePreview(
+        val exportedAtText: String,
+        val banks: Int,
+        val questions: Int,
+        val attempts: Int,
+        val wrong: Int,
+        val favorites: Int,
+        val kills: Int
+    )
+
     /**
      * 导出为单个 `.shua` 学习包：manifest + 每个题库一份标准 JSON + 学习记录 JSON。
      *
@@ -47,11 +75,17 @@ class LocalDataRepository(
      */
     suspend fun exportShuaPackage(context: Context, uri: Uri): ExportSummary =
         withContext(Dispatchers.IO) {
-            val allBanks = bankDao.observeAll().first()
-            val banks = allBanks
+            val (bytes, summary) = exportShuaPackageBytes()
+            context.contentResolver.openOutputStream(uri)?.use { out -> out.write(bytes) }
+                ?: error("无法写入所选文件")
+            summary
+        }
+
+    suspend fun exportShuaPackageBytes(): Pair<ByteArray, ExportSummary> =
+        withContext(Dispatchers.IO) {
+            val banks = bankDao.observeAll().first()
             // 题库组也作为元数据记录导出；子题库通过 groupId 指向它。
-            val exportable = banks
-            val exported = exportable.mapNotNull { b ->
+            val exported = banks.mapNotNull { b ->
                 bankRepo.exportBank(b.id, includeAiGenerated = true)?.let { file ->
                     file to Json { prettyPrint = true; ignoreUnknownKeys = true }
                         .encodeToString(com.examhelper.shua.data.model.ShuaBankFile.serializer(), file)
@@ -61,9 +95,7 @@ class LocalDataRepository(
             val bankShaById = exported.mapNotNull { (file, bytes) -> file.bankId?.let { it to ShuaArchive.sha256(bytes) } }.toMap()
             val recordJson = buildLearningRecordsJson(bankShaById)
             val bytes = ShuaArchive.build(System.currentTimeMillis(), exported, recordJson.toByteArray(Charsets.UTF_8))
-            context.contentResolver.openOutputStream(uri)?.use { out -> out.write(bytes) }
-                ?: error("无法写入所选文件")
-            ExportSummary(
+            val summary = ExportSummary(
                 fileName = ShuaArchive.suggestedFileName(dateStamp()),
                 attempts = recordDao.allAttempts().size,
                 wrong = recordDao.allWrong().size,
@@ -72,6 +104,240 @@ class LocalDataRepository(
                 banks = banks.size,
                 questions = exported.sumOf { it.first.questions.size }
             )
+            bytes to summary
+        }
+
+    /** 校验并预览 `.shua` 备份包内容（不修改本地数据库）。 */
+    suspend fun inspectShuaPackage(context: Context, uri: Uri): RestorePreview =
+        withContext(Dispatchers.IO) {
+            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                ?: error("无法读取所选文件")
+            inspectShuaPackageBytes(bytes)
+        }
+
+    suspend fun inspectShuaPackageBytes(bytes: ByteArray): RestorePreview =
+        withContext(Dispatchers.IO) {
+            val archive = ShuaArchive.validate(bytes)
+            RestorePreview(
+                exportedAtText = archive.exportedAtText,
+                banks = archive.banks.size,
+                questions = archive.questionCount,
+                attempts = archive.attemptCount,
+                wrong = archive.wrongCount,
+                favorites = archive.favoriteCount,
+                kills = archive.killCount
+            )
+        }
+
+    /**
+     * 从校验通过的 `.shua` 备份包一键全量恢复题库与学习数据（事务内原子替换）。
+     * AI 模型配置与软件偏好设置不受影响。
+     */
+    suspend fun importShuaPackage(context: Context, uri: Uri): ExportSummary =
+        withContext(Dispatchers.IO) {
+            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                ?: error("无法读取所选文件")
+            importShuaPackageBytes(bytes)
+        }
+
+    suspend fun importShuaPackageBytes(bytes: ByteArray): ExportSummary =
+        withContext(Dispatchers.IO) {
+            val archive = ShuaArchive.validate(bytes)
+            val now = System.currentTimeMillis()
+            db.withTransaction {
+                recordDao.deleteAllAttempts()
+                recordDao.deleteAllWrong()
+                recordDao.clearAllFavorites()
+                recordDao.deleteAllKills()
+                recordDao.clearAllProgress()
+                questionDao.deleteAll()
+                bankDao.deleteAll()
+
+                val oldBankIdToNew = mutableMapOf<Long, Long>()
+                val groupNameToNewId = mutableMapOf<String, Long>()
+                val insertedBanks = mutableListOf<Pair<com.examhelper.shua.data.model.ShuaBankFile, Long>>()
+
+                archive.banks.forEachIndexed { idx, bankFile ->
+                    val newBankId = bankDao.insert(
+                        QuestionBank(
+                            name = bankFile.name,
+                            sourceFileName = bankFile.sourceFileName,
+                            questionCount = if (bankFile.isGroup) 0 else bankFile.questions.size,
+                            createdAt = now,
+                            updatedAt = now,
+                            pinned = bankFile.pinned,
+                            archived = bankFile.archived,
+                            groupId = null,
+                            isGroup = bankFile.isGroup,
+                            accentColor = bankFile.accentColor,
+                            note = bankFile.note,
+                            sortOrder = if (bankFile.sortOrder != 0) bankFile.sortOrder else idx
+                        )
+                    )
+                    bankFile.bankId?.let { oldBankIdToNew[it] = newBankId }
+                    if (bankFile.isGroup) {
+                        groupNameToNewId[bankFile.name] = newBankId
+                    }
+                    insertedBanks += bankFile to newBankId
+                }
+
+                // 第二轮：回填子题库的 groupId 关联
+                insertedBanks.forEach { (bankFile, newBankId) ->
+                    if (!bankFile.isGroup) {
+                        val mappedGroupId = bankFile.groupId?.let { oldBankIdToNew[it] }
+                            ?: bankFile.groupName?.let { groupNameToNewId[it] }
+                        if (mappedGroupId != null) {
+                            bankDao.setGroup(newBankId, mappedGroupId, now)
+                        }
+                    }
+                }
+
+                val oldQuestionIdToNew = mutableMapOf<Long, Pair<Long, Long>>()
+                val fallbackByBankAndStem = mutableMapOf<Pair<Long, String>, Pair<Long, Long>>()
+                val fallbackByBankNameAndStem = mutableMapOf<Pair<String, String>, Pair<Long, Long>>()
+                var totalQuestions = 0
+
+                insertedBanks.forEach { (bankFile, newBankId) ->
+                    if (bankFile.isGroup || bankFile.questions.isEmpty()) return@forEach
+                    val entities = bankFile.questions.mapIndexed { index, q ->
+                        val type = runCatching { QuestionType.valueOf(q.type) }.getOrElse { QuestionType.SINGLE }
+                        val (judgeOpts, judgeAns) = JudgeOptions.normalize(type, q.options, q.answer)
+                        val finalOptions = if (type == QuestionType.JUDGE) judgeOpts else q.options
+                        val finalAnswer = if (type == QuestionType.JUDGE) judgeAns else q.answer
+                        Question(
+                            bankId = newBankId,
+                            orderInBank = index,
+                            chapter = q.chapter?.trim()?.takeIf { it.isNotEmpty() },
+                            type = type,
+                            subtype = q.subtype,
+                            stem = q.stem,
+                            sharedStem = q.sharedStem,
+                            sharedOptionsJson = q.sharedOptions.takeIf { it.isNotEmpty() }?.let(JsonCodec::encodeOptions),
+                            optionsJson = finalOptions.takeIf { it.isNotEmpty() }?.let(JsonCodec::encodeOptions),
+                            answer = finalAnswer,
+                            originalAnswer = q.originalAnswer,
+                            aiAnswer = q.aiAnswer,
+                            answerVerified = q.answerVerified,
+                            deepSolved = q.deepSolved,
+                            minimalSolved = q.minimalSolved,
+                            analysis = q.analysis,
+                            aiGenerated = q.aiGenerated,
+                            confidence = q.confidence,
+                            agreement = q.agreement,
+                            dissentJson = q.dissent.takeIf { it.isNotEmpty() }?.let(JsonCodec::encodeDissent),
+                            createdAt = now,
+                            askChatJson = q.askChat.takeIf { it.isNotEmpty() }?.let(JsonCodec::encodeChat),
+                            notesJson = JsonCodec.encodeNotes(q.notes)
+                        )
+                    }
+                    val newIds = questionDao.insertAll(entities)
+                    totalQuestions += newIds.size
+                    bankFile.questions.forEachIndexed { index, q ->
+                        val newQId = newIds[index]
+                        val mapped = newQId to newBankId
+                        q.id?.let { oldQuestionIdToNew[it] = mapped }
+                        val stemKey = q.stem.take(80)
+                        bankFile.bankId?.let { oldBId ->
+                            fallbackByBankAndStem.putIfAbsent(oldBId to stemKey, mapped)
+                        }
+                        fallbackByBankNameAndStem.putIfAbsent(bankFile.name to stemKey, mapped)
+                    }
+                }
+
+                fun resolveQuestion(obj: JsonObject): Pair<Long, Long>? {
+                    val oldQId = obj["questionId"]?.jsonPrimitive?.longOrNull
+                    if (oldQId != null) {
+                        oldQuestionIdToNew[oldQId]?.let { return it }
+                    }
+                    val stem = obj["stem"]?.jsonPrimitive?.contentOrNull.orEmpty().take(80)
+                    val oldBId = obj["bankId"]?.jsonPrimitive?.longOrNull
+                    if (oldBId != null && stem.isNotEmpty()) {
+                        fallbackByBankAndStem[oldBId to stem]?.let { return it }
+                    }
+                    val bankName = obj["bankName"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    if (bankName.isNotEmpty() && stem.isNotEmpty()) {
+                        fallbackByBankNameAndStem[bankName to stem]?.let { return it }
+                    }
+                    return null
+                }
+
+                val attemptsToInsert = archive.records["attempts"]?.jsonArray.orEmpty().mapNotNull { el ->
+                    val obj = runCatching { el.jsonObject }.getOrNull() ?: return@mapNotNull null
+                    val (qId, bId) = resolveQuestion(obj) ?: return@mapNotNull null
+                    val mode = runCatching {
+                        StudyMode.valueOf(obj["mode"]?.jsonPrimitive?.contentOrNull.orEmpty())
+                    }.getOrDefault(StudyMode.SEQUENTIAL)
+                    val duration = obj["durationMs"]?.jsonPrimitive?.longOrNull?.takeIf { it > 0L }
+                    AttemptRecord(
+                        bankId = bId,
+                        questionId = qId,
+                        mode = mode,
+                        userAnswer = obj["userAnswer"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                        correct = obj["correct"]?.jsonPrimitive?.booleanOrNull ?: false,
+                        selfRated = obj["selfRated"]?.jsonPrimitive?.booleanOrNull ?: false,
+                        runId = obj["runId"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
+                        durationMs = duration,
+                        answeredAt = obj["answeredAt"]?.jsonPrimitive?.longOrNull ?: now,
+                        correctKnown = obj["correctKnown"]?.jsonPrimitive?.booleanOrNull ?: true
+                    )
+                }
+                if (attemptsToInsert.isNotEmpty()) {
+                    attemptsToInsert.chunked(500).forEach { recordDao.insertAttempts(it) }
+                }
+
+                val wrongsToInsert = archive.records["wrongBook"]?.jsonArray.orEmpty().mapNotNull { el ->
+                    val obj = runCatching { el.jsonObject }.getOrNull() ?: return@mapNotNull null
+                    val (qId, bId) = resolveQuestion(obj) ?: return@mapNotNull null
+                    WrongRecord(
+                        questionId = qId,
+                        bankId = bId,
+                        wrongCount = (obj["wrongCount"]?.jsonPrimitive?.intOrNull ?: 1).coerceAtLeast(1),
+                        lastWrongAt = obj["lastWrongAt"]?.jsonPrimitive?.longOrNull ?: now,
+                        mastered = obj["mastered"]?.jsonPrimitive?.booleanOrNull ?: false,
+                        flagged = obj["flagged"]?.jsonPrimitive?.booleanOrNull ?: false,
+                        rebrushFailed = obj["rebrushFailed"]?.jsonPrimitive?.booleanOrNull ?: false
+                    )
+                }
+                if (wrongsToInsert.isNotEmpty()) {
+                    wrongsToInsert.chunked(500).forEach { recordDao.insertWrongs(it) }
+                }
+
+                val favoritesToInsert = archive.records["favorites"]?.jsonArray.orEmpty().mapNotNull { el ->
+                    val obj = runCatching { el.jsonObject }.getOrNull() ?: return@mapNotNull null
+                    val (qId, bId) = resolveQuestion(obj) ?: return@mapNotNull null
+                    FavoriteRecord(
+                        questionId = qId,
+                        bankId = bId,
+                        createdAt = obj["createdAt"]?.jsonPrimitive?.longOrNull ?: now
+                    )
+                }
+                if (favoritesToInsert.isNotEmpty()) {
+                    favoritesToInsert.chunked(500).forEach { recordDao.insertFavorites(it) }
+                }
+
+                val killsToInsert = archive.records["kills"]?.jsonArray.orEmpty().mapNotNull { el ->
+                    val obj = runCatching { el.jsonObject }.getOrNull() ?: return@mapNotNull null
+                    val (qId, bId) = resolveQuestion(obj) ?: return@mapNotNull null
+                    KillRecord(
+                        questionId = qId,
+                        bankId = bId,
+                        killedAt = obj["killedAt"]?.jsonPrimitive?.longOrNull ?: now
+                    )
+                }
+                if (killsToInsert.isNotEmpty()) {
+                    killsToInsert.chunked(500).forEach { recordDao.insertKills(it) }
+                }
+
+                ExportSummary(
+                    fileName = "",
+                    attempts = attemptsToInsert.size,
+                    wrong = wrongsToInsert.size,
+                    favorites = favoritesToInsert.size,
+                    kills = killsToInsert.size,
+                    banks = insertedBanks.size,
+                    questions = totalQuestions
+                )
+            }
         }
 
     private suspend fun buildLearningRecordsJson(bankShaById: Map<Long, String> = emptyMap()): String {
@@ -96,12 +362,14 @@ class LocalDataRepository(
                 put("questionId", r.questionId); put("bankId", r.bankId); put("bankSha256", bankShaById[r.bankId] ?: "")
                 put("bankName", bankNames[r.bankId] ?: ""); put("stem", stemOf(r.questionId))
                 put("mode", r.mode.name); put("userAnswer", r.userAnswer); put("correct", r.correct)
+                put("correctKnown", r.correctKnown)
+                r.runId?.let { put("runId", it) }
                 put("selfRated", r.selfRated); put("durationMs", r.durationMs ?: 0L); put("answeredAt", r.answeredAt)
             }) } })
             put("wrongBook", buildJsonArray { wrong.forEach { r -> add(buildJsonObject {
                 put("questionId", r.questionId); put("bankId", r.bankId); put("bankSha256", bankShaById[r.bankId] ?: ""); put("bankName", bankNames[r.bankId] ?: "")
                 put("stem", stemOf(r.questionId)); put("wrongCount", r.wrongCount)
-                put("mastered", r.mastered); put("lastWrongAt", r.lastWrongAt)
+                put("mastered", r.mastered); put("flagged", r.flagged); put("rebrushFailed", r.rebrushFailed); put("lastWrongAt", r.lastWrongAt)
             }) } })
             put("favorites", buildJsonArray { favorites.forEach { r -> add(buildJsonObject {
                 put("questionId", r.questionId); put("bankId", r.bankId); put("bankSha256", bankShaById[r.bankId] ?: ""); put("bankName", bankNames[r.bankId] ?: "")
