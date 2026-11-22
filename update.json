@@ -1,17 +1,16 @@
 ﻿{
     "schema":  1,
-    "versionName":  "1.4.0",
-    "versionCode":  1137,
-    "publishedAt":  1795290908,
+    "versionName":  "1.4.1",
+    "versionCode":  1141,
+    "publishedAt":  1795329760,
     "notes":  [
-                  "新增全局渲染比例、OpenCode 请求头、章节分块与题间分章编辑、做题页单题编辑与时间戳笔记。",
-                  "优化 5 档前强后脆震动曲线、底部真悬浮毛玻璃导航与长按跟手移动、深色模式文字与设置页滑块高度。",
-                  "修复 LaTeX 下标与根号长顶线渲染、百炼流式 400、错题重刷队列与背题切题动画等问题。"
+                  "新增设置页「导入学习数据」入口，支持选择并校验 .shua 备份文件后一键恢复全量题库、题库组、笔记、问 AI 历史与学习记录。",
+                  "补全 .shua 导出包中的题库置顶/归档/配色/备注、问 AI 对话与错题标记字段，同时向下兼容导入旧版 .shua 备份文件。"
               ],
     "downloads":  [
-                      "https://gitee.com/Naatsumeee/ShuaLeGeTi-release/releases/download/v1.4.0/Shualegeti-arm64-v8a-1.4.0.apk",
-                      "https://github.com/Naatsumeee/ShuaLeGeTi/releases/download/v1.4.0/Shualegeti-arm64-v8a-1.4.0.apk"
+                      "https://gitee.com/Naatsumeee/ShuaLeGeTi-release/releases/download/v1.4.1/Shualegeti-arm64-v8a-1.4.1.apk",
+                      "https://github.com/Naatsumeee/ShuaLeGeTi/releases/download/v1.4.1/Shualegeti-arm64-v8a-1.4.1.apk"
                   ],
-    "releaseUrl":  "https://github.com/Naatsumeee/ShuaLeGeTi/releases/tag/v1.4.0",
-    "sha256":  "5DB2413569C4ED7F85251ECA12CFF60EA31754C5300B48A51B84C3CEDBD305C9"
+    "releaseUrl":  "https://github.com/Naatsumeee/ShuaLeGeTi/releases/tag/v1.4.1",
+    "sha256":  "02CB037E0FE02DF112054C2962B50C6825E9BA0CB1F8B6130E5EACE3365A2A3D"
 }
