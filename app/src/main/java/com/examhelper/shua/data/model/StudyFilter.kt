@@ -16,6 +16,8 @@ data class StudyFilter(
     val subtypes: List<String> = emptyList(),
     /** ALL / UNDONE 未做 / WRONG 错题 / FAVORITE 收藏 / UNKILLED 未斩 / KILLED 已斩 */
     val status: String = "ALL",
+    /** 跨题库按指定题目 id 列表重刷（如统计页「当日错题一键重刷」）；非空时优先按该列表取题 */
+    val questionIds: List<Long> = emptyList(),
     /**
      * 重新作答（忽略历史作答记录）。
      *
@@ -27,7 +29,7 @@ data class StudyFilter(
 ) {
     val isDefault: Boolean
         get() = bankIds.isEmpty() && chapters.isEmpty() && types.isEmpty() && subtypes.isEmpty() &&
-            status == "ALL" && !freshAnswer
+            status == "ALL" && questionIds.isEmpty() && !freshAnswer
 
     fun fingerprint(): String = JsonCodec.json.encodeToString(this)
 

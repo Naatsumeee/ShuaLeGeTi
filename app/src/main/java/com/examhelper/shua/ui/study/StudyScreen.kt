@@ -147,6 +147,7 @@ fun StudyScreen(
 ) {
     val vm: StudyViewModel = viewModel()
     val state by vm.state.collectAsState()
+    TrackStudyDuration()
     var showSheet by remember { mutableStateOf(false) }
     var askClosing by remember { mutableStateOf(false) }
     var editingQuestion by remember { mutableStateOf<Question?>(null) }

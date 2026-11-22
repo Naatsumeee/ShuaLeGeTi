@@ -80,6 +80,7 @@ fun ExamScreen(
 ) {
     val vm: ExamViewModel = viewModel()
     val state by vm.state.collectAsState()
+    com.examhelper.shua.ui.study.TrackStudyDuration()
     var showSheet by remember { mutableStateOf(false) }
     var showConfirm by remember { mutableStateOf(false) }
     val extra = shuaColors

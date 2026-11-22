@@ -302,7 +302,17 @@ fun AppRoot(fontScale: Float = 1f, uiScale: Float = 1f) {
                             onExportPdf = { source -> navController.navigate(Routes.pdfExport(source)) }
                         )
                     }
-                    composable(Routes.STATS) { StatsScreen(contentPadding = PaddingValues(top = topInset)) }
+                    composable(Routes.STATS) {
+                        StatsScreen(
+                            contentPadding = PaddingValues(top = topInset),
+                            onStartStudy = { bankId, mode, filterJson ->
+                                navController.navigate(Routes.study(bankId, mode, filterJson))
+                            },
+                            onOpenQuestion = { qid ->
+                                navController.navigate(Routes.singleQuestion(qid, null))
+                            }
+                        )
+                    }
                     composable(Routes.SETTINGS) { SettingsScreen(contentPadding = PaddingValues(top = topInset)) }
                     composable(Routes.SEARCH) {
                         SearchScreen(onBack = { navController.popBackStack() })

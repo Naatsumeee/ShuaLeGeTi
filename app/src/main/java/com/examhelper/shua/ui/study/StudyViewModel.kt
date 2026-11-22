@@ -233,7 +233,7 @@ class StudyViewModel(
         val restoredAnswer = restoreStudyAnswer(q?.type, q?.let { dbAnswers[it.id] })
         _state.value = StudyUiState(
             loading = false,
-            bankName = bank?.name.orEmpty(),
+            bankName = bank?.name ?: if (filter?.questionIds?.isNotEmpty() == true) "当日错题重刷" else "",
             mode = mode,
             session = session,
             answered = restoredAnswer.answered,

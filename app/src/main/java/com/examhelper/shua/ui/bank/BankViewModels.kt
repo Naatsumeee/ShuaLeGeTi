@@ -97,6 +97,12 @@ class BankListViewModel @JvmOverloads constructor(
         }
     }
 
+    fun updateGroup(groupId: Long, name: String, note: String?, color: Long?, memberIds: List<Long>) {
+        viewModelScope.launch {
+            bankRepo.updateGroupMembership(groupId, name, note, color, memberIds)
+        }
+    }
+
     fun merge(name: String, note: String?, color: Long?, ids: List<Long>, onDone: (Long) -> Unit) {
         viewModelScope.launch {
             val id = bankRepo.mergeBanks(name, note, color, ids)

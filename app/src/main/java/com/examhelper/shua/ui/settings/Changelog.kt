@@ -20,9 +20,22 @@ data class NoteItem(val kind: Kind, val text: String) {
 
 val RELEASE_NOTES: List<ReleaseNote> = listOf(
     ReleaseNote(
-        version = "1.4.1",
+        version = "1.4.2",
         date = "2026-11-22",
         current = true,
+        items = listOf(
+            NoteItem(NoteItem.Kind.NEW, "首页题库组右侧菜单新增「编辑题库组」，支持勾选拆分子题库回首页或调整组成员；修复长标题挤压「题库组」标签问题"),
+            NoteItem(NoteItem.Kind.NEW, "统计页顶部常驻「今日刷题数 / 累计刷题数 / 今日时长 / 累计时长（分钟）」，做题页与测试页自动采集停留时长并随 .shua 导出恢复"),
+            NoteItem(NoteItem.Kind.NEW, "热力图下方新增「每日数据」卡片（做题数、正确率），支持「查看当日错题」并一键进入标准做题页跨题库重刷"),
+            NoteItem(NoteItem.Kind.IMPROVE, "热力图「近 8 周」格子尺寸缩小约 28% 减少切换落差；支持单击选日与长按磁吸斜向避让浮窗（松手 0.5s 过渡收起）"),
+            NoteItem(NoteItem.Kind.IMPROVE, "震动反馈适配系统硬件主动刹车预设（清脆无余振）并修正 1–5 档强弱顺序"),
+            NoteItem(NoteItem.Kind.FIX, "修复设置页「用量情况」查询时整页刷新闪动的问题"),
+        )
+    ),
+    ReleaseNote(
+        version = "1.4.1",
+        date = "2026-11-22",
+        current = false,
         items = listOf(
             NoteItem(NoteItem.Kind.NEW, "设置页「本地学习数据」新增「导入学习数据」入口，支持选择并校验 .shua 备份文件后一键恢复全量题库、题库组、笔记、问 AI 对话与学习记录"),
             NoteItem(NoteItem.Kind.IMPROVE, "导出 .shua 备份包补全题库置顶/归档/配色/备注、题目问 AI 历史与错题标记字段，同时向下兼容导入旧版 .shua 备份文件"),

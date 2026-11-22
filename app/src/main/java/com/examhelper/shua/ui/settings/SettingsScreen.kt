@@ -169,21 +169,31 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                             onCheckedChange = vm::setHapticEnabled
                         )
                         if (ui.hapticEnabled) {
+                            val fixedHardware = remember { Haptics.usesFixedHardwarePresets() }
                             DividerLine()
                             Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
                                 HapticSliderRow(
                                     title = "震动强度",
-                                    hint = "",
+                                    hint = if (fixedHardware) "硬件预设模式下仅分 轻弹(1-2) / 标准(3-4) / 强击(5)" else "",
                                     value = ui.hapticStrength,
                                     onChange = vm::setHapticStrength
                                 )
-                                Spacer(Modifier.height(4.dp))
-                                HapticSliderRow(
-                                    title = "震动时长",
-                                    hint = "",
-                                    value = ui.hapticDuration,
-                                    onChange = vm::setHapticDuration
-                                )
+                                if (!fixedHardware) {
+                                    Spacer(Modifier.height(4.dp))
+                                    HapticSliderRow(
+                                        title = "震动时长",
+                                        hint = "",
+                                        value = ui.hapticDuration,
+                                        onChange = vm::setHapticDuration
+                                    )
+                                } else {
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        "当前设备已启用马达硬件清脆预设（主动刹车），强度与时长由系统底层预设接管，故细节差异较小",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         }
                         DividerLine()
@@ -472,6 +482,11 @@ fun SettingsScreen(contentPadding: PaddingValues = PaddingValues(0.dp)) {
                                 usage.error!!,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = extra.sage
+                            )
+                            w == null && usage.loading -> Text(
+                                "正在统计近 $usageDays 天用量…",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             w == null -> Text(
                                 "选择窗口后点「统计」查看消费记录",
